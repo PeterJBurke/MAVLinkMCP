@@ -19,31 +19,47 @@ from dotenv import load_dotenv
 env_path = Path(__file__).parent.parent.parent / '.env'
 load_dotenv(dotenv_path=env_path)
 
-# Import the existing MCP server
-from src.server.mavlinkmcp import mcp, logger
+# Import the necessary components
+from mcp.server.fastmcp import FastMCP
+from src.server.mavlinkmcp import app_lifespan, logger
+import src.server.mavlinkmcp  # Import all the tools
 
 # Configuration
 PORT = int(os.environ.get("MCP_PORT", "8080"))
+HOST = os.environ.get("MCP_HOST", "0.0.0.0")
 MOUNT_PATH = os.environ.get("MCP_MOUNT_PATH", "/mcp")
 
 if __name__ == "__main__":
     logger.info("=" * 60)
     logger.info("MAVLink MCP Server - HTTP/SSE Mode")
     logger.info("=" * 60)
-    logger.info(f"Starting SSE server on port {PORT}")
+    logger.info(f"Starting SSE server on {HOST}:{PORT}")
     logger.info(f"Mount path: {MOUNT_PATH}")
     logger.info("")
-    logger.info("Connect from ChatGPT Developer Mode using:")
-    logger.info(f"  http://YOUR_SERVER_IP:{PORT}{MOUNT_PATH}/sse")
+    logger.info("Connect from ChatGPT Developer Mode using ngrok HTTPS:")
+    logger.info(f"  https://YOUR-NGROK-ID.ngrok-free.app{MOUNT_PATH}/sse")
     logger.info("")
-    logger.info("Example: http://203.0.113.10:{PORT}{MOUNT_PATH}/sse")
+    logger.info("Example: https://abc123xyz.ngrok-free.app{MOUNT_PATH}/sse")
+    logger.info("=" * 60)
+    logger.info("")
+    logger.info("⚠️  Note: This server is now on port " + str(PORT))
+    logger.info("   Make sure ngrok forwards to this port:")
+    logger.info(f"   ngrok http {PORT}")
+    logger.info("")
     logger.info("=" * 60)
     
-    # Set port via environment variable for the underlying server
-    os.environ["PORT"] = str(PORT)
+    # Create FastMCP instance with correct port
+    # We need to import the tools from the main module
+    from src.server import mavlinkmcp as mav_module
+    
+    # Get the mcp instance with all the tools already registered
+    mcp = mav_module.mcp
+    
+    # Update the server's port and host settings
+    mcp._server._host = HOST
+    mcp._server._port = PORT
+    mcp._server._mount_path = MOUNT_PATH
     
     # Run server with SSE transport
-    # Note: FastMCP's SSE mode creates its own HTTP server
-    # The port is controlled via PORT environment variable
     mcp.run(transport='sse', mount_path=MOUNT_PATH)
 
