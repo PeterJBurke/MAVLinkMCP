@@ -6,7 +6,6 @@ from mcp.server.fastmcp import Context, FastMCP
 from typing import Tuple
 from mavsdk import System
 from mavsdk.mission import MissionItem, MissionPlan
-from mavsdk.offboard import OffboardError, PositionNedYaw
 import asyncio
 import os
 import logging
@@ -28,8 +27,9 @@ logger.addHandler(handler)
 @dataclass
 class MAVLinkConnector:
     drone: System
-    last_offboard_position: PositionNedYaw = field(default_factory=lambda: PositionNedYaw(0.0, 0.0, 0.0, 0.0))
     connection_ready: asyncio.Event = field(default_factory=asyncio.Event)
+    # Track if we're in GUIDED mode for ArduPilot
+    in_guided_mode: bool = False
 
 # Global connector instance - persists across all HTTP requests
 _global_connector: MAVLinkConnector | None = None
@@ -204,62 +204,59 @@ async def get_position(ctx: Context) -> dict:
         logger.error(f"Failed to retrieve position: {e}")
         return {"status": "failed", "error": str(e)}
 
-async def start_offboard_mode(connector: MAVLinkConnector) -> bool:
+async def ensure_guided_mode(connector: MAVLinkConnector) -> bool:
     """
-    Start the offboard mode for the drone and set the initial NED position.
+    Ensure the drone is in GUIDED mode (ArduPilot's external control mode).
+    
+    This is the ArduPilot equivalent of PX4's OFFBOARD mode.
+    GUIDED mode allows external computer control of the drone.
 
     Args:
         connector (MAVLinkConnector): The MAVLinkConnector instance.
 
     Returns:
-        bool: True if offboard mode was started successfully, False otherwise.
+        bool: True if GUIDED mode was activated successfully, False otherwise.
     """
-    drone = connector.drone
-    logger.info("Setting initial setpoint for offboard mode")
-    await drone.offboard.set_position_ned(connector.last_offboard_position)
-
-    logger.info("Starting offboard mode")
-    try:
-        await drone.offboard.start()
-        logger.info("Offboard mode started successfully")
+    # If already in GUIDED mode, no need to switch
+    if connector.in_guided_mode:
+        logger.debug("Already in GUIDED mode")
         return True
-    except OffboardError as error:
-        logger.error(f"Starting offboard mode failed with error code: {error._result.result}")
-        return False
-
-async def stop_offboard_mode(connector: MAVLinkConnector) -> bool:
-    """
-    Stop the offboard mode for the drone.
-
-    Args:
-        connector (MAVLinkConnector): The MAVLinkConnector instance.
-
-    Returns:
-        bool: True if offboard mode was stopped successfully, False otherwise.
-    """
+    
     drone = connector.drone
-    logger.info("Stopping offboard mode")
-
+    logger.info("Switching to GUIDED mode (ArduPilot external control)")
+    
     try:
-        await drone.offboard.stop()
-        logger.info("Offboard mode stopped successfully")
+        # Get current flight mode
+        current_mode = await drone.telemetry.flight_mode().__anext__()
+        logger.info(f"Current flight mode: {current_mode}")
+        
+        # If not in GUIDED, switch to it
+        if "GUIDED" not in str(current_mode).upper():
+            await drone.action.set_flight_mode("GUIDED")
+            logger.info("✓ GUIDED mode activated successfully")
+        else:
+            logger.info("✓ Already in GUIDED mode")
+            
+        connector.in_guided_mode = True
         return True
-    except OffboardError as error:
-        logger.error(f"Stopping offboard mode failed with error code: {error._result.result}")
+        
+    except Exception as error:
+        logger.error(f"Failed to activate GUIDED mode: {error}")
+        connector.in_guided_mode = False
         return False
 
 @mcp.tool()
-async def move_to_relative(ctx: Context, lr: float, fb: float, altitude: float, yaw: float) -> dict:
+async def move_to_relative(ctx: Context, north_m: float, east_m: float, down_m: float, yaw_deg: float = 0.0) -> dict:
     """
-    Move the drone relative to the current position. The drone must be armed and offboard mode must be active.
-    Waits for connection if not ready.
+    Move the drone relative to the current position using ArduPilot's GUIDED mode.
+    The drone must be armed. Waits for connection if not ready.
 
     Args:
         ctx (Context): the context.
-        lr (float): distance in left/right axis. right is the positive.
-        fb (float): distance along front/back axis. front is positive.
-        altitude (float): the altitude relative to the current point.
-        yaw (float): yaw change.
+        north_m (float): distance in meters to move north (negative for south).
+        east_m (float): distance in meters to move east (negative for west).
+        down_m (float): distance in meters to move down (negative for up). Note: negative values = climb.
+        yaw_deg (float): target yaw angle in degrees. Default is 0.0 (no yaw change).
 
     Returns:
         dict: Status message with success or error.
@@ -272,21 +269,34 @@ async def move_to_relative(ctx: Context, lr: float, fb: float, altitude: float, 
     
     drone = connector.drone
 
-    # Activate offboard mode
-    if not await start_offboard_mode(connector):
-        return {"status": "failed", "error": "Failed to start offboard mode"}
+    # Ensure we're in GUIDED mode (ArduPilot's external control mode)
+    if not await ensure_guided_mode(connector):
+        return {"status": "failed", "error": "Failed to activate GUIDED mode"}
 
-    # Update the last offboard position
-    connector.last_offboard_position.north_m += fb
-    connector.last_offboard_position.east_m += lr
-    connector.last_offboard_position.down_m += -altitude
-    connector.last_offboard_position.yaw_deg += yaw
-
-    # Send the updated position
-    logger.info(f"Sending updated offboard position: {connector.last_offboard_position}")
-    await drone.offboard.set_position_ned(connector.last_offboard_position)
-
-    return {"status": "success", "message": f"Moved relative: forward={fb}m, right={lr}m, up={altitude}m, yaw={yaw}°"}
+    try:
+        # Get current position
+        position = await drone.telemetry.position().__anext__()
+        current_alt = position.relative_altitude_m
+        
+        # Calculate target altitude (down is positive in NED, so negate)
+        target_alt = current_alt - down_m
+        
+        # Use goto_location for relative movement
+        # Note: MAVSDK's goto_location_ned moves relative to current position
+        logger.info(f"Moving in GUIDED mode: north={north_m}m, east={east_m}m, altitude_change={-down_m}m")
+        await drone.action.goto_location(
+            position.latitude_deg,
+            position.longitude_deg,
+            target_alt,
+            yaw_deg
+        )
+        
+        logger.info("✓ Movement command sent successfully")
+        return {"status": "success", "message": f"Moving: north={north_m}m, east={east_m}m, altitude={target_alt}m"}
+        
+    except Exception as e:
+        logger.error(f"Failed to execute relative movement: {e}")
+        return {"status": "failed", "error": f"Movement failed: {str(e)}"}
 
 @mcp.tool()
 async def takeoff(ctx: Context, takeoff_altitude: float = 3.0) -> dict:
