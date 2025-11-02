@@ -12,7 +12,8 @@ A Python-based Model Context Protocol (MCP) server for AI-powered drone control.
 
 ## Prerequisites
 
-- **Python 3.10+**
+- **Python 3.12+** (comes with Ubuntu 24.04)
+- **Ubuntu 24.04** cloud instance or server
 - **uv** package manager ([install here](https://github.com/astral-sh/uv))
 - **MAVLink-compatible drone or simulator** with network access (IP address and port)
   - Connection details will be configured in `.env` file
@@ -22,7 +23,7 @@ A Python-based Model Context Protocol (MCP) server for AI-powered drone control.
 
 ### 1. Set Up Your System
 
-**If starting from a fresh Ubuntu instance** (22.04 or 24.04 on AWS, Digital Ocean, Linode, etc.):
+**If starting from a fresh Ubuntu 24.04 instance** (AWS, Digital Ocean, Linode, etc.):
 
 ```bash
 # Update package list
@@ -34,9 +35,11 @@ sudo DEBIAN_FRONTEND=noninteractive apt upgrade -y -o Dpkg::Options::="--force-c
 # Install essential dependencies
 sudo apt install -y python3 python3-pip python3-venv git curl build-essential
 
-# Verify Python version (should be 3.10+)
+# Verify Python version (Ubuntu 24.04 comes with Python 3.12)
 python3 --version
 ```
+
+**Expected output:** `Python 3.12.x`
 
 **Install uv package manager:**
 

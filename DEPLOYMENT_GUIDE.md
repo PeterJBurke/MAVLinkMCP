@@ -22,8 +22,9 @@ This guide will walk you through setting up and using the MAVLink MCP server to 
 ## Prerequisites
 
 ### Required Software
-- **Python 3.10 or higher**
+- **Python 3.12+** (comes with Ubuntu 24.04)
 - **uv** package manager (recommended)
+- **Ubuntu 24.04** cloud instance or server
 
 ### Required Hardware
 - **MAVLink-compatible drone or simulator** with network access
@@ -35,14 +36,14 @@ This guide will walk you through setting up and using the MAVLink MCP server to 
 
 ### Verify Python Installation
 ```bash
-python --version  # Should show 3.10 or higher
+python3 --version  # Ubuntu 24.04 comes with Python 3.12
 ```
 
 ---
 
-## System Preparation (Ubuntu)
+## System Preparation (Ubuntu 24.04)
 
-**If you're starting from a fresh cloud instance** (AWS, Digital Ocean, Linode, etc.) or a new Ubuntu system (22.04 or 24.04):
+**If you're starting from a fresh Ubuntu 24.04 cloud instance** (AWS, Digital Ocean, Linode, etc.):
 
 ### Prepare the System
 
@@ -56,13 +57,11 @@ sudo DEBIAN_FRONTEND=noninteractive apt upgrade -y -o Dpkg::Options::="--force-c
 # Install essential dependencies
 sudo apt install -y python3 python3-pip python3-venv git curl build-essential
 
-# Verify Python version
+# Verify Python version (Ubuntu 24.04 comes with Python 3.12)
 python3 --version
 ```
 
-**Expected output:** 
-- Ubuntu 22.04: `Python 3.10.x`
-- Ubuntu 24.04: `Python 3.12.x`
+**Expected output:** `Python 3.12.x`
 
 ---
 
