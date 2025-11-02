@@ -31,6 +31,11 @@ class MAVLinkConnector:
     last_offboard_position: PositionNedYaw = field(default_factory=lambda: PositionNedYaw(0.0, 0.0, 0.0, 0.0))
     connection_ready: asyncio.Event = field(default_factory=asyncio.Event)
 
+# Global connector instance - persists across all HTTP requests
+_global_connector: MAVLinkConnector | None = None
+_connection_task: asyncio.Task | None = None
+_connection_lock = asyncio.Lock()
+
 async def ensure_connection(connector: MAVLinkConnector, timeout: float = 30.0) -> bool:
     """
     Wait for the drone connection to be ready.
@@ -81,71 +86,68 @@ async def connect_drone_background(drone: System, address: str, port: str, proto
             break
 
 
+async def get_or_create_global_connector() -> MAVLinkConnector:
+    """Get or create the global drone connector (thread-safe)"""
+    global _global_connector, _connection_task
+    
+    async with _connection_lock:
+        if _global_connector is not None:
+            return _global_connector
+        
+        # Initialize for the first time
+        logger.info("=" * 60)
+        logger.info("MAVLink MCP Server - Initializing Global Drone Connection")
+        logger.info("=" * 60)
+        
+        # Read connection settings from environment (.env file)
+        address = os.environ.get("MAVLINK_ADDRESS", "")
+        port = os.environ.get("MAVLINK_PORT", "14540")
+        protocol = os.environ.get("MAVLINK_PROTOCOL", "udp").lower()
+        
+        # Display connection configuration
+        logger.info("Configuration loaded from .env file:")
+        logger.info("  MAVLINK_ADDRESS: %s", address if address else "(not set)")
+        logger.info("  MAVLINK_PORT: %s", port)
+        logger.info("  MAVLINK_PROTOCOL: %s", protocol)
+        logger.info("=" * 60)
+        
+        if not address:
+            logger.warning("WARNING: MAVLINK_ADDRESS not set in .env file!")
+            raise ValueError("MAVLINK_ADDRESS not configured in .env file")
+        
+        # Validate protocol
+        if protocol not in ["tcp", "udp", "serial"]:
+            logger.warning("Invalid protocol '%s', defaulting to udp", protocol)
+            protocol = "udp"
+        
+        drone = System()
+        connection_ready = asyncio.Event()
+        
+        # Create the global connector
+        _global_connector = MAVLinkConnector(drone=drone, connection_ready=connection_ready)
+        
+        # Start drone connection in background
+        logger.info("Starting persistent drone connection in background...")
+        logger.info("This connection will be shared across all requests")
+        logger.info("-" * 60)
+        
+        _connection_task = asyncio.create_task(
+            connect_drone_background(drone, address, port, protocol, connection_ready)
+        )
+        
+        return _global_connector
+
 @asynccontextmanager
 async def app_lifespan(server: FastMCP) -> AsyncIterator[MAVLinkConnector]:
-    """Manage application lifecycle with type-safe context"""
-    # Initialize on startup - load from .env file
-    logger.info("=" * 60)
-    logger.info("MAVLink MCP Server Starting")
-    logger.info("=" * 60)
+    """Manage application lifecycle - returns global persistent connector"""
+    # Get or create the global connector (only happens once)
+    connector = await get_or_create_global_connector()
     
-    # Read connection settings from environment (.env file)
-    address = os.environ.get("MAVLINK_ADDRESS", "")
-    port = os.environ.get("MAVLINK_PORT", "14540")
-    protocol = os.environ.get("MAVLINK_PROTOCOL", "udp").lower()
+    # Just yield the global connector - no teardown per request!
+    yield connector
     
-    # Display connection configuration
-    logger.info("Configuration loaded from .env file:")
-    logger.info("  MAVLINK_ADDRESS: %s", address if address else "(not set - using default)")
-    logger.info("  MAVLINK_PORT: %s", port)
-    logger.info("  MAVLINK_PROTOCOL: %s", protocol)
-    logger.info("=" * 60)
-    
-    if not address:
-        logger.warning("WARNING: MAVLINK_ADDRESS not set in .env file!")
-        logger.warning("Please configure .env with your drone's IP address")
-        raise ValueError("MAVLINK_ADDRESS not configured in .env file")
-    
-    # Validate protocol
-    if protocol not in ["tcp", "udp", "serial"]:
-        logger.warning("Invalid protocol '%s', defaulting to udp", protocol)
-        protocol = "udp"
-    
-    drone = System()
-    connection_ready = asyncio.Event()
-    
-    # Start drone connection in background - don't wait for it!
-    logger.info("Starting drone connection in background...")
-    logger.info("MCP Server will be ready immediately")
-    logger.info("Drone connection will complete asynchronously")
-    logger.info("-" * 60)
-    
-    # Create background task for drone connection
-    connection_task = asyncio.create_task(
-        connect_drone_background(drone, address, port, protocol, connection_ready)
-    )
-
-    try:
-        yield MAVLinkConnector(drone=drone, connection_ready=connection_ready)
-    finally:
-        # Cleanup on shutdown
-        logger.info("=" * 60)
-        logger.info("Shutting down MCP server...")
-        
-        # Cancel connection task if still running
-        if not connection_task.done():
-            logger.info("Cancelling drone connection task...")
-            connection_task.cancel()
-            try:
-                await connection_task
-            except asyncio.CancelledError:
-                pass
-        
-        logger.info("Disconnecting from drone at %s:%s", address, port)
-        # Note: MAVSDK System doesn't have a close() method
-        # The connection will be cleaned up when the object is destroyed
-        logger.info("Server stopped")
-        logger.info("=" * 60)
+    # Note: cleanup only happens on server shutdown (not per request)
+    # In HTTP mode, this might not be called at all until process termination
 
 # Pass lifespan to server
 mcp = FastMCP("MAVLink MCP", lifespan=app_lifespan)
