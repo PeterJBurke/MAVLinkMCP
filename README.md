@@ -34,7 +34,9 @@ cd MAVLinkMCP
 uv sync
 ```
 
-### 3. Configure Drone Connection
+### 3. Configure Connection and API Keys
+
+**a) Set up drone connection:**
 
 Copy the example configuration:
 ```bash
@@ -43,9 +45,37 @@ cp .env.example .env
 
 Edit `.env` with your drone's IP and port:
 ```bash
-MAVLINK_ADDRESS=your.drone.ip.address
-MAVLINK_PORT=14540
+nano .env
 ```
+
+Set your drone's connection details:
+```bash
+MAVLINK_ADDRESS=<your-drone-ip>
+MAVLINK_PORT=14540  # Or your drone's specific port
+```
+
+**Save and exit:** Press `Ctrl+X`, then `Y`, then `Enter`
+
+**b) Add your API key:**
+
+Create the secrets file:
+```bash
+nano examples/fastagent.secrets.yaml
+```
+
+Add your OpenAI or Anthropic API key:
+```yaml
+openai:
+    api_key: sk-your-actual-openai-key-here
+```
+
+Or for Claude:
+```yaml
+anthropic:
+    api_key: sk-ant-your-anthropic-key-here
+```
+
+**Save and exit:** Press `Ctrl+X`, then `Y`, then `Enter`
 
 ### 4. Run the AI Agent
 

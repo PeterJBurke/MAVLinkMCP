@@ -62,11 +62,10 @@ dev-dependencies = []
 - Emergency procedures
 - Example flight session
 
-#### `QUICK_START.md` (New)
-- 5-minute quick start guide
+#### `README.md`
+- Enhanced Quick Start section with combined configuration step
+- Clear API key setup instructions
 - uv-focused workflow
-- Basic commands reference
-- Troubleshooting tips
 
 ---
 
@@ -160,7 +159,6 @@ uv run examples/example_agent.py
 
 ### New Files
 - ➕ `DEPLOYMENT_GUIDE.md` - Complete deployment documentation
-- ➕ `QUICK_START.md` - Fast getting started guide
 - ➕ `start_agent.sh` - Automated launcher script
 - ➕ `test_connection.sh` - Connection verification script
 - ➕ `REFACTORING_SUMMARY.md` - This file
