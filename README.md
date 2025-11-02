@@ -173,8 +173,6 @@ uv run src/server/mavlinkmcp.py
 2. Connect to it with Claude Desktop or another MCP-compatible client
 3. Chat naturally with the AI to control your drone
 
-See [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md) for MCP server integration details
-
 ## Usage
 
 ### Running the MCP Server
@@ -216,8 +214,8 @@ Start agent with auto-configuration:
 
 ## Documentation
 
-- **[Deployment Guide](DEPLOYMENT_GUIDE.md)** - Complete setup and usage instructions
 - **[Examples README](examples/README.md)** - Example agent documentation
+- **[Project Status](STATUS.md)** - Current functionality and roadmap
 - **[MCP Protocol](https://modelcontextprotocol.io/)** - Model Context Protocol docs
 - **[MAVSDK](https://mavsdk.mavlink.io/)** - MAVLink SDK documentation
 
@@ -250,14 +248,30 @@ openai:
 
 ## Safety Guidelines
 
-⚠️ **IMPORTANT**: Always follow drone safety protocols:
+⚠️ **CRITICAL SAFETY RULES:**
 
-- Maintain visual line of sight
-- Verify GPS lock before flight
-- Have manual RC override ready
-- Test in open areas away from people
-- Check local regulations and weather
-- Start with low altitudes (3-5m)
+1. **Always maintain visual line of sight** with your drone
+2. **Check battery level** before flight
+3. **Verify GPS lock** before arming (wait for "global position ok")
+4. **Test in open area** away from people, buildings, and obstacles
+5. **Have manual RC override ready** at all times
+6. **Start with low altitudes** (3-5 meters) for testing
+7. **Check local regulations** and flight restrictions
+8. **Never fly in bad weather** (wind, rain, low visibility)
+
+### Pre-Flight Checklist:
+- [ ] Drone battery charged
+- [ ] Propellers secure
+- [ ] Clear flight area
+- [ ] GPS lock confirmed
+- [ ] RC transmitter on and ready
+- [ ] Network connection to drone stable
+- [ ] Emergency landing plan prepared
+
+### Emergency Procedures:
+- **Loss of Connection**: Drone should RTL (Return to Launch) automatically
+- **Unstable Flight**: Command immediate landing or use RC override
+- **Network Issues**: Use RC transmitter for manual control
 
 ## Development
 
@@ -416,6 +430,8 @@ uv sync
 
 ### Connection to drone fails
 
+**Problem: "Failed to connect to drone"**
+
 1. **Check drone is reachable:**
    ```bash
    ping <your-drone-ip>
@@ -424,7 +440,7 @@ uv sync
 2. **Verify .env file:**
    ```bash
    cat .env
-   # Should show your drone's IP and port
+   # Should show your drone's IP, port, and protocol
    ```
 
 3. **Check port accessibility:**
@@ -432,10 +448,43 @@ uv sync
    nc -zv <your-drone-ip> <port>
    ```
 
-4. **Verify environment variables:**
+4. **Verify environment variables are loaded:**
    ```bash
-   uv run python -c "import os; print(os.getenv('MAVLINK_ADDRESS'), os.getenv('MAVLINK_PORT'))"
+   uv run python -c "import os; from dotenv import load_dotenv; load_dotenv(); print(os.getenv('MAVLINK_ADDRESS'), os.getenv('MAVLINK_PORT'), os.getenv('MAVLINK_PROTOCOL'))"
    ```
+
+5. **Check firewall settings** (may need to allow TCP/UDP traffic)
+
+**Problem: "Waiting for global position estimate" (hangs)**
+
+1. Ensure drone has GPS fix (needs clear sky view)
+2. Wait 1-2 minutes for GPS satellites to lock
+3. Check drone's GPS module is functioning
+
+### Flight Issues
+
+**Problem: "Arming failed"**
+
+Solutions:
+1. Check all pre-arm checks pass
+2. Verify GPS lock is obtained
+3. Ensure drone is in a safe state
+4. Check battery voltage is sufficient
+
+**Problem: "Offboard mode failed to start"**
+
+Solutions:
+1. Ensure drone is armed first
+2. Check drone firmware supports offboard mode
+3. Verify RC transmitter is on (some drones require this)
+
+### Getting Debug Logs
+
+Enable detailed logging:
+```bash
+export MAVSDK_LOG_LEVEL=DEBUG
+uv run src/server/mavlinkmcp.py
+```
 
 ### API Key not working
 
@@ -454,8 +503,87 @@ uv sync
    - Use spaces, not tabs for indentation
    - Ensure proper key structure as shown in the guide
 
-## Support
+## Testing Without a Real Drone
 
-- 📖 [Full Deployment Guide](DEPLOYMENT_GUIDE.md)
+For development and testing, you can use a **simulated drone** with PX4 SITL (Software In The Loop):
+
+```bash
+# Install PX4 SITL simulator (separate terminal)
+# Then configure .env for local simulator:
+MAVLINK_ADDRESS=127.0.0.1
+MAVLINK_PORT=14540
+MAVLINK_PROTOCOL=udp
+```
+
+For PX4 SITL installation and setup, see:
+- [PX4 SITL Documentation](https://docs.px4.io/main/en/simulation/)
+- [PX4 User Guide](https://docs.px4.io/main/en/)
+
+## Example Flight Session
+
+Here's a complete example session using the interactive client:
+
+```bash
+# Start the interactive client
+uv run examples/interactive_client.py
+
+# You see: Connected to drone at tcp://your-drone-ip:port!
+# You see: GPS lock acquired!
+
+🎮 Command> position
+📍 Position:
+   Latitude:  33.645862°
+   Longitude: -117.842751°
+   Altitude:  0.0m
+
+🎮 Command> arm
+🔧 Arming drone...
+✅ Drone armed!
+
+🎮 Command> battery
+🔋 Battery: 98.5%
+
+🎮 Command> takeoff 10
+🚁 Taking off to 10.0m...
+✅ Takeoff command sent! Target altitude: 10.0m
+
+# Wait for takeoff to complete (5-15 seconds)
+
+🎮 Command> position
+📍 Position:
+   Latitude:  33.645862°
+   Longitude: -117.842751°
+   Altitude:  9.8m
+
+🎮 Command> mode
+✈️  Flight Mode: OFFBOARD
+
+🎮 Command> land
+🛬 Landing drone...
+✅ Landing command sent!
+
+# Monitor descent
+🎮 Command> position
+📍 Position:
+   Altitude:  2.5m
+
+🎮 Command> position
+📍 Position:
+   Altitude:  0.02m
+
+🎮 Command> quit
+👋 Goodbye!
+```
+
+## Support and Resources
+
+### Project Resources
 - 🐛 [Report Issues](https://github.com/PeterJBurke/MAVLinkMCP/issues)
 - 💬 [Discussions](https://github.com/PeterJBurke/MAVLinkMCP/discussions)
+- 📊 [Project Status](STATUS.md)
+
+### External Documentation
+- 📖 [MCP Protocol](https://modelcontextprotocol.io/introduction)
+- 🚁 [MAVSDK Documentation](https://mavsdk.mavlink.io/main/en/)
+- 🛸 [PX4 User Guide](https://docs.px4.io/main/en/)
+- 📡 [MAVLink Protocol](https://mavlink.io/en/)
