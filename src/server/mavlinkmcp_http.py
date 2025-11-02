@@ -32,15 +32,15 @@ if __name__ == "__main__":
     logger.info("MAVLink MCP Server - HTTP/SSE Mode")
     logger.info("=" * 60)
     logger.info(f"Starting SSE server on {HOST}:{PORT}")
-    logger.info(f"Mount path: {MOUNT_PATH}")
     logger.info("")
     logger.info("Connect from ChatGPT Developer Mode using ngrok HTTPS:")
-    logger.info(f"  https://YOUR-NGROK-ID.ngrok-free.app{MOUNT_PATH}/sse")
+    logger.info(f"  https://YOUR-NGROK-ID.ngrok-free.app/sse")
     logger.info("")
-    logger.info(f"Example: https://abc123xyz.ngrok-free.app{MOUNT_PATH}/sse")
+    logger.info(f"Example: https://abc123xyz.ngrok-free.app/sse")
     logger.info("=" * 60)
     logger.info("")
-    logger.info(f"⚠️  Note: Server will start on port {PORT}")
+    logger.info(f"⚠️  IMPORTANT: Use /sse (not /mcp/sse)")
+    logger.info(f"   Server will start on port {PORT}")
     logger.info("   Make sure ngrok forwards to this port:")
     logger.info(f"   ngrok http {PORT}")
     logger.info("")
@@ -52,8 +52,7 @@ if __name__ == "__main__":
     # Update settings on the existing mcp instance
     mcp.settings.host = HOST
     mcp.settings.port = PORT
-    mcp.settings.mount_path = MOUNT_PATH
     
-    # Run server with SSE transport
-    mcp.run(transport='sse', mount_path=MOUNT_PATH)
+    # Run server with SSE transport using default mount path
+    mcp.run(transport='sse')
 
