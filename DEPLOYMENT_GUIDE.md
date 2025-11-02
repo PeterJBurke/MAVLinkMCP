@@ -23,11 +23,15 @@ This guide will walk you through setting up and using the MAVLink MCP server to 
 
 ### Required Software
 - **Python 3.10 or higher**
-- **pip** or **uv** package manager
-- **Network access** to your drone (via UDP, TCP, or serial)
+- **uv** package manager (recommended)
+
+### Required Hardware
+- **MAVLink-compatible drone or simulator** with network access
+  - Must have an accessible **IP address and port** (e.g., via UDP, TCP, or serial)
+  - Connection details will be configured in `.env` file
 
 ### Required Accounts (for AI agent)
-- OpenAI API key (for GPT-4o-mini) or Anthropic API key (for Claude)
+- **OpenAI API key** (for GPT-4o-mini) or **Anthropic API key** (for Claude)
 
 ### Verify Python Installation
 ```bash

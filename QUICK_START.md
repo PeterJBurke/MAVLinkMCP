@@ -8,9 +8,10 @@ This guide uses **uv** exclusively for fast, reliable dependency management.
 
 ## Prerequisites
 
-- Python 3.10+
-- Your drone's IP address and port
-- OpenAI or Anthropic API key (for AI agent)
+- **Python 3.10+**
+- **MAVLink-compatible drone or simulator** with:
+  - Accessible IP address and port (to be configured in `.env`)
+- **OpenAI or Anthropic API key** (for AI agent control)
 
 ---
 

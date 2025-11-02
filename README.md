@@ -14,7 +14,9 @@ A Python-based Model Context Protocol (MCP) server for AI-powered drone control.
 
 - **Python 3.10+**
 - **uv** package manager ([install here](https://github.com/astral-sh/uv))
-- MAVLink-compatible drone or simulator
+- **MAVLink-compatible drone or simulator** with network access (IP address and port)
+  - Connection details will be configured in `.env` file
+- **OpenAI or Anthropic API key** (for AI agent control)
 
 ## Quick Start
 
