@@ -49,6 +49,8 @@ uv run examples/example_agent.py
 
 Make sure all dependencies are installed with `uv sync` first.
 
+**How it works:** The agent is configured in `fastagent.config.yaml` to automatically start the MAVLink MCP server (`src/server/mavlinkmcp.py`) as a subprocess. You don't need to run the server separately!
+
 After running `example_agent.py`, you can start chatting with an agent that can control your drone.
 
 ## Example Prompts

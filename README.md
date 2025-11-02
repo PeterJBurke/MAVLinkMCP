@@ -53,6 +53,8 @@ MAVLINK_PORT=14540
 uv run examples/example_agent.py
 ```
 
+**Note:** The agent automatically starts the MCP server - no need to run it separately!
+
 Then use natural language commands:
 - "Arm the drone"
 - "Take off to 5 meters"
@@ -63,20 +65,22 @@ Then use natural language commands:
 
 ### Method 1: AI Agent (Recommended)
 
-The AI agent provides natural language control:
+The AI agent provides natural language control. The agent **automatically starts the MCP server** as a subprocess - you don't need to run the server separately.
 
 ```bash
 # Configure API keys in examples/fastagent.secrets.yaml
 uv run examples/example_agent.py
 ```
 
-### Method 2: Direct MCP Server
+### Method 2: Direct MCP Server (Advanced)
 
-For integration with other MCP clients:
+For integration with other MCP clients or custom applications. Only use this if you're **not** using the AI agent:
 
 ```bash
 uv run src/server/mavlinkmcp.py
 ```
+
+**Note:** This runs the server standalone. The AI agent (Method 1) starts this automatically.
 
 ### Quick Launch Scripts
 

@@ -173,6 +173,8 @@ cd MAVLinkMCP
 uv run examples/example_agent.py
 ```
 
+**Important:** The FastAgent automatically starts the MCP server as a subprocess. You do **not** need to run the server separately in another terminal!
+
 ### Step 8: Start Flying! 🚁
 
 The agent will start and you can type commands. Here are examples:
@@ -229,9 +231,15 @@ Type `STOP` or press `Ctrl+C`
 
 ---
 
-## Method 2: Direct MCP Integration
+## Method 2: Direct MCP Integration (Advanced)
 
-For developers integrating with other systems, you can call MCP tools directly. The server runs on `stdio` transport.
+For developers integrating with other MCP clients or custom applications, you can run the MCP server standalone. **Only use this method if you're NOT using the AI agent** (Method 1 above - which starts the server automatically).
+
+The server runs on `stdio` transport:
+
+```bash
+uv run src/server/mavlinkmcp.py
+```
 
 ---
 

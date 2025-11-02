@@ -84,6 +84,8 @@ Or manually:
 uv run examples/example_agent.py
 ```
 
+**Note:** The agent automatically starts the MCP server - no need to run it separately!
+
 ---
 
 ## Basic Flight Commands
