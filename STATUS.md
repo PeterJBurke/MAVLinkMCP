@@ -17,7 +17,7 @@
 
 ### Verified Test Flight
 **Date:** November 2, 2025  
-**Drone:** Virtual drone at 172.233.128.95:5678 (TCP)  
+**Drone:** Virtual drone at 203.0.113.10:5678 (TCP)  
 **Results:**
 - Connection: SUCCESS
 - Arming: SUCCESS

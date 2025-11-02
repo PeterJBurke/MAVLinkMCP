@@ -48,7 +48,7 @@ Add these lines (keep existing drone config):
 
 ```bash
 # Existing drone configuration
-MAVLINK_ADDRESS=172.233.128.95
+MAVLINK_ADDRESS=203.0.113.10
 MAVLINK_PORT=5678
 MAVLINK_PROTOCOL=tcp
 
@@ -88,10 +88,10 @@ This server can be connected to from:
 ===========================================================
 INFO - MAVLink MCP Server Starting
 INFO - Configuration loaded from .env file:
-INFO -   MAVLINK_ADDRESS: 172.233.128.95
+INFO -   MAVLINK_ADDRESS: 203.0.113.10
 INFO -   MAVLINK_PORT: 5678
 INFO -   MAVLINK_PROTOCOL: tcp
-INFO - Connected to drone at 172.233.128.95:5678!
+INFO - Connected to drone at 203.0.113.10:5678!
 INFO - GPS lock acquired!
 INFO - MCP Server is READY and exposing drone control tools
 ```
@@ -110,13 +110,13 @@ If running on a cloud instance:
 curl ifconfig.me
 ```
 
-Example output: `172.233.128.95`
+Example output: `203.0.113.10`
 
 ### B. Construct Your MCP Server URL
 
 Format: `http://YOUR_SERVER_IP:8080/mcp/sse`
 
-Example: `http://172.233.128.95:8080/mcp/sse`
+Example: `http://203.0.113.10:8080/mcp/sse`
 
 **Write this down - you'll need it for ChatGPT!**
 
@@ -155,7 +155,7 @@ Type: MCP Server (SSE)
 ```
 Name: MAVLink Drone Controller
 Description: AI-powered drone flight control
-Server URL: http://172.233.128.95:8080/mcp/sse
+Server URL: http://203.0.113.10:8080/mcp/sse
 Type: MCP Server (SSE)
 ```
 
@@ -190,7 +190,7 @@ If you see **"Connection Error"**, check:
 
 **You:** "Check if the drone is connected and show me its current position"
 
-**ChatGPT:** "The drone is connected at 172.233.128.95:5678. Current position: Latitude 33.6459°, Longitude -117.8428°, Altitude 0.0m"
+**ChatGPT:** "The drone is connected at 203.0.113.10:5678. Current position: Latitude 33.6459°, Longitude -117.8428°, Altitude 0.0m"
 
 ---
 
@@ -302,12 +302,12 @@ All systems nominal - safe to fly!"
 
 1. **Use public IP, not localhost:**
    - ❌ Wrong: `http://localhost:8080/mcp/sse`
-   - ✅ Correct: `http://172.233.128.95:8080/mcp/sse`
+   - ✅ Correct: `http://203.0.113.10:8080/mcp/sse`
 
 2. **Ensure correct path:**
-   - ❌ Wrong: `http://172.233.128.95:8080`
-   - ❌ Wrong: `http://172.233.128.95:8080/sse`
-   - ✅ Correct: `http://172.233.128.95:8080/mcp/sse`
+   - ❌ Wrong: `http://203.0.113.10:8080`
+   - ❌ Wrong: `http://203.0.113.10:8080/sse`
+   - ✅ Correct: `http://203.0.113.10:8080/mcp/sse`
 
 3. **Check HTTPS vs HTTP:**
    - Use `http://` not `https://` (unless you've set up SSL)
@@ -374,7 +374,7 @@ Here's a complete conversation example:
 
 **You:** "Hi! I'd like to fly my drone. Can you check if it's ready?"
 
-**ChatGPT:** "I'll check the drone's status for you... The drone is connected at 172.233.128.95:5678. All systems are operational:
+**ChatGPT:** "I'll check the drone's status for you... The drone is connected at 203.0.113.10:5678. All systems are operational:
 - GPS: Locked with 14 satellites
 - Battery: 98%
 - Position: Home position set at 33.6459°N, 117.8428°W

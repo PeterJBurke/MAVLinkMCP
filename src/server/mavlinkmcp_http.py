@@ -36,7 +36,7 @@ if __name__ == "__main__":
     logger.info("Connect from ChatGPT Developer Mode using:")
     logger.info(f"  http://YOUR_SERVER_IP:{PORT}{MOUNT_PATH}/sse")
     logger.info("")
-    logger.info("Example: http://172.233.128.95:{PORT}{MOUNT_PATH}/sse")
+    logger.info("Example: http://203.0.113.10:{PORT}{MOUNT_PATH}/sse")
     logger.info("=" * 60)
     
     # Set port via environment variable for the underlying server
