@@ -41,17 +41,13 @@ default_model: gpt-4o-mini  # Change this if you want to use another model
 
 ## Running the Example
 
-You can run the example agent script using either of the following commands from the project root:
+Run the example agent using `uv` from the project root:
 
-```sh
-python examples/example_agent.py
-```
-or
 ```sh
 uv run examples/example_agent.py
 ```
 
-Make sure all dependencies are installed and your environment is properly configured.
+Make sure all dependencies are installed with `uv sync` first.
 
 After running `example_agent.py`, you can start chatting with an agent that can control your drone.
 
