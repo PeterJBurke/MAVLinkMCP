@@ -171,8 +171,10 @@ Forwarding                    https://abc123xyz.ngrok-free.app -> http://localho
 
 **Your complete ChatGPT MCP URL is:**
 ```
-https://abc123xyz.ngrok-free.app/mcp/sse
+https://abc123xyz.ngrok-free.app/sse
 ```
+
+⚠️ **Note:** Use `/sse` endpoint, NOT `/mcp/sse` (the FastMCP server defaults to `/sse` for SSE transport)
 
 ⚠️ **Keep both terminals running:**
 - Terminal 1: MCP server (`./start_http_server.sh`)
@@ -305,39 +307,53 @@ tmux attach -t drone
 
 ## Step 4: Configure ChatGPT Developer Mode
 
-### A. Open ChatGPT Settings
+### A. Open ChatGPT Agent Builder
 
-1. Go to [https://chat.openai.com/](https://chat.openai.com/)
-2. Click your **profile icon** (bottom left)
-3. Select **Settings**
-4. Navigate to **Developer** section
+⚠️ **IMPORTANT:** You need to access the **Agent Builder** interface, not regular ChatGPT settings.
+
+**Direct Link (Recommended):**
+```
+https://platform.openai.com/chat/edit?models=gpt-4.1
+```
+
+**Alternative Path:**
+1. Go to [https://platform.openai.com/](https://platform.openai.com/)
+2. Navigate to **Agent Builder** or **Chat** section
+3. Select **gpt-4.1** model
+4. Look for **Tools** or **Custom Tools** configuration
+
+💡 **Note:** The Agent Builder interface allows you to add custom MCP tools to your ChatGPT sessions. This is different from the general ChatGPT settings.
 
 ### B. Add MCP Connector
 
-In Developer Mode settings:
+In the Agent Builder interface:
 
-1. Click **"Add Connector"** or **"New MCP Server"**
-2. Fill in the details:
+1. Click **"Add Tool"** or **"Add Connector"** button
+2. Select **"Custom Tool"** or **"MCP Server"** option
+3. Fill in the details:
 
 **Connector Configuration:**
 ```
-Name: MAVLink Drone Controller
-Description: Control MAVLink drones with natural language
-Server URL: https://YOUR_NGROK_URL.ngrok-free.app/mcp/sse
+Name: mavlinkmcp
+Description: MAVLink drone control via MCP protocol
+Server URL: https://YOUR_NGROK_URL.ngrok-free.app/sse
 Type: MCP Server (SSE)
 ```
 
 **Example (use YOUR actual ngrok URL):**
 ```
-Name: MAVLink Drone Controller
+Name: mavlinkmcp
 Description: AI-powered drone flight control
-Server URL: https://abc123xyz.ngrok-free.app/mcp/sse
-Type: MCP Server (SSE)
+Server URL: https://abc123xyz.ngrok-free.app/sse
 ```
 
-⚠️ **Important:** Replace `abc123xyz.ngrok-free.app` with your actual ngrok URL from Step 3!
+⚠️ **CRITICAL NOTES:**
+- Replace `abc123xyz.ngrok-free.app` with your actual ngrok URL from Step 3!
+- Use `/sse` endpoint, NOT `/mcp/sse` (the server defaults to `/sse`)
+- Must use HTTPS (ngrok provides this automatically)
+- Name should be lowercase, no spaces (e.g., `mavlinkmcp`)
 
-3. Click **Save** or **Connect**
+3. Click **Save** or **Add Tool**
 
 ### C. Verify Connection
 
@@ -349,9 +365,10 @@ ChatGPT should show:
 If you see **"Connection Error"**, check:
 - MCP server is running (`./start_http_server.sh`)
 - ngrok tunnel is running (`ngrok http 8080`)
-- URL is correct HTTPS format: `https://xxx.ngrok-free.app/mcp/sse`
-- URL includes `/mcp/sse` at the end
+- URL is correct HTTPS format: `https://xxx.ngrok-free.app/sse`
+- URL includes `/sse` at the end (NOT `/mcp/sse`)
 - You're using the HTTPS URL from ngrok, not http://
+- You're using the Agent Builder interface at `https://platform.openai.com/chat/edit?models=gpt-4.1`
 
 ---
 
@@ -450,11 +467,12 @@ All systems nominal - safe to fly!"
 
 **Solutions:**
 
-1. **Verify HTTPS URL:**
-   - ❌ Wrong: `http://64.225.115.101:8080/mcp/sse`
-   - ✅ Correct: `https://abc123xyz.ngrok-free.app/mcp/sse`
+1. **Verify HTTPS URL with correct path:**
+   - ❌ Wrong: `http://64.225.115.101:8080/sse` (HTTP not allowed)
+   - ❌ Wrong: `https://abc123xyz.ngrok-free.app/mcp/sse` (wrong path)
+   - ✅ Correct: `https://abc123xyz.ngrok-free.app/sse`
    
-   ChatGPT requires HTTPS! You must use ngrok.
+   ChatGPT requires HTTPS! You must use ngrok, and the correct endpoint is `/sse`.
 
 2. **Check MCP server is running:**
    ```bash
@@ -489,14 +507,14 @@ All systems nominal - safe to fly!"
 **Solutions:**
 
 1. **Use ngrok HTTPS URL, not direct IP:**
-   - ❌ Wrong: `http://64.225.115.101:8080/mcp/sse`
-   - ❌ Wrong: `https://64.225.115.101:8080/mcp/sse`
-   - ✅ Correct: `https://abc123xyz.ngrok-free.app/mcp/sse`
+   - ❌ Wrong: `http://64.225.115.101:8080/sse`
+   - ❌ Wrong: `https://64.225.115.101:8080/sse`
+   - ✅ Correct: `https://abc123xyz.ngrok-free.app/sse`
 
 2. **Ensure correct path:**
    - ❌ Wrong: `https://abc123xyz.ngrok-free.app`
-   - ❌ Wrong: `https://abc123xyz.ngrok-free.app/sse`
-   - ✅ Correct: `https://abc123xyz.ngrok-free.app/mcp/sse`
+   - ❌ Wrong: `https://abc123xyz.ngrok-free.app/mcp/sse` (old path)
+   - ✅ Correct: `https://abc123xyz.ngrok-free.app/sse`
 
 3. **Get fresh ngrok URL:**
    ```bash
