@@ -22,7 +22,6 @@ load_dotenv(dotenv_path=env_path)
 # Import the necessary components
 from mcp.server.fastmcp import FastMCP
 from src.server.mavlinkmcp import app_lifespan, logger
-import src.server.mavlinkmcp  # Import all the tools
 
 # Configuration
 PORT = int(os.environ.get("MCP_PORT", "8080"))
@@ -39,26 +38,31 @@ if __name__ == "__main__":
     logger.info("Connect from ChatGPT Developer Mode using ngrok HTTPS:")
     logger.info(f"  https://YOUR-NGROK-ID.ngrok-free.app{MOUNT_PATH}/sse")
     logger.info("")
-    logger.info("Example: https://abc123xyz.ngrok-free.app{MOUNT_PATH}/sse")
+    logger.info(f"Example: https://abc123xyz.ngrok-free.app{MOUNT_PATH}/sse")
     logger.info("=" * 60)
     logger.info("")
-    logger.info("⚠️  Note: This server is now on port " + str(PORT))
+    logger.info(f"⚠️  Note: Server will start on port {PORT}")
     logger.info("   Make sure ngrok forwards to this port:")
     logger.info(f"   ngrok http {PORT}")
     logger.info("")
     logger.info("=" * 60)
     
-    # Create FastMCP instance with correct port
-    # We need to import the tools from the main module
-    from src.server import mavlinkmcp as mav_module
+    # Create new FastMCP instance with correct host and port
+    mcp = FastMCP(
+        "MAVLink MCP",
+        lifespan=app_lifespan,
+        host=HOST,
+        port=PORT,
+        mount_path=MOUNT_PATH
+    )
     
-    # Get the mcp instance with all the tools already registered
-    mcp = mav_module.mcp
+    # Import all the tool registrations from the main module
+    # This will register all the @mcp.tool() decorated functions
+    import src.server.mavlinkmcp as mav_module
     
-    # Update the server's port and host settings
-    mcp._server._host = HOST
-    mcp._server._port = PORT
-    mcp._server._mount_path = MOUNT_PATH
+    # Copy all registered tools from the original mcp instance
+    for tool_name, tool_func in mav_module.mcp._tools.items():
+        mcp._tools[tool_name] = tool_func
     
     # Run server with SSE transport
     mcp.run(transport='sse', mount_path=MOUNT_PATH)
