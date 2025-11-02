@@ -29,8 +29,27 @@ logger.addHandler(handler)
 class MAVLinkConnector:
     drone: System
     last_offboard_position: PositionNedYaw = field(default_factory=lambda: PositionNedYaw(0.0, 0.0, 0.0, 0.0))
+    connection_ready: asyncio.Event = field(default_factory=asyncio.Event)
 
-async def connect_drone_background(drone: System, address: str, port: str, protocol: str):
+async def ensure_connection(connector: MAVLinkConnector, timeout: float = 30.0) -> bool:
+    """
+    Wait for the drone connection to be ready.
+    
+    Args:
+        connector: The MAVLinkConnector instance
+        timeout: Maximum time to wait in seconds
+        
+    Returns:
+        bool: True if connected, False if timeout
+    """
+    try:
+        await asyncio.wait_for(connector.connection_ready.wait(), timeout=timeout)
+        return True
+    except asyncio.TimeoutError:
+        logger.error(f"Drone connection timeout after {timeout}s")
+        return False
+
+async def connect_drone_background(drone: System, address: str, port: str, protocol: str, connection_ready: asyncio.Event):
     """Connect to drone in the background without blocking server startup"""
     connection_string = f"{protocol}://{address}:{port}"
     logger.info("Background: Connecting to drone...")
@@ -57,6 +76,8 @@ async def connect_drone_background(drone: System, address: str, port: str, proto
             logger.info("=" * 60)
             logger.info("Drone is READY for commands")
             logger.info("=" * 60)
+            # Signal that connection is ready!
+            connection_ready.set()
             break
 
 
@@ -91,6 +112,7 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[MAVLinkConnector]:
         protocol = "udp"
     
     drone = System()
+    connection_ready = asyncio.Event()
     
     # Start drone connection in background - don't wait for it!
     logger.info("Starting drone connection in background...")
@@ -100,11 +122,11 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[MAVLinkConnector]:
     
     # Create background task for drone connection
     connection_task = asyncio.create_task(
-        connect_drone_background(drone, address, port, protocol)
+        connect_drone_background(drone, address, port, protocol, connection_ready)
     )
 
     try:
-        yield MAVLinkConnector(drone=drone)
+        yield MAVLinkConnector(drone=drone, connection_ready=connection_ready)
     finally:
         # Cleanup on shutdown
         logger.info("=" * 60)
@@ -131,28 +153,41 @@ mcp = FastMCP("MAVLink MCP", lifespan=app_lifespan)
 
 # ARM
 @mcp.tool()
-async def arm_drone(ctx: Context) -> bool:
-    """Arm the drone."""
-    drone = ctx.request_context.lifespan_context.drone
+async def arm_drone(ctx: Context) -> dict:
+    """Arm the drone. Waits for drone connection if not yet ready."""
+    connector = ctx.request_context.lifespan_context
+    
+    # Wait for connection
+    if not await ensure_connection(connector):
+        return {"status": "failed", "error": "Drone connection timeout. Please wait and try again."}
+    
+    drone = connector.drone
     logger.info("Arming")
     await drone.action.arm()
-    return True
+    return {"status": "success", "message": "Drone armed"}
 
 
 # Get Position
 @mcp.tool()
 async def get_position(ctx: Context) -> dict:
     """
-    Get the position of the drone in latitude/longitude degrees and atittude in meters.
+    Get the position of the drone in latitude/longitude degrees and altitude in meters.
     The drone must be connected and have a global position estimate.
+    This tool will wait up to 30 seconds for the drone to be ready.
 
     Args:
         ctx (Context): The context of the request.
 
     Returns:
-        dict: A dict with the position.
+        dict: A dict with the position or error status.
     """
-    drone = ctx.request_context.lifespan_context.drone
+    connector = ctx.request_context.lifespan_context
+    
+    # Wait for connection
+    if not await ensure_connection(connector):
+        return {"status": "failed", "error": "Drone connection timeout. Please wait and try again."}
+    
+    drone = connector.drone
     logger.info("Fetching drone position")
 
     try:
@@ -165,7 +200,7 @@ async def get_position(ctx: Context) -> dict:
             }}
     except Exception as e:
         logger.error(f"Failed to retrieve position: {e}")
-        return str({"status": "failed"})
+        return {"status": "failed", "error": str(e)}
 
 async def start_offboard_mode(connector: MAVLinkConnector) -> bool:
     """
@@ -246,36 +281,48 @@ async def move_to_relative(ctx: Context, lr: float, fb: float, altitude: float, 
     return True
 
 @mcp.tool()
-async def takeoff(ctx: Context, takeoff_altitude: float = 3.0) -> bool:
-    """Command the drone to initiate takeoff and ascend to a specified altitude. The drone must be armed.
+async def takeoff(ctx: Context, takeoff_altitude: float = 3.0) -> dict:
+    """Command the drone to initiate takeoff and ascend to a specified altitude. The drone must be armed. Waits for connection if not ready.
 
     Args:
         ctx (Context): The context of the request.
-        takeoff_altitude (float): The altitude to ascend to after takeoff. Default is 10.0 meters.
+        takeoff_altitude (float): The altitude to ascend to after takeoff. Default is 3.0 meters.
 
     Returns:
-        bool: True if the takeoff command was initiated successfully.
+        dict: Status message with success or error.
     """
-    drone = ctx.request_context.lifespan_context.drone
+    connector = ctx.request_context.lifespan_context
+    
+    # Wait for connection
+    if not await ensure_connection(connector):
+        return {"status": "failed", "error": "Drone connection timeout. Please wait and try again."}
+    
+    drone = connector.drone
     logger.info("Initiating takeoff")
     await drone.action.set_takeoff_altitude(takeoff_altitude)
     await drone.action.takeoff()
-    return True
+    return {"status": "success", "message": f"Takeoff initiated to {takeoff_altitude}m"}
 
 @mcp.tool()
-async def land(ctx: Context) -> bool:
-    """Command the drone to initiate landing at its current location.
+async def land(ctx: Context) -> dict:
+    """Command the drone to initiate landing at its current location. Waits for connection if not ready.
 
     Args:
         ctx (Context): The context of the request.
 
     Returns:
-        bool: True if the land command was initiated successfully.
+        dict: Status message with success or error.
     """
-    drone = ctx.request_context.lifespan_context.drone
+    connector = ctx.request_context.lifespan_context
+    
+    # Wait for connection
+    if not await ensure_connection(connector):
+        return {"status": "failed", "error": "Drone connection timeout. Please wait and try again."}
+    
+    drone = connector.drone
     logger.info("Initiating landing")
     await drone.action.land()
-    return True
+    return {"status": "success", "message": "Landing initiated"}
 
 @mcp.tool()
 async def print_status_text(ctx: Context) -> dict:
@@ -424,24 +471,30 @@ async def initiate_mission(ctx: Context, mission_points: list, return_to_launch:
     return True
 
 @mcp.tool()
-async def get_flight_mode(ctx: Context) -> str:
+async def get_flight_mode(ctx: Context) -> dict:
     """
-    Get the current flight mode of the drone.
+    Get the current flight mode of the drone. Waits for connection if not ready.
 
     Args:
         ctx (Context): The context of the request.
 
     Returns:
-        str: The current flight mode of the drone.
+        dict: The current flight mode of the drone or error status.
     """
-    drone = ctx.request_context.lifespan_context.drone
+    connector = ctx.request_context.lifespan_context
+    
+    # Wait for connection
+    if not await ensure_connection(connector):
+        return {"status": "failed", "error": "Drone connection timeout. Please wait and try again."}
+    
+    drone = connector.drone
     try:
         flight_mode = await drone.telemetry.flight_mode().__anext__()
         logger.info(f"FlightMode: {flight_mode}")
-        return str(flight_mode)
+        return {"status": "success", "flight_mode": str(flight_mode)}
     except StopAsyncIteration:
         logger.error("Failed to retrieve flight mode")
-        return "Unknown"
+        return {"status": "failed", "error": "Failed to retrieve flight mode"}
 
 
 if __name__ == "__main__":
