@@ -239,7 +239,8 @@ If all checks pass, test in ChatGPT!
 
 ## 📚 Related Documentation
 
-- [SERVICE_SETUP.md](SERVICE_SETUP.md) - Full systemd service guide
+- [SERVICE_SETUP.md](SERVICE_SETUP.md) - systemd service deployment
 - [CHATGPT_SETUP.md](CHATGPT_SETUP.md) - ChatGPT integration guide
-- [README.md](README.md) - Project overview
+- [STATUS.md](STATUS.md) - Current features & roadmap
+- [README.md](README.md) - Main documentation
 

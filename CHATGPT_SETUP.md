@@ -562,7 +562,7 @@ Ready for flight!"
 
 ### Want More Features?
 
-See [STATUS.md](STATUS.md) for roadmap and possible enhancements!
+See [STATUS.md](STATUS.md) for current capabilities and development roadmap!
 
 ---
 
@@ -571,7 +571,9 @@ See [STATUS.md](STATUS.md) for roadmap and possible enhancements!
 - 🐛 [Report Issues](https://github.com/PeterJBurke/MAVLinkMCP/issues)
 - 💬 [Discussions](https://github.com/PeterJBurke/MAVLinkMCP/discussions)
 - 📖 [Main README](README.md)
-- 📊 [Project Status](STATUS.md)
+- 📊 [Status & Roadmap](STATUS.md)
+- 🔧 [Service Setup](SERVICE_SETUP.md)
+- 🔄 [Update Guide](LIVE_SERVER_UPDATE.md)
 
 ---
 

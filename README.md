@@ -362,24 +362,37 @@ Start agent with auto-configuration:
 
 ## Documentation
 
+### Setup & Deployment Guides
 - **[ChatGPT Setup Guide](CHATGPT_SETUP.md)** - Control drone with ChatGPT web interface
+- **[Service Setup Guide](SERVICE_SETUP.md)** - Production deployment with systemd
+- **[Server Update Guide](LIVE_SERVER_UPDATE.md)** - Update your running server
+
+### Project Information
+- **[Project Status & Roadmap](STATUS.md)** - Current features and future plans
 - **[Examples README](examples/README.md)** - Example agent documentation
-- **[Project Status](STATUS.md)** - Current functionality and roadmap
+
+### External Resources
 - **[MCP Protocol](https://modelcontextprotocol.io/)** - Model Context Protocol docs
 - **[MAVSDK](https://mavsdk.mavlink.io/)** - MAVLink SDK documentation
 
 ## Available Tools
 
-The MCP server exposes these tools for drone control:
+The MCP server exposes **25 tools** for complete drone control:
 
-| Category | Tools |
-|----------|-------|
-| **Flight Control** | `arm_drone`, `takeoff`, `land`, `move_to_relative` |
-| **Telemetry** | `get_position`, `get_flight_mode`, `get_imu`, `print_status_text` |
-| **Missions** | `initiate_mission`, `print_mission_progress` |
+| Category | Count | Key Tools |
+|----------|-------|-----------|
+| **Flight Control** | 5 | `arm_drone`, `disarm_drone`, `takeoff`, `land`, `hold_position` |
+| **Emergency & Safety** | 3 | `return_to_launch`, `kill_motors`, `get_battery` |
+| **Navigation** | 5 | `get_position`, `move_to_relative`, `go_to_location`, `set_max_speed` |
+| **Mission Management** | 5 | `initiate_mission`, `pause_mission`, `resume_mission`, `clear_mission` |
+| **Telemetry** | 7 | `get_health`, `get_speed`, `get_attitude`, `get_gps_info`, `get_armed` |
+
+**See [STATUS.md](STATUS.md) for complete tool list and descriptions.**
 
 ### Recent Updates
-- ✅ **Nov 2, 2025**: Fixed `move_to_relative` to correctly move drone in horizontal directions (north/east). Previously only changed altitude.
+- ✅ **Nov 16, 2025**: Documentation cleanup - removed 4 redundant files, consolidated roadmap
+- ✅ **Nov 12, 2025**: v1.1.0 released with 15 new tools - critical safety features, health checks, advanced telemetry
+- ✅ **Nov 2, 2025**: Fixed `move_to_relative` for horizontal movement
 
 ## Configuration
 
@@ -732,7 +745,7 @@ uv run examples/interactive_client.py
 ### Project Resources
 - 🐛 [Report Issues](https://github.com/PeterJBurke/MAVLinkMCP/issues)
 - 💬 [Discussions](https://github.com/PeterJBurke/MAVLinkMCP/discussions)
-- 📊 [Project Status](STATUS.md)
+- 📊 [Status & Roadmap](STATUS.md)
 
 ### External Documentation
 - 📖 [MCP Protocol](https://modelcontextprotocol.io/introduction)
