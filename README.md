@@ -167,6 +167,33 @@ sudo netstat -tulpn | grep -E "8080|4040"
   - Connection details will be configured in `.env` file
 - **OpenAI or Anthropic API key** (for AI agent control)
 
+### 🔌 Autopilot Firmware Compatibility
+
+MAVLink MCP works with all major autopilots, but some advanced features require recent firmware versions:
+
+| Feature Category | ArduPilot | PX4 | Notes |
+|-----------------|-----------|-----|-------|
+| **Core Flight Control** | ✅ All versions | ✅ All versions | Arm, takeoff, land, move, RTL |
+| **Basic Navigation** | ✅ All versions | ✅ All versions | GPS, waypoints, hold |
+| **Parameter Management** | ✅ All versions | ✅ All versions | Read/write all parameters |
+| **Mission Upload/Download** | ✅ 3.5+ | ✅ 1.10+ | Upload works everywhere |
+| **Advanced Navigation** | ⚠️ 4.0+ | ⚠️ 1.13+ | `orbit_location` requires newer firmware |
+| **Yaw Control** | ✅ All versions | ✅ All versions | Works on all versions |
+| **Battery Monitoring** | ⚠️ Calibration needed | ⚠️ Calibration needed | Set `BATT_CAPACITY` for accurate readings |
+
+**✅ Recommended for Full v1.2.0 Support:**
+- **ArduPilot Copter:** 4.0.0 or newer
+- **PX4:** 1.13.0 or newer  
+- **SITL Simulators:** Latest stable versions
+
+**⚠️ Limited Support:**
+- Older firmware (ArduPilot 3.x, PX4 1.10-1.12) works but `orbit_location` may fail
+- The server automatically detects unsupported features and provides workarounds
+
+**🔍 Check Your Firmware:**
+- Use `get_telemetry` or `get_health` tools to check autopilot version
+- See [TESTING_GUIDE.md](TESTING_GUIDE.md) for firmware-specific limitations and workarounds
+
 ## Quick Start
 
 ### 1. Set Up Your System
@@ -394,6 +421,7 @@ The MCP server exposes **35 tools** for complete drone control:
 **See [STATUS.md](STATUS.md) for complete tool list and descriptions.**
 
 ### Recent Updates
+- ✅ **Nov 16, 2025**: v1.2.1 patch - improved error handling based on comprehensive testing (mission validation, orbit detection, battery fallback)
 - ✅ **Nov 16, 2025**: v1.2.0 near complete - added 7 tools for advanced navigation & missions (orbit, yaw, reposition, mission mgmt)
 - ✅ **Nov 16, 2025**: v1.2.0 development - added 3 parameter management tools (get/set/list params)
 - ✅ **Nov 16, 2025**: Documentation cleanup - removed 4 redundant files, consolidated roadmap

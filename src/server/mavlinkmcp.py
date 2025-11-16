@@ -707,18 +707,45 @@ async def get_battery(ctx: Context) -> dict:
     
     try:
         async for battery in drone.telemetry.battery():
+            voltage = battery.voltage_v
+            percent_raw = battery.remaining_percent
+            
             battery_data = {
-                "voltage_v": battery.voltage_v,
-                "remaining_percent": battery.remaining_percent * 100,  # Convert to percentage
+                "voltage_v": round(voltage, 2),
+                "remaining_percent": round(percent_raw * 100, 1),  # Convert to percentage
             }
             
-            # Add warning if battery is low
-            if battery.remaining_percent < 0.20:
+            # Handle case where percentage is unavailable/uncalibrated (0% with good voltage)
+            if percent_raw == 0.0 and voltage > 10.0:
+                battery_data["note"] = "⚠️  Battery percentage unavailable - using voltage estimate"
+                battery_data["calibration_status"] = "Uncalibrated or not supported by autopilot"
+                
+                # Rough LiPo estimate: 4.2V = 100%, 3.7V = 50%, 3.5V = 0% per cell
+                # Assume 4S LiPo (most common for drones): 16.8V full, 14.8V nominal, 14.0V empty
+                if voltage >= 16.0:
+                    estimated_percent = 90
+                elif voltage >= 15.2:
+                    estimated_percent = 75
+                elif voltage >= 14.8:
+                    estimated_percent = 50
+                elif voltage >= 14.0:
+                    estimated_percent = 25
+                else:
+                    estimated_percent = 10
+                
+                battery_data["estimated_percent"] = estimated_percent
+                battery_data["hint"] = "Set battery capacity parameter (BATT_CAPACITY) for accurate readings"
+            
+            # Add warning if battery is low (use estimated if percentage unavailable)
+            effective_percent = percent_raw if percent_raw > 0 else (battery_data.get("estimated_percent", 100) / 100)
+            
+            if effective_percent < 0.20:
                 battery_data["warning"] = "⚠️  LOW BATTERY - Land soon!"
-            elif battery.remaining_percent < 0.30:
+            elif effective_percent < 0.30:
                 battery_data["warning"] = "Battery getting low - consider landing"
             
-            logger.info(f"Battery: {battery_data['voltage_v']:.2f}V, {battery_data['remaining_percent']:.1f}%")
+            logger.info(f"Battery: {battery_data['voltage_v']}V, {battery_data['remaining_percent']}% "
+                       f"{'(estimated: ' + str(battery_data.get('estimated_percent', '')) + '%)' if 'estimated_percent' in battery_data else ''}")
             return {"status": "success", "battery": battery_data}
     except Exception as e:
         logger.error(f"Failed to get battery status: {e}")
@@ -1452,6 +1479,9 @@ async def orbit_location(
     Orbit around a specific GPS location at a given radius and speed.
     Useful for inspections, aerial photography, or surveillance.
     Waits for connection if not ready.
+    
+    Note: Requires ArduPilot 4.0+ or PX4 1.13+ with orbit support.
+          If unsupported, returns error with waypoint-based circle alternative.
 
     Args:
         ctx (Context): The context of the request.
@@ -1463,7 +1493,7 @@ async def orbit_location(
         clockwise (bool): Orbit direction - True for clockwise, False for counter-clockwise.
 
     Returns:
-        dict: Status message with orbit parameters.
+        dict: Status message with orbit parameters or workaround suggestion.
     
     Examples:
         - orbit_location(20, 2, 33.645, -117.842, 50, True) - 20m radius orbit at 2 m/s
@@ -1522,8 +1552,39 @@ async def orbit_location(
             "note": "To stop orbit, use hold_position or send a new movement command"
         }
     except Exception as e:
-        logger.error(f"Orbit failed: {e}")
-        return {"status": "failed", "error": f"Orbit command failed: {str(e)}"}
+        error_msg = str(e).lower()
+        
+        # Check if it's an unsupported command error
+        if "not supported" in error_msg or "unsupported" in error_msg or "command not found" in error_msg:
+            logger.warning(f"Orbit command not supported by autopilot: {e}")
+            
+            # Calculate waypoint circle as fallback suggestion
+            num_waypoints = max(8, int(2 * math.pi * radius_m / 10))  # ~10m between points
+            
+            return {
+                "status": "failed",
+                "error": "Orbit command not supported by this autopilot firmware",
+                "autopilot_requirement": "Requires ArduPilot 4.0+ or PX4 1.13+",
+                "workaround": {
+                    "method": "Use waypoint-based circle mission",
+                    "description": f"Create {num_waypoints} waypoints in a circle and fly as mission",
+                    "steps": [
+                        "1. Generate circular waypoints around center point",
+                        "2. Upload waypoints as mission using upload_mission",
+                        "3. Start mission to fly the circle pattern"
+                    ],
+                    "example_calculation": f"For {radius_m}m radius, use {num_waypoints} waypoints"
+                },
+                "alternative": "Or use manual control: repeatedly move in small increments while rotating with set_yaw"
+            }
+        else:
+            # Other error
+            logger.error(f"Orbit failed: {e}")
+            return {
+                "status": "failed",
+                "error": f"Orbit command failed: {str(e)}",
+                "troubleshooting": "Check drone is armed, in correct flight mode, and GPS has good lock"
+            }
 
 @mcp.tool()
 async def set_yaw(ctx: Context, yaw_deg: float, yaw_rate_deg_s: float = 30.0) -> dict:
@@ -1702,6 +1763,10 @@ async def upload_mission(ctx: Context, waypoints: list) -> dict:
         - Mission is uploaded but NOT started automatically
         - Use initiate_mission or start_mission to begin execution
         - Clears any existing mission first
+        
+    Important:
+        Pass waypoints as a properly formatted list of dictionaries.
+        Each waypoint MUST have: latitude_deg, longitude_deg, relative_altitude_m
     """
     connector = ctx.request_context.lifespan_context
     
@@ -1709,24 +1774,63 @@ async def upload_mission(ctx: Context, waypoints: list) -> dict:
     if not await ensure_connection(connector):
         return {"status": "failed", "error": "Drone connection timeout. Please wait and try again."}
     
-    if not waypoints or len(waypoints) == 0:
-        return {"status": "failed", "error": "No waypoints provided. Mission must have at least one waypoint."}
+    # Validate waypoints input
+    if not waypoints:
+        return {
+            "status": "failed", 
+            "error": "No waypoints provided",
+            "example": [
+                {"latitude_deg": 33.645, "longitude_deg": -117.842, "relative_altitude_m": 10},
+                {"latitude_deg": 33.646, "longitude_deg": -117.843, "relative_altitude_m": 15}
+            ]
+        }
+    
+    if not isinstance(waypoints, list):
+        return {
+            "status": "failed",
+            "error": f"Waypoints must be a list, got {type(waypoints).__name__}",
+            "hint": "Pass waypoints as: [{'latitude_deg': 33.645, 'longitude_deg': -117.842, 'relative_altitude_m': 10}]"
+        }
     
     drone = connector.drone
     logger.info(f"Uploading mission with {len(waypoints)} waypoints")
     
     try:
-        # Create mission items
+        # Validate and create mission items
         mission_items = []
         for i, wp in enumerate(waypoints):
-            if "latitude_deg" not in wp or "longitude_deg" not in wp or "relative_altitude_m" not in wp:
-                return {"status": "failed", "error": f"Waypoint {i} missing required fields (latitude_deg, longitude_deg, relative_altitude_m)"}
+            # Type check
+            if not isinstance(wp, dict):
+                return {
+                    "status": "failed",
+                    "error": f"Waypoint {i} must be a dictionary, got {type(wp).__name__}",
+                    "hint": "Each waypoint needs: latitude_deg, longitude_deg, relative_altitude_m"
+                }
+            
+            # Required field check
+            required_fields = ["latitude_deg", "longitude_deg", "relative_altitude_m"]
+            missing = [f for f in required_fields if f not in wp]
+            if missing:
+                return {
+                    "status": "failed",
+                    "error": f"Waypoint {i} missing required fields: {', '.join(missing)}",
+                    "received": list(wp.keys()),
+                    "required": required_fields
+                }
+            
+            # Validate coordinates
+            if not (-90 <= wp["latitude_deg"] <= 90):
+                return {"status": "failed", "error": f"Waypoint {i}: invalid latitude {wp['latitude_deg']} (must be -90 to 90)"}
+            if not (-180 <= wp["longitude_deg"] <= 180):
+                return {"status": "failed", "error": f"Waypoint {i}: invalid longitude {wp['longitude_deg']} (must be -180 to 180)"}
+            if wp["relative_altitude_m"] < 0:
+                return {"status": "failed", "error": f"Waypoint {i}: altitude cannot be negative"}
             
             mission_item = MissionItem(
-                wp["latitude_deg"],
-                wp["longitude_deg"],
-                wp["relative_altitude_m"],
-                wp.get("speed_m_s", float('nan')),
+                float(wp["latitude_deg"]),
+                float(wp["longitude_deg"]),
+                float(wp["relative_altitude_m"]),
+                float(wp.get("speed_m_s", float('nan'))),
                 True,  # is_fly_through
                 float('nan'),  # gimbal_pitch_deg
                 float('nan'),  # gimbal_yaw_deg
@@ -1751,11 +1855,19 @@ async def upload_mission(ctx: Context, waypoints: list) -> dict:
             "status": "success",
             "message": f"Mission uploaded with {len(waypoints)} waypoints",
             "waypoint_count": len(waypoints),
-            "note": "Mission uploaded but NOT started. Use initiate_mission or print_mission_progress to start."
+            "waypoints_summary": [
+                f"WP{i}: ({wp['latitude_deg']:.5f}, {wp['longitude_deg']:.5f}) @ {wp['relative_altitude_m']}m"
+                for i, wp in enumerate(waypoints)
+            ],
+            "note": "Mission uploaded but NOT started. Use initiate_mission to start."
         }
     except Exception as e:
         logger.error(f"Mission upload failed: {e}")
-        return {"status": "failed", "error": f"Mission upload failed: {str(e)}"}
+        return {
+            "status": "failed", 
+            "error": f"Mission upload failed: {str(e)}",
+            "troubleshooting": "Ensure waypoints are formatted correctly as list of dictionaries"
+        }
 
 @mcp.tool()
 async def download_mission(ctx: Context) -> dict:

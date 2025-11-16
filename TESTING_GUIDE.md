@@ -193,15 +193,18 @@ Disarm
 
 **Test 7: Mission Upload/Download**
 ```
-Create a simple 3-waypoint square pattern mission:
-- Waypoint 1: lat 33.6459, lon -117.8427, alt 15m
-- Waypoint 2: lat 33.6460, lon -117.8427, alt 15m
-- Waypoint 3: lat 33.6460, lon -117.8428, alt 15m
+I want to upload a 3-waypoint mission. Here are the waypoints in the correct format:
 
-Upload this mission (don't start it)
-Download the mission back
-Show me the downloaded waypoints to verify
+Waypoint 1: {"latitude_deg": 33.6459, "longitude_deg": -117.8427, "relative_altitude_m": 15}
+Waypoint 2: {"latitude_deg": 33.6460, "longitude_deg": -117.8427, "relative_altitude_m": 15}
+Waypoint 3: {"latitude_deg": 33.6460, "longitude_deg": -117.8428, "relative_altitude_m": 15}
+
+Upload this mission using the upload_mission tool (don't start it yet)
+Then download the mission back using download_mission
+Show me the downloaded waypoints to verify they match
 ```
+
+**Note:** Make sure to specify the exact field names (`latitude_deg`, `longitude_deg`, `relative_altitude_m`) as shown above. The v1.2.1 update provides better error messages if the format is wrong.
 
 **Test 8: Mission Control**
 ```
@@ -267,17 +270,45 @@ After running tests, verify:
 - Solution: Use relative coordinates from current position
 - Or: Adjust lat/lon for your test location
 
-**Issue: Orbit not working in SITL**
-- Solution: Some SITL versions don't support orbit
-- Try: Test on real hardware or newer SITL
+**Issue: Orbit not working - "Command not supported by autopilot"**
+- **Root Cause:** Orbit command requires ArduPilot 4.0+ or PX4 1.13+
+- **Workaround:** Server provides waypoint-based circle pattern instructions
+- **Alternative:** Use repeated `go_to_location` + `set_yaw` for manual orbit
+- **Note:** The error message will suggest how many waypoints to use for the requested radius
 
 **Issue: Parameter names not found**
 - Solution: Parameter names vary (ArduPilot vs PX4)
 - Try: List all parameters first to find correct names
+- **Examples:**
+  - ArduPilot: `RTL_ALT`, `BATT_CAPACITY`, `WP_SPEED`
+  - PX4: `RTL_RETURN_ALT`, `BAT_CAPACITY`, `MIS_SPEED`
 
-**Issue: Mission upload fails**
-- Solution: Some autopilots require arming first
-- Try: Arm drone before uploading mission
+**Issue: Mission upload format errors - "Missing required fields"**
+- **Root Cause:** Each waypoint must be a dictionary with exact field names
+- **Correct Format:**
+```python
+waypoints = [
+  {"latitude_deg": 33.6459, "longitude_deg": -117.8427, "relative_altitude_m": 15},
+  {"latitude_deg": 33.6460, "longitude_deg": -117.8427, "relative_altitude_m": 20}
+]
+```
+- **Common Mistakes:**
+  - Using `lat`/`lon` instead of `latitude_deg`/`longitude_deg`
+  - Using `altitude` instead of `relative_altitude_m`
+  - Passing string coordinates instead of numbers
+- **v1.2.1 Improvement:** Error messages now show exactly what was received vs expected
+
+**Issue: Mission download returns empty or fails**
+- **Root Cause:** Some autopilots don't support mission download or require specific firmware
+- **Workaround:** Keep a local copy of uploaded missions
+- **Check:** ArduPilot: works on 4.0+; PX4: works on 1.12+
+
+**Issue: Battery showing 0% throughout flight**
+- **Root Cause:** Battery monitoring not calibrated or not supported by simulator
+- **v1.2.1 Fix:** Server now detects this and provides voltage-based estimates
+- **Look For:** `estimated_percent` field in battery response
+- **Solution:** Set `BATT_CAPACITY` parameter to your battery's mAh rating
+- **Simulator Note:** SITL often doesn't simulate battery drain accurately
 
 ---
 
@@ -328,6 +359,29 @@ Common patterns:
 - Test with low battery
 - Leave drone unattended
 - Ignore safety warnings
+
+---
+
+## 🔧 Firmware Compatibility Matrix
+
+Different autopilots support different features. Here's what's required:
+
+| Feature | ArduPilot | PX4 | Notes |
+|---------|-----------|-----|-------|
+| **Basic Flight** | ✅ All versions | ✅ All versions | Core features work everywhere |
+| **Parameter Management** | ✅ All versions | ✅ All versions | Universal support |
+| **Set Yaw** | ✅ All versions | ✅ All versions | Universal support |
+| **Reposition** | ✅ All versions | ✅ All versions | Universal support |
+| **Orbit Location** | ✅ 4.0+ | ✅ 1.13+ | Older versions: use waypoint workaround |
+| **Upload Mission** | ✅ All versions | ✅ All versions | Format may vary slightly |
+| **Download Mission** | ✅ 4.0+ | ✅ 1.12+ | Older versions may not support |
+| **Set Current Waypoint** | ✅ All versions | ✅ All versions | Universal support |
+| **Battery Monitoring** | ⚠️ Needs calibration | ⚠️ Needs calibration | Set `BATT_CAPACITY` parameter |
+
+**Recommended Minimum Versions:**
+- **ArduPilot Copter:** 4.0.0 or newer (for full v1.2.0 features)
+- **PX4:** 1.13.0 or newer (for full v1.2.0 features)
+- **SITL:** Latest stable (some features may not work in simulation)
 
 ---
 
@@ -384,7 +438,36 @@ Found an issue or have suggestions? Please:
 - [README.md](README.md) - Main documentation
 - [STATUS.md](STATUS.md) - Complete feature list
 - [CHATGPT_SETUP.md](CHATGPT_SETUP.md) - Setup guide
+- [TESTING_FIXES.md](TESTING_FIXES.md) - Detailed fixes from comprehensive testing
 - [examples/](examples/) - Example scripts
+
+---
+
+## 📋 v1.2.1 Testing Improvements
+
+Based on comprehensive real-world testing, v1.2.1 includes:
+
+1. **✅ Better Mission Upload Validation**
+   - Clear error messages showing exactly what's wrong with waypoint format
+   - Type checking for each waypoint
+   - Coordinate validation (lat/lon ranges, altitude >= 0)
+   - Helpful examples in error responses
+
+2. **✅ Orbit Capability Detection**
+   - Automatically detects unsupported orbit commands
+   - Provides waypoint-based circle alternative with calculations
+   - Shows firmware requirements in error message
+
+3. **✅ Battery Monitoring Fallback**
+   - Detects when percentage is uncalibrated (0% with good voltage)
+   - Provides voltage-based estimates using LiPo curves
+   - Suggests setting `BATT_CAPACITY` parameter
+
+4. **✅ Firmware Compatibility Matrix**
+   - Clear documentation of which features need which firmware versions
+   - Workarounds provided for unsupported features
+
+See [TESTING_FIXES.md](TESTING_FIXES.md) for detailed analysis and workarounds.
 
 ---
 
