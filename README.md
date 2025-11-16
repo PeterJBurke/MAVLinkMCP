@@ -80,6 +80,82 @@ sudo systemctl status mavlinkmcp
 
 📖 **[Complete Update Guide →](LIVE_SERVER_UPDATE.md)**
 
+### 📊 Monitoring Your Services
+
+Check the status and logs of your running services:
+
+#### **Quick Status Check**
+
+```bash
+# Check both services at once
+sudo systemctl status mavlinkmcp ngrok
+
+# Check individual services
+sudo systemctl status mavlinkmcp
+sudo systemctl status ngrok
+```
+
+#### **View Live Logs (Real-Time)**
+
+```bash
+# Watch MCP server logs in real-time
+sudo journalctl -u mavlinkmcp -f
+
+# Watch ngrok logs in real-time
+sudo journalctl -u ngrok -f
+
+# Watch both services simultaneously
+sudo journalctl -u mavlinkmcp -u ngrok -f
+```
+
+Press `Ctrl+C` to stop following logs.
+
+#### **View Recent Logs**
+
+```bash
+# Last 50 lines from MCP server
+sudo journalctl -u mavlinkmcp -n 50
+
+# Last 50 lines from ngrok
+sudo journalctl -u ngrok -n 50
+
+# Last hour of logs
+sudo journalctl -u mavlinkmcp --since "1 hour ago"
+
+# Logs from today
+sudo journalctl -u mavlinkmcp --since today
+```
+
+#### **Get Your ngrok URL**
+
+```bash
+# Get the HTTPS URL for ChatGPT
+curl -s http://localhost:4040/api/tunnels | grep -o 'https://[^"]*ngrok[^"]*'
+
+# Or view full ngrok info
+curl -s http://localhost:4040/api/tunnels | python3 -m json.tool
+```
+
+#### **Verify Drone Connection**
+
+```bash
+# Check if drone is connected
+sudo journalctl -u mavlinkmcp -n 100 | grep -E "Connected to drone|GPS LOCK|READY"
+
+# Check current telemetry
+sudo journalctl -u mavlinkmcp -n 20
+```
+
+#### **Health Check All Services**
+
+```bash
+# One-line health check
+systemctl is-active mavlinkmcp ngrok && echo "✅ All services running"
+
+# Detailed check with ports
+sudo netstat -tulpn | grep -E "8080|4040"
+```
+
 ---
 
 ## Prerequisites
