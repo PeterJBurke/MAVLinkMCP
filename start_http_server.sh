@@ -26,9 +26,19 @@ fi
 HOST=${MCP_HOST:-0.0.0.0}
 PORT=${MCP_PORT:-8080}
 
+# Get drone connection details from .env
+MAVLINK_ADDRESS=$(grep -E "^MAVLINK_ADDRESS=" .env | cut -d '=' -f2)
+MAVLINK_PORT=$(grep -E "^MAVLINK_PORT=" .env | cut -d '=' -f2)
+MAVLINK_PROTOCOL=$(grep -E "^MAVLINK_PROTOCOL=" .env | cut -d '=' -f2)
+
 echo "Configuration:"
-echo "  Host: $HOST"
-echo "  Port: $PORT"
+echo "  MCP Server Host: $HOST"
+echo "  MCP Server Port: $PORT"
+echo ""
+echo "Drone Connection:"
+echo "  Address: $MAVLINK_ADDRESS"
+echo "  Port: $MAVLINK_PORT"
+echo "  Protocol: $MAVLINK_PROTOCOL"
 echo ""
 echo "Your MCP server will be accessible at:"
 echo "  http://localhost:$PORT/mcp/sse"
