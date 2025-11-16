@@ -367,9 +367,12 @@ Start agent with auto-configuration:
 - **[Service Setup Guide](SERVICE_SETUP.md)** - Production deployment with systemd
 - **[Server Update Guide](LIVE_SERVER_UPDATE.md)** - Update your running server
 
+### Testing & Examples
+- **[Testing Guide](TESTING_GUIDE.md)** - Comprehensive test scenarios for v1.2.0 features 🆕
+- **[Examples README](examples/README.md)** - Example agent documentation
+
 ### Project Information
 - **[Project Status & Roadmap](STATUS.md)** - Current features and future plans
-- **[Examples README](examples/README.md)** - Example agent documentation
 
 ### External Resources
 - **[MCP Protocol](https://modelcontextprotocol.io/)** - Model Context Protocol docs
