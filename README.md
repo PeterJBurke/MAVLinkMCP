@@ -106,7 +106,10 @@ sudo systemctl status ngrok
 #### **View Live Logs (Real-Time)** 🎨
 
 ```bash
-# Watch MCP server logs in real-time (NOW WITH COLOR CODING!)
+# Watch MCP server logs WITH COLORS (use --output=cat to see colors!)
+sudo journalctl -u mavlinkmcp -f --output=cat
+
+# Watch MCP server logs WITHOUT colors (with systemd prefix)
 sudo journalctl -u mavlinkmcp -f
 
 # Watch ngrok logs in real-time
@@ -115,13 +118,13 @@ sudo journalctl -u ngrok -f
 # Watch both services simultaneously
 sudo journalctl -u mavlinkmcp -u ngrok -f
 
-# Filter specific log types:
-sudo journalctl -u mavlinkmcp -f | grep "📡 MAVLink"   # Only MAVLink commands (cyan)
-sudo journalctl -u mavlinkmcp -f | grep "🔧 MCP TOOL"  # Only tool calls (green)
-sudo journalctl -u mavlinkmcp -f | grep "❌"           # Only errors (red)
+# Filter specific log types (with colors):
+sudo journalctl -u mavlinkmcp -f --output=cat | grep "📡 MAVLink"   # Only MAVLink commands (cyan)
+sudo journalctl -u mavlinkmcp -f --output=cat | grep "🔧 MCP TOOL"  # Only tool calls (green)
+sudo journalctl -u mavlinkmcp -f --output=cat | grep "❌"           # Only errors (red)
 ```
 
-**NEW:** Logs are now color-coded for easy reading! See [LOG_COLORS.md](LOG_COLORS.md) for details.
+**NEW:** Logs are now color-coded for easy reading! Use `--output=cat` to see colors. See [LOG_COLORS.md](LOG_COLORS.md) for details.
 
 Press `Ctrl+C` to stop following logs.
 
