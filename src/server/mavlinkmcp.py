@@ -418,10 +418,10 @@ async def move_to_relative(ctx: Context, north_m: float, east_m: float, down_m: 
         
         logger.info(f"Moving in GUIDED mode:")
         logger.info(f"  Current: {current_lat:.6f}°, {current_lon:.6f}°")
-        logger.info(f"  Altitude: {position.relative_altitude_m:.1f}m (relative)")
+        logger.info(f"  Altitude: {position.relative_altitude_m:.1f}m AGL (relative) / {current_alt:.1f}m MSL")
         logger.info(f"  Offset: north={north_m:.1f}m, east={east_m:.1f}m, down={down_m:.1f}m")
         target_rel_alt = position.relative_altitude_m - down_m
-        logger.info(f"  Target: {target_lat:.6f}°, {target_lon:.6f}°, {target_rel_alt:.1f}m (relative)")
+        logger.info(f"  Target: {target_lat:.6f}°, {target_lon:.6f}°, {target_rel_alt:.1f}m AGL (relative) / {target_alt:.1f}m MSL")
         
         # Use goto_location with calculated target coordinates
         log_mavlink_cmd("drone.action.goto_location", lat=f"{target_lat:.6f}", lon=f"{target_lon:.6f}", alt=f"{target_alt:.1f}", yaw=f"{yaw_deg:.1f}" if not math.isnan(yaw_deg) else "nan")
@@ -844,7 +844,7 @@ async def hold_position(ctx: Context) -> dict:
             float('nan')  # Maintain current heading
         )
         
-        logger.info(f"{LogColors.SUCCESS}✓ Holding position at ({current_lat:.6f}, {current_lon:.6f}) @ {position.relative_altitude_m:.1f}m (relative){LogColors.RESET}")
+        logger.info(f"{LogColors.SUCCESS}✓ Holding position at ({current_lat:.6f}, {current_lon:.6f}) @ {position.relative_altitude_m:.1f}m AGL (relative) / {current_alt:.1f}m MSL{LogColors.RESET}")
         
         return {
             "status": "success",
@@ -1242,7 +1242,7 @@ async def go_to_location(ctx: Context, latitude_deg: float, longitude_deg: float
         home_alt = position.absolute_altitude_m - position.relative_altitude_m
         relative_alt = absolute_altitude_m - home_alt
         
-        logger.info(f"Flying to GPS location: {latitude_deg}, {longitude_deg} at {relative_alt:.1f}m (relative)")
+        logger.info(f"Flying to GPS location: {latitude_deg}, {longitude_deg} at {relative_alt:.1f}m AGL (relative) / {absolute_altitude_m:.1f}m MSL")
         
         log_mavlink_cmd("drone.action.goto_location", lat=f"{latitude_deg:.6f}", lon=f"{longitude_deg:.6f}", alt=f"{absolute_altitude_m:.1f}", yaw=f"{yaw_deg:.1f}" if not math.isnan(yaw_deg) else "nan")
         await drone.action.goto_location(latitude_deg, longitude_deg, absolute_altitude_m, yaw_deg)
@@ -1895,9 +1895,15 @@ async def reposition(
         return {"status": "failed", "error": f"Invalid longitude: {longitude_deg}. Must be between -180 and 180."}
     
     drone = connector.drone
-    logger.info(f"Repositioning to ({latitude_deg}, {longitude_deg}) at {altitude_m}m")
     
     try:
+        # Get current position to calculate relative altitude for display
+        position = await drone.telemetry.position().__anext__()
+        home_alt = position.absolute_altitude_m - position.relative_altitude_m
+        relative_alt = altitude_m - home_alt
+        
+        logger.info(f"Repositioning to ({latitude_deg}, {longitude_deg}) at {relative_alt:.1f}m AGL (relative) / {altitude_m:.1f}m MSL")
+        
         # Move to new location (will loiter automatically in GUIDED mode)
         log_mavlink_cmd("drone.action.goto_location", lat=f"{latitude_deg:.6f}", 
                        lon=f"{longitude_deg:.6f}", alt=f"{altitude_m:.1f}", yaw="nan")
@@ -2093,9 +2099,22 @@ async def download_mission(ctx: Context) -> dict:
     drone = connector.drone
     logger.info("Downloading mission from drone")
     
+    # WORKAROUND: Check mission progress first to force ArduPilot to refresh mission state
+    # This resolves "Mission is stale" errors after upload
+    try:
+        log_mavlink_cmd("drone.mission.get_mission_progress")
+        async for progress in drone.mission.mission_progress():
+            logger.info(f"Mission has {progress.total} waypoints, currently at {progress.current}")
+            break  # Just need one reading to refresh state
+    except Exception as e:
+        logger.warning(f"Could not check mission progress (may be expected): {e}")
+    
+    # Wait a bit for mission state to settle after upload
+    await asyncio.sleep(1.0)
+    
     # Try to download mission with retry logic (ArduPilot needs time to process uploads)
     max_retries = 3
-    retry_delay = 0.5  # seconds
+    retry_delay = 1.0  # seconds (increased from 0.5)
     
     for attempt in range(max_retries):
         try:
