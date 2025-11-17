@@ -958,18 +958,20 @@ async def pause_mission(ctx: Context) -> dict:
         dict: Error message directing to safe alternative.
     """
     logger.error("⛔ pause_mission() called - THIS TOOL IS DEPRECATED AND UNSAFE!")
-    logger.error("⚠️  CRITICAL: pause_mission enters LOITER mode which DOES NOT hold altitude")
-    logger.error("⚠️  This has caused crashes! Use hold_mission_position() instead")
+    logger.error("⚠️  CRITICAL: pause_mission enters LOITER mode which requires RC throttle input")
+    logger.error("⚠️  Without RC throttle at 50%, altitude is unpredictable - this has caused crashes!")
+    logger.error("⚠️  Use hold_mission_position() instead - it stays in GUIDED mode")
     
     return {
         "status": "failed",
         "error": "⛔ pause_mission() is DEPRECATED due to safety issues",
-        "reason": "LOITER mode does NOT hold current altitude - causes descent and potential crashes",
-        "crash_report": "Flight testing showed altitude descent from 25m → 5m → GROUND IMPACT when using pause_mission",
+        "reason": "LOITER mode requires RC throttle input (50% to hold altitude) - not available via MAVLink",
+        "technical_details": "Per ArduPilot docs: 'Altitude can be controlled with the Throttle control stick' - we don't have throttle control via MAVSDK",
+        "crash_report": "Flight testing: unknown throttle position → altitude descent from 25m → GROUND IMPACT",
         "safe_alternative": "Use hold_mission_position() instead",
-        "why_safe": "hold_mission_position() stays in GUIDED mode and maintains altitude",
+        "why_safe": "hold_mission_position() uses GUIDED mode which doesn't require RC input and maintains altitude autonomously",
         "how_to_use": "Call hold_mission_position() to pause, then set_current_waypoint() + resume_mission() to continue",
-        "migration_guide": "See MISSION_PAUSE_FIX.md for details"
+        "migration_guide": "See LOITER_MODE_CRASH_REPORT.md for full details"
     }
 
 @mcp.tool()

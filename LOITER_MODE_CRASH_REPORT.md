@@ -70,24 +70,36 @@ Between 01:41:20 and 01:41:34, the drone descended uncontrollably from 25m to gr
 1. **Drone was at 25m** during mission execution (AUTO mode)
 2. **pause_mission()** sent `drone.mission.pause_mission()` MAVLink command
 3. **ArduPilot switched to LOITER** mode (standard behavior)
-4. **LOITER had target altitude of 0m** (ground level or home altitude)
-5. **Drone descended** to reach target altitude
-6. **Ground impact** at 5m altitude (didn't stop in time)
+4. **RC throttle position was unknown** (no physical RC controller)
+5. **LOITER uses RC throttle for altitude control** - requires 50% (center) to hold altitude
+6. **With unknown throttle, altitude became unpredictable**
+7. **Drone descended** continuously
+8. **Ground impact** at 5m altitude
 
-### Technical Details
+### Technical Details from ArduPilot Documentation
 
-LOITER mode in ArduPilot:
-- Uses `wpnav` (waypoint navigation) controller
-- Target altitude is NOT automatically set to current altitude
-- Target altitude may be:
-  - Home altitude (0m relative)
-  - Last commanded altitude from a previous waypoint
-  - Ground level if no altitude was set
+From [ArduPilot LOITER Mode Documentation](https://ardupilot.org/copter/docs/loiter-mode.html#loiter-mode):
+
+> "Altitude can be controlled with the Throttle control stick just as in AltHold mode"
+
+**This means:**
+- ✅ LOITER *can* hold altitude IF RC throttle is at 50% (center)
+- ⚠️ LOITER will climb if throttle > 50%
+- ⚠️ LOITER will descend if throttle < 50%
+- 🔴 When using MAVLink (not RC), throttle position is **unknown/unpredictable**
+
+**Why This Caused the Crash:**
 
 When `pause_mission()` is called:
-- Mission pauses (correct)
-- Flight mode changes to LOITER (dangerous)
-- Drone descends to LOITER's target altitude (CRASH!)
+1. Mission pauses (correct)
+2. Flight mode changes to LOITER (enters RC-controlled altitude mode)
+3. **No physical RC controller** - throttle position is virtual/unknown
+4. Without throttle at 50%, altitude control is unpredictable
+5. In this case, throttle was below 50% → continuous descent → CRASH!
+
+**The Fundamental Problem:**
+
+LOITER mode is designed for **manual RC piloting**, not autonomous MAVLink control. It requires constant RC throttle input to maintain altitude, which doesn't exist when commanding via MAVSDK/MAVLink.
 
 ---
 
@@ -336,20 +348,15 @@ The LLM will now use `hold_mission_position()` which is safe.
 
 ### Q: Why didn't LOITER hold altitude?
 
-**A:** LOITER in ArduPilot doesn't hold *current* altitude - it holds a *target* altitude that may have been set much earlier (often ground level). This is by design but counterintuitive.
+**A:** LOITER mode requires **RC throttle input to maintain altitude** (50% = hold, >50% = climb, <50% = descend). When using MAVLink/MAVSDK without a physical RC controller, the throttle position is unknown/unpredictable, so altitude control fails. Per [ArduPilot documentation](https://ardupilot.org/copter/docs/loiter-mode.html#loiter-mode), "Altitude can be controlled with the Throttle control stick" - but we don't have throttle stick control when commanding via MAVLink.
 
 ### Q: Is LOITER mode always unsafe?
 
-**A:** LOITER is safe IF you explicitly set the target altitude before entering it. But `pause_mission()` doesn't do this - it just switches modes.
+**A:** LOITER is unsafe for MAVLink/autonomous control because it requires RC throttle input. LOITER is designed for manual RC piloting where the pilot actively maintains altitude with the throttle stick. For MAVLink control (no physical RC), always use GUIDED mode instead.
 
 ### Q: Can we fix `pause_mission()` instead of removing it?
 
-**A:** Technically yes, but:
-1. We'd need to get current altitude
-2. Send a separate command to set LOITER target altitude
-3. Then pause the mission
-
-It's easier and safer to just use GUIDED mode with `hold_mission_position()`.
+**A:** No, because LOITER mode fundamentally requires RC throttle input to control altitude. Since we're using MAVLink (not RC), we can't provide the throttle stick position that LOITER needs. The only solution is to use GUIDED mode which doesn't require RC input - that's exactly what `hold_mission_position()` does.
 
 ### Q: Will this happen on a real drone?
 
