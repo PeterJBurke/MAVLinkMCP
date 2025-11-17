@@ -75,6 +75,17 @@ if __name__ == "__main__":
     init_thread = threading.Thread(target=trigger_initialization, daemon=True)
     init_thread.start()
     
+    # Suppress noisy HTTP/framework logs (must be set right before server start)
+    import logging
+    logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+    logging.getLogger("mcp.server").setLevel(logging.WARNING)
+    
+    # Check for verbose mode
+    if os.getenv("MAVLINK_VERBOSE", "0") == "1":
+        logger.info("🔍 VERBOSE MODE: Showing all HTTP and framework logs")
+        logging.getLogger("uvicorn.access").setLevel(logging.INFO)
+        logging.getLogger("mcp.server").setLevel(logging.INFO)
+    
     # Run server with SSE transport using default mount path
     mcp.run(transport='sse')
 

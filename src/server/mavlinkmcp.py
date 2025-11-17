@@ -34,21 +34,8 @@ logger.addHandler(console_handler)
 # Prevent propagation to avoid duplicate logs from parent loggers
 logger.propagate = False
 
-# Suppress noisy HTTP access logs (not useful for drone operations)
-# Set to WARNING to only show errors, not every GET/POST request
-uvicorn_access_logger = logging.getLogger("uvicorn.access")
-uvicorn_access_logger.setLevel(logging.WARNING)  # Suppress INFO-level HTTP logs
-
-# Also suppress FastMCP's "Processing request" logs (server.py)
-# These are internal framework logs that clutter the output
-fastmcp_logger = logging.getLogger("mcp.server")
-fastmcp_logger.setLevel(logging.WARNING)  # Only show warnings/errors
-
-# If you need to see HTTP logs for debugging, set MAVLINK_VERBOSE=1 in .env
-if os.getenv("MAVLINK_VERBOSE", "0") == "1":
-    uvicorn_access_logger.setLevel(logging.INFO)
-    fastmcp_logger.setLevel(logging.INFO)
-    logger.info("🔍 VERBOSE MODE: Showing all HTTP and framework logs")
+# Note: HTTP/framework log suppression is done in mavlinkmcp_http.py
+# (must be set right before server start to prevent uvicorn from overriding)
 
 # Ensure output is unbuffered for systemd journalctl
 import sys
