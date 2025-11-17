@@ -34,6 +34,26 @@ logger.addHandler(console_handler)
 # Prevent propagation to avoid duplicate logs from parent loggers
 logger.propagate = False
 
+# Custom logging filter to colorize HTTP requests
+class HTTPColorFilter(logging.Filter):
+    """Add color to HTTP request logs (GET/POST)"""
+    def filter(self, record):
+        # Color the entire message in magenta for HTTP requests
+        if hasattr(record, 'msg'):
+            # Will be imported later when LogColors is defined
+            record.msg = f"\033[35m🌐 HTTP → {record.msg}\033[0m"
+        return True
+
+# Configure Uvicorn/HTTP logger for colored output
+uvicorn_logger = logging.getLogger("uvicorn.access")
+uvicorn_logger.handlers.clear()
+uvicorn_handler = logging.StreamHandler()
+uvicorn_formatter = logging.Formatter('%(asctime)s | %(levelname)-7s | %(message)s', datefmt='%H:%M:%S')
+uvicorn_handler.setFormatter(uvicorn_formatter)
+uvicorn_handler.addFilter(HTTPColorFilter())
+uvicorn_logger.addHandler(uvicorn_handler)
+uvicorn_logger.propagate = False
+
 # Ensure output is unbuffered for systemd journalctl
 import sys
 sys.stdout.reconfigure(line_buffering=True) if hasattr(sys.stdout, 'reconfigure') else None
@@ -63,6 +83,7 @@ class LogColors:
     MAVLINK = '\033[36m'  # Dark cyan for MAVLink commands
     TOOL = '\033[32m'     # Dark green for MCP tool calls
     ERROR = '\033[31m'    # Dark red for errors
+    HTTP = '\033[35m'     # Dark magenta for HTTP requests (GET/POST)
 
 class FlightLogger:
     """Logs flight operations to a timestamped file"""
@@ -313,6 +334,7 @@ async def get_position(ctx: Context) -> dict:
     Returns:
         dict: A dict with the position or error status.
     """
+    log_tool_call("get_position")
     connector = ctx.request_context.lifespan_context
     
     # Wait for connection
@@ -354,6 +376,7 @@ async def move_to_relative(ctx: Context, north_m: float, east_m: float, down_m: 
     Returns:
         dict: Status message with success or error.
     """
+    log_tool_call("move_to_relative", north_m=north_m, east_m=east_m, down_m=down_m, yaw_deg=yaw_deg)
     connector = ctx.request_context.lifespan_context
     
     # Wait for connection
@@ -586,6 +609,7 @@ async def initiate_mission(ctx: Context, mission_points: list, return_to_launch:
     Returns:
         dict: Status message with success or error.
     """
+    log_tool_call("initiate_mission", waypoint_count=len(mission_points), return_to_launch=return_to_launch)
     connector = ctx.request_context.lifespan_context
     
     # Wait for connection
@@ -686,6 +710,7 @@ async def disarm_drone(ctx: Context) -> dict:
     Returns:
         dict: Status message with success or error.
     """
+    log_tool_call("disarm_drone")
     connector = ctx.request_context.lifespan_context
     
     # Wait for connection
@@ -717,6 +742,7 @@ async def return_to_launch(ctx: Context) -> dict:
     Returns:
         dict: Status message with success or error.
     """
+    log_tool_call("return_to_launch")
     connector = ctx.request_context.lifespan_context
     
     # Wait for connection
@@ -843,6 +869,7 @@ async def get_battery(ctx: Context) -> dict:
     Returns:
         dict: Battery voltage (V), remaining percentage (%), and status.
     """
+    log_tool_call("get_battery")
     connector = ctx.request_context.lifespan_context
     
     # Wait for connection
@@ -915,6 +942,7 @@ async def get_health(ctx: Context) -> dict:
     Returns:
         dict: Comprehensive health status of all drone subsystems.
     """
+    log_tool_call("get_health")
     connector = ctx.request_context.lifespan_context
     
     # Wait for connection
@@ -1188,6 +1216,7 @@ async def go_to_location(ctx: Context, latitude_deg: float, longitude_deg: float
     Returns:
         dict: Status message with success or error.
     """
+    log_tool_call("go_to_location", latitude_deg=latitude_deg, longitude_deg=longitude_deg, absolute_altitude_m=absolute_altitude_m)
     connector = ctx.request_context.lifespan_context
     
     # Wait for connection
@@ -1884,6 +1913,7 @@ async def set_yaw(ctx: Context, yaw_deg: float, yaw_rate_deg_s: float = 30.0) ->
         - 0° = North, 90° = East, 180° = South, 270° = West
         - Drone will rotate in place to face the specified direction
     """
+    log_tool_call("set_yaw", yaw_deg=yaw_deg, yaw_rate_deg_s=yaw_rate_deg_s)
     connector = ctx.request_context.lifespan_context
     
     # Wait for connection
