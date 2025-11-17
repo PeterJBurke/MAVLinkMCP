@@ -12,13 +12,13 @@ During flight testing, `pause_mission()` caused a **drone crash** by descending 
 
 ---
 
-## ✅ Current Status (v1.2.3 - SAFETY FIX)
+## ✅ Current Status (v1.2.4 - Logging & Cleanup)
 
-### Production Ready with Critical Safety Fix
-The MAVLink MCP Server is **production-ready** with complete flight operations, safety features, parameter management, advanced navigation, and mission enhancements. **v1.2.3 fixes a critical crash issue.**
+### Production Ready with Enhanced Logging
+The MAVLink MCP Server is **production-ready** with complete flight operations, safety features, parameter management, and advanced navigation. **v1.2.4 adds JSON logging and improves code clarity.**
 
 **Last Updated:** November 17, 2025  
-**Version:** 1.2.3 (with critical safety fix)  
+**Version:** 1.2.4 (with JSON logging & cleanup)  
 **Total Tools:** 35 MCP tools (1 deprecated for safety)  
 **Tested With:** ArduPilot, ChatGPT Developer Mode
 
@@ -263,6 +263,23 @@ The MAVLink MCP Server is **production-ready** with complete flight operations, 
 ---
 
 ## 🔧 Recent Changes
+
+### November 17, 2025 - v1.2.4: 🎨 Logging & Code Cleanup ✅
+**Improved:** JSON logging, transparency, and code quality
+- **JSON I/O Logging:** All tool calls now log input/output as formatted JSON for easy debugging
+- **Transparency:** `set_yaw` now clearly explains why it uses lat/lon coordinates (MAVSDK workaround)
+- **Better Colors:** Darker, more readable colors in terminal logs
+- **Code Cleanup:** Removed orbit functionality (unreliable with ArduPilot)
+- **Mission Prep:** Switched to `mission_raw` API for future ArduPilot mission support
+- **Tool Count:** 36 → 35 (orbit removed, missions moved to future development)
+
+**Benefits:**
+- Easier debugging with JSON input/output visibility
+- Clearer logs with better color contrast and AGL/MSL altitude labels
+- More focused feature set (removed confusing orbit feature)
+- Foundation for reliable mission support in future release
+
+---
 
 ### November 17, 2025 - v1.2.3: 🔴 CRITICAL SAFETY FIX 🔴
 **DEPRECATED `pause_mission()` - Causes drone crashes!**
