@@ -156,6 +156,7 @@ class MAVLinkConnector:
 _global_connector: MAVLinkConnector | None = None
 _connection_task: asyncio.Task | None = None
 _connection_lock = asyncio.Lock()
+_lifespan_initialized = False  # Track if lifespan has run (to reduce log noise)
 
 async def ensure_connection(connector: MAVLinkConnector, timeout: float = 30.0) -> bool:
     """
@@ -260,26 +261,39 @@ async def get_or_create_global_connector() -> MAVLinkConnector:
 
 @asynccontextmanager
 async def app_lifespan(server: FastMCP) -> AsyncIterator[MAVLinkConnector]:
-    """Manage application lifecycle - returns global persistent connector"""
-    logger.info("=" * 60)
-    logger.info("🚀 LIFESPAN: Starting application lifespan...")
-    logger.info("=" * 60)
+    """Manage application lifecycle - returns global persistent connector
+    
+    Note: In HTTP/SSE mode, FastMCP calls this for EVERY request, not just once.
+    We use _lifespan_initialized flag to suppress noisy logs after first call.
+    """
+    global _lifespan_initialized
+    
+    # Only log on first initialization to avoid spam
+    if not _lifespan_initialized:
+        logger.info("=" * 60)
+        logger.info("🚀 LIFESPAN: Starting application lifespan...")
+        logger.info("=" * 60)
     
     try:
         # Get or create the global connector (only happens once)
-        logger.info("LIFESPAN: Calling get_or_create_global_connector()...")
+        if not _lifespan_initialized:
+            logger.info("LIFESPAN: Calling get_or_create_global_connector()...")
+        
         connector = await get_or_create_global_connector()
-        logger.info("LIFESPAN: Connector created successfully!")
+        
+        if not _lifespan_initialized:
+            logger.info("LIFESPAN: Connector created successfully!")
+            _lifespan_initialized = True
         
         # Just yield the global connector - no teardown per request!
         yield connector
     except Exception as e:
-        logger.error("❌ LIFESPAN ERROR: %s", str(e), exc_info=True)
+        logger.error(f"{LogColors.ERROR}❌ LIFESPAN ERROR: {e}{LogColors.RESET}", exc_info=True)
         raise
     
     # Note: cleanup only happens on server shutdown (not per request)
     # In HTTP mode, this might not be called at all until process termination
-    logger.info("LIFESPAN: Shutting down...")
+    # Only log if this is actually a shutdown (not just end of request)
 
 # Pass lifespan to server
 mcp = FastMCP("MAVLink MCP", lifespan=app_lifespan)
