@@ -75,16 +75,29 @@ if __name__ == "__main__":
     init_thread = threading.Thread(target=trigger_initialization, daemon=True)
     init_thread.start()
     
-    # Suppress noisy HTTP/framework logs (must be set right before server start)
+    # Suppress noisy HTTP/framework logs using a filter (most reliable method)
     import logging
-    logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
-    logging.getLogger("mcp.server").setLevel(logging.WARNING)
     
-    # Check for verbose mode
-    if os.getenv("MAVLINK_VERBOSE", "0") == "1":
+    # Check for verbose mode first
+    verbose_mode = os.getenv("MAVLINK_VERBOSE", "0") == "1"
+    
+    if not verbose_mode:
+        # Create a filter that drops all uvicorn access logs
+        class SuppressUvicornFilter(logging.Filter):
+            def filter(self, record):
+                return False  # Drop all records
+        
+        # Add filter to uvicorn.access logger (this survives uvicorn reconfiguration)
+        uvicorn_access = logging.getLogger("uvicorn.access")
+        uvicorn_access.addFilter(SuppressUvicornFilter())
+        
+        # Also suppress FastMCP's "Processing request" logs
+        mcp_server = logging.getLogger("mcp.server")
+        mcp_server.setLevel(logging.WARNING)
+        
+        logger.info("🔇 HTTP access logs suppressed (set MAVLINK_VERBOSE=1 to re-enable)")
+    else:
         logger.info("🔍 VERBOSE MODE: Showing all HTTP and framework logs")
-        logging.getLogger("uvicorn.access").setLevel(logging.INFO)
-        logging.getLogger("mcp.server").setLevel(logging.INFO)
     
     # Run server with SSE transport using default mount path
     mcp.run(transport='sse')
