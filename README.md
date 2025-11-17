@@ -403,7 +403,12 @@ Start agent with auto-configuration:
 - **[Server Update Guide](LIVE_SERVER_UPDATE.md)** - Update your running server
 
 ### Testing & Examples
-- **[Testing Guide](TESTING_GUIDE.md)** - Comprehensive test scenarios for v1.2.0 features 🆕
+- **[Testing Guide](TESTING_GUIDE.md)** - Main testing overview with 5 focused test suites:
+  - [Quick Test (5 min)](TESTING_QUICK.md) - Fast setup verification
+  - [Comprehensive Test (20 min)](TESTING_COMPREHENSIVE.md) - Full system validation
+  - [Granular Test (45 min)](TESTING_GRANULAR.md) - Deep verification with ACK/NACK logic
+  - [Individual Tests](TESTING_INDIVIDUAL.md) - Feature-specific debugging tests
+  - [Testing Reference](TESTING_REFERENCE.md) - Troubleshooting & firmware compatibility
 - **[Examples README](examples/README.md)** - Example agent documentation
 
 ### Project Information
