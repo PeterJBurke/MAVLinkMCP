@@ -17,13 +17,29 @@ from pathlib import Path
 env_path = Path(__file__).parent.parent.parent / '.env'
 load_dotenv(dotenv_path=env_path)
 
-# Configure logger
+# Configure logger with enhanced format
 logger = logging.getLogger("MAVLinkMCP")
 logger.setLevel(logging.INFO)
 handler = logging.StreamHandler()
 formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 handler.setFormatter(formatter)
 logger.addHandler(handler)
+
+def log_tool_call(tool_name: str, **kwargs):
+    """Log MCP tool call with parameters"""
+    if kwargs:
+        params_str = ", ".join([f"{k}={v}" for k, v in kwargs.items() if v is not None])
+        logger.info(f"🔧 MCP TOOL: {tool_name}({params_str})")
+    else:
+        logger.info(f"🔧 MCP TOOL: {tool_name}()")
+
+def log_mavlink_cmd(command: str, **kwargs):
+    """Log MAVLink command being sent to drone"""
+    if kwargs:
+        params_str = ", ".join([f"{k}={v}" for k, v in kwargs.items() if v is not None])
+        logger.info(f"📡 MAVLink → {command}({params_str})")
+    else:
+        logger.info(f"📡 MAVLink → {command}()")
 
 @dataclass
 class MAVLinkConnector:
@@ -185,6 +201,7 @@ async def initialize_drone_connection():
 @mcp.tool()
 async def arm_drone(ctx: Context) -> dict:
     """Arm the drone. Waits for drone connection if not yet ready."""
+    log_tool_call("arm_drone")
     connector = ctx.request_context.lifespan_context
     
     # Wait for connection
@@ -192,7 +209,7 @@ async def arm_drone(ctx: Context) -> dict:
         return {"status": "failed", "error": "Drone connection timeout. Please wait and try again."}
     
     drone = connector.drone
-    logger.info("Arming")
+    log_mavlink_cmd("drone.action.arm")
     await drone.action.arm()
     return {"status": "success", "message": "Drone armed"}
 
@@ -327,6 +344,7 @@ async def takeoff(ctx: Context, takeoff_altitude: float = 3.0) -> dict:
     Returns:
         dict: Status message with success or error.
     """
+    log_tool_call("takeoff", takeoff_altitude=takeoff_altitude)
     connector = ctx.request_context.lifespan_context
     
     # Wait for connection
@@ -334,8 +352,9 @@ async def takeoff(ctx: Context, takeoff_altitude: float = 3.0) -> dict:
         return {"status": "failed", "error": "Drone connection timeout. Please wait and try again."}
     
     drone = connector.drone
-    logger.info("Initiating takeoff")
+    log_mavlink_cmd("drone.action.set_takeoff_altitude", altitude=takeoff_altitude)
     await drone.action.set_takeoff_altitude(takeoff_altitude)
+    log_mavlink_cmd("drone.action.takeoff")
     await drone.action.takeoff()
     return {"status": "success", "message": f"Takeoff initiated to {takeoff_altitude}m"}
 
@@ -349,6 +368,7 @@ async def land(ctx: Context) -> dict:
     Returns:
         dict: Status message with success or error.
     """
+    log_tool_call("land")
     connector = ctx.request_context.lifespan_context
     
     # Wait for connection
@@ -356,7 +376,7 @@ async def land(ctx: Context) -> dict:
         return {"status": "failed", "error": "Drone connection timeout. Please wait and try again."}
     
     drone = connector.drone
-    logger.info("Initiating landing")
+    log_mavlink_cmd("drone.action.land")
     await drone.action.land()
     return {"status": "success", "message": "Landing initiated"}
 
