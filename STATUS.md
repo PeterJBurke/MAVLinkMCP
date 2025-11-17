@@ -5,8 +5,8 @@
 ### Production Ready with Advanced Features
 The MAVLink MCP Server is **production-ready** with complete flight operations, safety features, parameter management, advanced navigation, and mission enhancements.
 
-**Last Updated:** November 16, 2025  
-**Version:** 1.2.0 (near complete)  
+**Last Updated:** November 17, 2025  
+**Version:** 1.2.1+ (with hold_position fix)  
 **Total Tools:** 35 MCP tools (+10 from v1.1.0)  
 **Tested With:** ArduPilot, ChatGPT Developer Mode
 
@@ -19,7 +19,7 @@ The MAVLink MCP Server is **production-ready** with complete flight operations, 
 - ✅ `disarm_drone` - Disarm motors safely
 - ✅ `takeoff` - Autonomous takeoff to specified altitude
 - ✅ `land` - Land at current position
-- ✅ `hold_position` - Hover/loiter in place
+- ✅ `hold_position` - Hold position in GUIDED mode (prevents altitude drift)
 
 ### Emergency & Safety (3 tools)
 - ✅ `return_to_launch` - Emergency return home (RTL)
@@ -252,6 +252,20 @@ The MAVLink MCP Server is **production-ready** with complete flight operations, 
 ---
 
 ## 🔧 Recent Changes
+
+### November 17, 2025 - Fixed `hold_position` Altitude Descent ✅
+**Fixed:** `hold_position` now stays in GUIDED mode instead of switching to LOITER
+- **Problem:** Drone was descending when `hold_position` was called due to mode switch
+- **Root Cause:** `drone.action.hold()` switched from GUIDED → LOITER, causing altitude reference mismatch
+- **Solution:** Now uses `goto_location(current_position)` to hold without mode change
+- **Result:** Stable altitude maintenance, no unexpected descents during complex flight sequences
+
+### November 16, 2025 - v1.2.1 Patch: Error Handling & Compatibility ✅
+**Improved:** Based on comprehensive testing (67% success rate → better error messages)
+- Enhanced mission upload validation with clear format error messages
+- Orbit capability detection with firmware requirements and workarounds
+- Battery monitoring fallback for uncalibrated systems (voltage-based estimates)
+- Firmware compatibility matrix added to documentation
 
 ### November 16, 2025 - v1.2.0 Development: Advanced Navigation & Mission Enhancements ✅
 **Added:** 7 new tools for advanced flight control
