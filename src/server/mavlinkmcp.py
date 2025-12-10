@@ -734,6 +734,109 @@ async def get_flight_mode(ctx: Context) -> dict:
         logger.error(f"{LogColors.ERROR}❌ TOOL ERROR - Failed to retrieve flight mode{LogColors.RESET}")
         return {"status": "failed", "error": "Failed to retrieve flight mode"}
 
+@mcp.tool()
+async def set_flight_mode(ctx: Context, mode: str) -> dict:
+    """
+    Set the flight mode of the drone.
+    
+    Available modes:
+    - HOLD: Hold current position (requires GPS)
+    - RTL: Return to launch/home position
+    - LAND: Land at current position
+    - GUIDED: Manual waypoint control (used by go_to_location)
+    
+    Note: Some modes like AUTO require an active mission.
+    For GUIDED mode navigation, use go_to_location instead.
+
+    Args:
+        ctx (Context): The context of the request.
+        mode (str): The flight mode to set (HOLD, RTL, LAND, GUIDED).
+
+    Returns:
+        dict: Status message with the new flight mode or error.
+    """
+    log_tool_call("set_flight_mode", mode=mode)
+    connector = ctx.request_context.lifespan_context
+    
+    # Wait for connection
+    if not await ensure_connection(connector):
+        return {"status": "failed", "error": "Drone connection timeout. Please wait and try again."}
+    
+    drone = connector.drone
+    mode_upper = mode.upper().strip()
+    
+    # Map mode names to MAVSDK actions
+    supported_modes = {
+        "HOLD": "hold",
+        "LOITER": "hold",  # LOITER maps to hold action
+        "RTL": "return_to_launch",
+        "RETURN_TO_LAUNCH": "return_to_launch",
+        "LAND": "land",
+        "GUIDED": "guided",
+    }
+    
+    if mode_upper not in supported_modes:
+        return {
+            "status": "failed", 
+            "error": f"Unsupported mode: {mode}. Supported modes: HOLD, RTL, LAND, GUIDED",
+            "hint": "For AUTO mode, use initiate_mission or resume_mission instead."
+        }
+    
+    try:
+        action_name = supported_modes[mode_upper]
+        
+        if action_name == "hold":
+            log_mavlink_cmd("drone.action.hold")
+            await drone.action.hold()
+            result_mode = "HOLD/LOITER"
+            
+        elif action_name == "return_to_launch":
+            log_mavlink_cmd("drone.action.return_to_launch")
+            await drone.action.return_to_launch()
+            result_mode = "RTL"
+            
+        elif action_name == "land":
+            log_mavlink_cmd("drone.action.land")
+            await drone.action.land()
+            result_mode = "LAND"
+            
+        elif action_name == "guided":
+            # For GUIDED, we need to send a position command to enter GUIDED mode
+            # Get current position and command drone to hold there
+            position = await drone.telemetry.position().__anext__()
+            log_mavlink_cmd("drone.action.goto_location (GUIDED mode)", 
+                          lat=f"{position.latitude_deg:.6f}", 
+                          lon=f"{position.longitude_deg:.6f}",
+                          alt=f"{position.absolute_altitude_m:.1f}")
+            await drone.action.goto_location(
+                position.latitude_deg,
+                position.longitude_deg,
+                position.absolute_altitude_m,
+                float('nan')  # Maintain current yaw
+            )
+            result_mode = "GUIDED"
+        
+        # Verify mode changed
+        await asyncio.sleep(0.5)
+        try:
+            new_mode = await drone.telemetry.flight_mode().__anext__()
+            actual_mode = str(new_mode)
+        except:
+            actual_mode = "UNKNOWN"
+        
+        logger.info(f"{LogColors.SUCCESS}✅ Flight mode set to {result_mode} (actual: {actual_mode}){LogColors.RESET}")
+        
+        return {
+            "status": "success",
+            "message": f"Flight mode changed to {result_mode}",
+            "requested_mode": mode_upper,
+            "actual_mode": actual_mode
+        }
+        
+    except Exception as e:
+        logger.error(f"{LogColors.ERROR}❌ TOOL ERROR - Failed to set flight mode: {e}{LogColors.RESET}")
+        return {"status": "failed", "error": f"Failed to set flight mode: {str(e)}"}
+
 # ============================================================================
 # PRIORITY 1: CRITICAL SAFETY TOOLS (v1.1.0)
 # ============================================================================
