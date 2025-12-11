@@ -178,6 +178,8 @@ class MAVLinkConnector:
     connection_ready: asyncio.Event = field(default_factory=asyncio.Event)
     # Track pending navigation destination for landing gate safety
     pending_destination: dict | None = field(default=None)
+    # Track if landing has been initiated (to properly monitor landing progress)
+    landing_in_progress: bool = field(default=False)
 
 # Global connector instance - persists across all HTTP requests
 _global_connector: MAVLinkConnector | None = None
@@ -649,11 +651,17 @@ async def land(ctx: Context, force: bool = False) -> dict:
     
     # Clear any pending destination since we're landing
     connector.pending_destination = None
+    # Set landing flag so monitor_flight knows we're descending
+    connector.landing_in_progress = True
     
     log_mavlink_cmd("drone.action.land")
     await drone.action.land()
     
-    result = {"status": "success", "message": "Landing initiated"}
+    result = {
+        "status": "success", 
+        "message": "Landing initiated",
+        "next_step": "Call monitor_flight() until mission_complete is true"
+    }
     log_tool_output(result)
     return result
 
@@ -1714,8 +1722,9 @@ async def monitor_flight(ctx: Context, wait_seconds: float = 5.0, arrival_thresh
             logger.info(f"{LogColors.SUCCESS}✅ MISSION COMPLETE - Drone has landed!{LogColors.RESET}")
             get_flight_logger().log_entry("LANDED", "Mission complete")
             
-            # Clear any pending destination
+            # Clear all tracking state
             connector.pending_destination = None
+            connector.landing_in_progress = False
             
             result = {
                 "DISPLAY_TO_USER": "✅ MISSION COMPLETE - Drone has landed safely!",
@@ -1743,7 +1752,22 @@ async def monitor_flight(ctx: Context, wait_seconds: float = 5.0, arrival_thresh
         
         # Check if there's a pending destination (still navigating)
         if not connector.pending_destination:
-            # No destination - drone is just hovering
+            # Check if we initiated landing (auto_land or manual land call)
+            if connector.landing_in_progress:
+                logger.info(f"🛬 Landing in progress (flag set)... altitude: {current_alt:.1f}m")
+                result = {
+                    "DISPLAY_TO_USER": f"🛬 LANDING | Alt: {current_alt:.1f}m | Descending...",
+                    "status": "landing",
+                    "altitude_m": round(current_alt, 1),
+                    "WARNING": "DRONE STILL DESCENDING - DO NOT STOP",
+                    "action_required": "PRINT DISPLAY_TO_USER, then CALL monitor_flight() AGAIN",
+                    "must_call_next": "monitor_flight()",
+                    "mission_complete": False
+                }
+                log_tool_output(result)
+                return result
+            
+            # No destination and not landing - drone is just hovering
             result = {
                 "DISPLAY_TO_USER": f"🚁 HOVERING | Alt: {current_alt:.1f}m | No destination set",
                 "status": "hovering",
@@ -1814,6 +1838,7 @@ async def monitor_flight(ctx: Context, wait_seconds: float = 5.0, arrival_thresh
                     # Automatically initiate landing
                     logger.info(f"{LogColors.CMD}🛬 Auto-landing initiated{LogColors.RESET}")
                     get_flight_logger().log_entry("AUTO_LAND", "Landing initiated automatically")
+                    connector.landing_in_progress = True  # Track that we're landing
                     await drone.action.land()
                     
                     result = {
