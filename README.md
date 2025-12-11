@@ -458,13 +458,13 @@ Start agent with auto-configuration:
 
 ## Available Tools
 
-The MCP server exposes **40 tools** for complete drone control:
+The MCP server exposes **41 tools** for complete drone control:
 
 | Category | Count | Key Tools |
 |----------|-------|-----------|
 | **Flight Control** | 5 | `arm_drone`, `disarm_drone`, `takeoff`, `land`, `hold_position` |
 | **Emergency & Safety** | 3 | `return_to_launch`, `kill_motors`, `get_battery` |
-| **Navigation** | 7 | `get_position`, `go_to_location`, `set_yaw` 🆕, `reposition` 🆕, `move_to_relative` |
+| **Navigation** | 8 | `get_position`, `go_to_location`, `monitor_flight` 🆕, `set_yaw`, `reposition`, `move_to_relative` |
 | **Mission Management** | 10 | `initiate_mission`, `upload_mission` 🆕, `pause_mission`, `hold_mission_position` 🆕, `resume_mission` |
 | **Telemetry** | 12 | `get_health`, `get_health_all_ok` 🆕, `get_landed_state` 🆕, `get_heading` 🆕, `get_rc_status` 🆕, `get_odometry` 🆕 |
 | **Parameter Management** | 3 | `get_parameter`, `set_parameter`, `list_parameters` |
@@ -472,6 +472,7 @@ The MCP server exposes **40 tools** for complete drone control:
 **See [STATUS.md](STATUS.md) for complete tool list and descriptions.**
 
 ### Recent Updates
+- ✅ **Dec 10, 2025**: v1.3.1 - Added `monitor_flight` for chunked progress updates + **Landing Gate** safety (blocks landing if not at destination)
 - ✅ **Dec 10, 2025**: v1.3.0 - Added 5 enhanced telemetry tools: `get_health_all_ok`, `get_landed_state`, `get_rc_status`, `get_heading`, `get_odometry`
 - 🔴 **Nov 17, 2025**: v1.2.3 - **CRITICAL SAFETY FIX** - Deprecated `pause_mission()` due to crash risk (LOITER mode descent). Use `hold_mission_position()` instead.
 - ✅ **Nov 17, 2025**: v1.2.2 - Added `hold_mission_position` tool and enhanced mission diagnostics (pause without LOITER mode, better progress tracking)

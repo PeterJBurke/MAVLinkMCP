@@ -3,8 +3,8 @@
 Complete reference showing which MCP tools are direct equivalents to MAVSDK methods and which are custom implementations.
 
 **Last Updated:** December 2024  
-**MAVLink MCP Version:** 1.3.0  
-**Total Tools:** 40
+**MAVLink MCP Version:** 1.3.1  
+**Total Tools:** 41
 
 ---
 
@@ -13,12 +13,12 @@ Complete reference showing which MCP tools are direct equivalents to MAVSDK meth
 | Category | Direct MAVSDK Equivalent | Custom Implementation |
 |----------|:------------------------:|:---------------------:|
 | **Flight Control** | 3 | 2 |
-| **Navigation** | 2 | 5 |
+| **Navigation** | 2 | 6 |
 | **Mission Management** | 5 | 5 |
 | **Telemetry** | 14 | 0 |
 | **Parameter Management** | 3 | 0 |
 | **Safety** | 1 | 1 |
-| **TOTAL** | **28** | **13** |
+| **TOTAL** | **28** | **14** |
 
 ---
 
@@ -39,7 +39,8 @@ Complete reference showing which MCP tools are direct equivalents to MAVSDK meth
 | **Navigation** |
 | `get_position` | ✅ Yes | `drone.telemetry.position()` |
 | `move_to_relative` | ❌ No | Calculates GPS coordinates from NED offsets, then calls `goto_location()` |
-| `go_to_location` | ⚠️ Partial | `drone.action.goto_location()` with coordinate validation and altitude conversion |
+| `go_to_location` | ⚠️ Partial | `drone.action.goto_location()` with destination tracking for landing gate |
+| `monitor_flight` | ❌ No | Custom chunked progress monitoring (30s updates, uses telemetry.position) |
 | `get_home_position` | ✅ Yes | `drone.telemetry.home()` |
 | `set_max_speed` | ✅ Yes | `drone.action.set_maximum_speed()` |
 | `set_yaw` | ❌ No | Uses `goto_location()` with current position + yaw parameter (MAVSDK workaround) |

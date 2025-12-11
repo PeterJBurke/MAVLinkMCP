@@ -176,6 +176,8 @@ def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> fl
 class MAVLinkConnector:
     drone: System
     connection_ready: asyncio.Event = field(default_factory=asyncio.Event)
+    # Track pending navigation destination for landing gate safety
+    pending_destination: dict | None = field(default=None)
 
 # Global connector instance - persists across all HTTP requests
 _global_connector: MAVLinkConnector | None = None
@@ -573,16 +575,23 @@ async def takeoff(ctx: Context, takeoff_altitude: float = 3.0, wait_for_altitude
     }
 
 @mcp.tool()
-async def land(ctx: Context) -> dict:
-    """Command the drone to initiate landing at its current location. Waits for connection if not ready.
+async def land(ctx: Context, force: bool = False) -> dict:
+    """Command the drone to initiate landing at its current location.
+    
+    LANDING GATE SAFETY: If there's a pending navigation destination (from go_to_location),
+    this will check if the drone has arrived before allowing landing. This prevents
+    accidentally landing far from the intended destination.
+    
+    Use force=True to override the landing gate (emergency use only).
 
     Args:
         ctx (Context): The context of the request.
+        force (bool): If True, bypass landing gate safety check (default: False).
 
     Returns:
-        dict: Status message with success or error.
+        dict: Status message with success, blocked, or error.
     """
-    log_tool_call("land")
+    log_tool_call("land", force=force)
     connector = ctx.request_context.lifespan_context
     
     # Wait for connection
@@ -590,9 +599,63 @@ async def land(ctx: Context) -> dict:
         return {"status": "failed", "error": "Drone connection timeout. Please wait and try again."}
     
     drone = connector.drone
+    
+    # LANDING GATE: Check if there's a pending destination
+    if connector.pending_destination and not force:
+        dest = connector.pending_destination
+        dest_lat = dest["latitude"]
+        dest_lon = dest["longitude"]
+        
+        # Get current position
+        try:
+            async for position in drone.telemetry.position():
+                current_lat = position.latitude_deg
+                current_lon = position.longitude_deg
+                break
+            
+            distance = haversine_distance(current_lat, current_lon, dest_lat, dest_lon)
+            
+            # Landing gate threshold - block if more than 20m from destination
+            landing_gate_threshold = 20.0
+            
+            if distance > landing_gate_threshold:
+                logger.warning(f"{LogColors.ERROR}🚫 LANDING BLOCKED - {distance:.0f}m from destination!{LogColors.RESET}")
+                
+                result = {
+                    "status": "blocked",
+                    "message": f"Cannot land - drone is {distance:.0f}m from destination!",
+                    "distance_to_destination_m": round(distance, 1),
+                    "current_position": {
+                        "latitude": current_lat,
+                        "longitude": current_lon
+                    },
+                    "destination": {
+                        "latitude": dest_lat,
+                        "longitude": dest_lon
+                    },
+                    "recommendation": "Call monitor_flight() to check progress, or use land(force=True) for emergency landing",
+                    "safe_to_land": False
+                }
+                log_tool_output(result)
+                return result
+            else:
+                # Close enough - clear destination and proceed with landing
+                logger.info(f"Landing gate passed - {distance:.1f}m from destination (within {landing_gate_threshold}m threshold)")
+                connector.pending_destination = None
+                
+        except Exception as e:
+            logger.warning(f"Could not check position for landing gate: {e}")
+            # Proceed with landing if we can't check position
+    
+    # Clear any pending destination since we're landing
+    connector.pending_destination = None
+    
     log_mavlink_cmd("drone.action.land")
     await drone.action.land()
-    return {"status": "success", "message": "Landing initiated"}
+    
+    result = {"status": "success", "message": "Landing initiated"}
+    log_tool_output(result)
+    return result
 
 @mcp.tool()
 async def print_status_text(ctx: Context) -> dict:
@@ -1406,16 +1469,15 @@ async def clear_mission(ctx: Context) -> dict:
 
 @mcp.tool()
 async def go_to_location(ctx: Context, latitude_deg: float, longitude_deg: float, 
-                        absolute_altitude_m: float, yaw_deg: float = float('nan'),
-                        wait_for_arrival: bool = True, arrival_threshold_m: float = 10.0) -> dict:
+                        absolute_altitude_m: float, yaw_deg: float = float('nan')) -> dict:
     """
     Fly to an absolute GPS location with specified altitude.
     This is direct waypoint navigation to specific coordinates.
-    Waits for connection if not ready.
+    Returns immediately after starting navigation.
     
-    IMPORTANT: By default, this function waits until the drone arrives at the 
-    destination before returning. This prevents issues where the AI forgets to 
-    check arrival status.
+    IMPORTANT: This function returns immediately! The drone will fly autonomously.
+    Use monitor_flight() to track progress, or just call land() when ready - 
+    the landing gate will prevent landing if not at destination.
 
     Args:
         ctx (Context): The context of the request.
@@ -1423,15 +1485,12 @@ async def go_to_location(ctx: Context, latitude_deg: float, longitude_deg: float
         longitude_deg (float): Target longitude in degrees (-180 to +180).
         absolute_altitude_m (float): Target altitude in meters above sea level (MSL).
         yaw_deg (float): Target yaw/heading in degrees (optional, default: maintain current heading).
-        wait_for_arrival (bool): If True (default), waits until drone arrives at destination.
-                                 Set to False for immediate return (use check_arrival manually).
-        arrival_threshold_m (float): Distance in meters to consider "arrived" (default: 10.0m).
 
     Returns:
-        dict: Status message with arrival confirmation or navigation start.
+        dict: Navigation started confirmation with distance and instructions.
     """
     log_tool_call("go_to_location", latitude_deg=latitude_deg, longitude_deg=longitude_deg, 
-                  absolute_altitude_m=absolute_altitude_m, wait_for_arrival=wait_for_arrival)
+                  absolute_altitude_m=absolute_altitude_m)
     connector = ctx.request_context.lifespan_context
     
     # Wait for connection
@@ -1454,87 +1513,50 @@ async def go_to_location(ctx: Context, latitude_deg: float, longitude_deg: float
         initial_distance = haversine_distance(position.latitude_deg, position.longitude_deg, 
                                                latitude_deg, longitude_deg)
         
+        # Get current speed to estimate flight time
+        try:
+            async for velocity in drone.telemetry.velocity_ned():
+                ground_speed = math.sqrt(velocity.north_m_s**2 + velocity.east_m_s**2)
+                break
+        except:
+            ground_speed = 10.0  # Default assumption
+        
+        # Estimate flight time (assuming ~10-15 m/s cruise speed for copter)
+        estimated_speed = max(ground_speed, 10.0)  # At least 10 m/s for ETA
+        eta_seconds = initial_distance / estimated_speed
+        
         logger.info(f"Flying to GPS location: {latitude_deg}, {longitude_deg} at {relative_alt:.1f}m AGL / {absolute_altitude_m:.1f}m MSL")
-        logger.info(f"Distance to target: {initial_distance:.1f}m")
+        logger.info(f"Distance to target: {initial_distance:.1f}m, ETA: {eta_seconds:.0f}s")
         
         log_mavlink_cmd("drone.action.goto_location", lat=f"{latitude_deg:.6f}", lon=f"{longitude_deg:.6f}", 
                        alt=f"{absolute_altitude_m:.1f}", yaw=f"{yaw_deg:.1f}" if not math.isnan(yaw_deg) else "nan")
         await drone.action.goto_location(latitude_deg, longitude_deg, absolute_altitude_m, yaw_deg)
         
-        if not wait_for_arrival:
-            return {
-                "status": "success", 
-                "message": f"Navigation started - use check_arrival to monitor progress",
-                "initial_distance_m": round(initial_distance, 1),
-                "target": {
-                    "latitude": latitude_deg,
-                    "longitude": longitude_deg,
-                    "altitude_msl": absolute_altitude_m,
-                    "yaw": yaw_deg if not math.isnan(yaw_deg) else "maintain current"
-                },
-                "warning": "⚠️ Navigation in progress - call check_arrival before landing!"
-            }
-        
-        # Wait for arrival
-        logger.info(f"Waiting for arrival at destination (threshold: {arrival_threshold_m}m)...")
-        check_interval = 5.0  # Check every 5 seconds
-        max_wait_time = 600  # Maximum 10 minutes
-        elapsed_time = 0
-        last_distance = initial_distance
-        
-        while elapsed_time < max_wait_time:
-            await asyncio.sleep(check_interval)
-            elapsed_time += check_interval
-            
-            try:
-                async for position in drone.telemetry.position():
-                    current_lat = position.latitude_deg
-                    current_lon = position.longitude_deg
-                    break
-                
-                distance = haversine_distance(current_lat, current_lon, latitude_deg, longitude_deg)
-                progress = ((initial_distance - distance) / initial_distance * 100) if initial_distance > 0 else 100
-                
-                logger.info(f"  📍 Distance: {distance:.1f}m ({progress:.0f}% complete)")
-                
-                if distance <= arrival_threshold_m:
-                    logger.info(f"{LogColors.SUCCESS}✅ ARRIVED at destination! Distance: {distance:.1f}m{LogColors.RESET}")
-                    get_flight_logger().log_entry("ARRIVED", f"Distance: {distance:.1f}m after {elapsed_time:.0f}s")
-                    
-                    result = {
-                        "status": "arrived",
-                        "message": f"Drone has arrived at destination!",
-                        "final_distance_m": round(distance, 1),
-                        "travel_time_seconds": round(elapsed_time, 0),
-                        "target": {
-                            "latitude": latitude_deg,
-                            "longitude": longitude_deg,
-                            "altitude_msl": absolute_altitude_m
-                        },
-                        "safe_to_land": True
-                    }
-                    log_tool_output(result)
-                    return result
-                
-                # Check if drone is still making progress (not stuck)
-                if abs(distance - last_distance) < 0.5 and elapsed_time > 30:
-                    # Drone hasn't moved in last check - might be holding position
-                    logger.warning(f"Drone may be holding position - distance unchanged: {distance:.1f}m")
-                
-                last_distance = distance
-                
-            except Exception as e:
-                logger.warning(f"Error checking position: {e}")
-        
-        # Timeout
-        logger.warning(f"Navigation timeout after {max_wait_time}s")
-        return {
-            "status": "timeout",
-            "message": f"Navigation timeout - drone may still be en route",
-            "last_distance_m": round(last_distance, 1),
-            "elapsed_time_seconds": max_wait_time,
-            "recommendation": "Call check_arrival to verify current position"
+        # Register pending destination for landing gate safety
+        connector.pending_destination = {
+            "latitude": latitude_deg,
+            "longitude": longitude_deg,
+            "altitude_msl": absolute_altitude_m,
+            "initial_distance": initial_distance,
+            "start_time": asyncio.get_event_loop().time()
         }
+        
+        result = {
+            "status": "success", 
+            "message": "Navigation started. Call monitor_flight() to track progress.",
+            "initial_distance_m": round(initial_distance, 1),
+            "estimated_flight_time_seconds": round(eta_seconds, 0),
+            "target": {
+                "latitude": latitude_deg,
+                "longitude": longitude_deg,
+                "altitude_msl": absolute_altitude_m,
+                "altitude_agl": round(relative_alt, 1),
+                "yaw": yaw_deg if not math.isnan(yaw_deg) else "maintain current"
+            },
+            "next_step": "Call monitor_flight() to track progress, or land() when ready (landing gate will prevent unsafe landing)"
+        }
+        log_tool_output(result)
+        return result
         
     except Exception as e:
         logger.error(f"Go to location failed: {e}{LogColors.RESET}")
@@ -1630,6 +1652,165 @@ async def check_arrival(
     except Exception as e:
         logger.error(f"{LogColors.ERROR}❌ Check arrival failed: {e}{LogColors.RESET}")
         return {"status": "failed", "error": f"Check failed: {str(e)}"}
+
+
+@mcp.tool()
+async def monitor_flight(ctx: Context, wait_seconds: float = 30.0, arrival_threshold_m: float = 10.0) -> dict:
+    """
+    Monitor flight progress toward the destination set by go_to_location.
+    Waits for a specified time while checking progress, then returns status.
+    
+    This provides chunked progress updates - call repeatedly to track long flights.
+    If no destination is pending, returns current position info.
+    
+    The landing gate in land() prevents unsafe landing even if you forget to monitor,
+    but monitoring gives you real-time progress updates.
+
+    Args:
+        ctx (Context): The context of the request.
+        wait_seconds (float): How long to monitor before returning (default: 30 seconds).
+        arrival_threshold_m (float): Distance to consider "arrived" (default: 10.0m).
+
+    Returns:
+        dict: Progress status with distance, ETA, and instructions.
+    """
+    log_tool_call("monitor_flight", wait_seconds=wait_seconds, arrival_threshold_m=arrival_threshold_m)
+    connector = ctx.request_context.lifespan_context
+    
+    # Wait for connection
+    if not await ensure_connection(connector):
+        return {"status": "failed", "error": "Drone connection timeout. Please wait and try again."}
+    
+    drone = connector.drone
+    
+    # Check if there's a pending destination
+    if not connector.pending_destination:
+        # No destination set - just return current position
+        try:
+            async for position in drone.telemetry.position():
+                result = {
+                    "status": "no_destination",
+                    "message": "No active navigation. Call go_to_location() first to set a destination.",
+                    "current_position": {
+                        "latitude": position.latitude_deg,
+                        "longitude": position.longitude_deg,
+                        "altitude_m": position.relative_altitude_m
+                    }
+                }
+                log_tool_output(result)
+                return result
+        except Exception as e:
+            return {"status": "failed", "error": f"Could not get position: {str(e)}"}
+    
+    # Get destination from pending navigation
+    dest = connector.pending_destination
+    dest_lat = dest["latitude"]
+    dest_lon = dest["longitude"]
+    initial_distance = dest["initial_distance"]
+    start_time = dest.get("start_time", asyncio.get_event_loop().time())
+    
+    logger.info(f"Monitoring flight to ({dest_lat:.6f}, {dest_lon:.6f}) for {wait_seconds}s...")
+    
+    check_interval = 5.0  # Check every 5 seconds
+    elapsed_in_monitor = 0
+    last_distance = None
+    
+    try:
+        while elapsed_in_monitor < wait_seconds:
+            # Get current position
+            async for position in drone.telemetry.position():
+                current_lat = position.latitude_deg
+                current_lon = position.longitude_deg
+                current_alt = position.relative_altitude_m
+                break
+            
+            # Calculate distance to destination
+            distance = haversine_distance(current_lat, current_lon, dest_lat, dest_lon)
+            
+            # Calculate progress percentage
+            if initial_distance > 0:
+                progress = ((initial_distance - distance) / initial_distance) * 100
+                progress = max(0, min(100, progress))  # Clamp to 0-100
+            else:
+                progress = 100 if distance <= arrival_threshold_m else 0
+            
+            # Get speed for ETA calculation
+            try:
+                async for velocity in drone.telemetry.velocity_ned():
+                    ground_speed = math.sqrt(velocity.north_m_s**2 + velocity.east_m_s**2)
+                    break
+            except:
+                ground_speed = 0
+            
+            # Calculate ETA
+            if ground_speed > 0.5:
+                eta_seconds = distance / ground_speed
+            else:
+                eta_seconds = None  # Unknown if not moving
+            
+            logger.info(f"  📍 Distance: {distance:.1f}m ({progress:.0f}% complete), Speed: {ground_speed:.1f}m/s")
+            
+            # Check if arrived
+            if distance <= arrival_threshold_m:
+                logger.info(f"{LogColors.SUCCESS}✅ ARRIVED at destination! Distance: {distance:.1f}m{LogColors.RESET}")
+                get_flight_logger().log_entry("ARRIVED", f"Distance: {distance:.1f}m")
+                
+                # Clear pending destination
+                connector.pending_destination = None
+                
+                total_flight_time = asyncio.get_event_loop().time() - start_time
+                
+                result = {
+                    "status": "arrived",
+                    "message": "Drone has arrived at destination!",
+                    "distance_m": round(distance, 1),
+                    "progress_percent": 100,
+                    "flight_time_seconds": round(total_flight_time, 0),
+                    "current_position": {
+                        "latitude": current_lat,
+                        "longitude": current_lon,
+                        "altitude_m": current_alt
+                    },
+                    "safe_to_land": True
+                }
+                log_tool_output(result)
+                return result
+            
+            last_distance = distance
+            
+            # Wait before next check
+            await asyncio.sleep(check_interval)
+            elapsed_in_monitor += check_interval
+        
+        # Monitoring period ended, still in progress
+        total_elapsed = asyncio.get_event_loop().time() - start_time
+        
+        result = {
+            "status": "in_progress",
+            "message": f"Still flying - {distance:.0f}m remaining ({progress:.0f}% complete)",
+            "distance_m": round(distance, 1),
+            "progress_percent": round(progress, 0),
+            "ground_speed_m_s": round(ground_speed, 1),
+            "eta_seconds": round(eta_seconds, 0) if eta_seconds else None,
+            "elapsed_seconds": round(total_elapsed, 0),
+            "current_position": {
+                "latitude": current_lat,
+                "longitude": current_lon,
+                "altitude_m": current_alt
+            },
+            "target": {
+                "latitude": dest_lat,
+                "longitude": dest_lon
+            },
+            "instruction": "Call monitor_flight() again to continue tracking, or call land() when ready"
+        }
+        log_tool_output(result)
+        return result
+        
+    except Exception as e:
+        logger.error(f"{LogColors.ERROR}❌ Monitor flight failed: {e}{LogColors.RESET}")
+        return {"status": "failed", "error": f"Monitoring failed: {str(e)}"}
+
 
 @mcp.tool()
 async def get_home_position(ctx: Context) -> dict:

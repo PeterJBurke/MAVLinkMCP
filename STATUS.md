@@ -12,25 +12,25 @@ During flight testing, `pause_mission()` caused a **drone crash** by descending 
 
 ---
 
-## ✅ Current Status (v1.3.0 - Enhanced Telemetry)
+## ✅ Current Status (v1.3.1 - Chunked Flight Monitoring)
 
-### Production Ready with Enhanced Telemetry
-The MAVLink MCP Server is **production-ready** with complete flight operations, safety features, parameter management, advanced navigation, and enhanced telemetry. **v1.3.0 adds 5 new telemetry tools for better monitoring.**
+### Production Ready with Enhanced Safety
+The MAVLink MCP Server is **production-ready** with complete flight operations, safety features, parameter management, advanced navigation, and enhanced telemetry. **v1.3.1 adds chunked flight monitoring and a landing gate safety feature.**
 
 **Last Updated:** December 10, 2025  
-**Version:** 1.3.0 (Enhanced Telemetry)  
-**Total Tools:** 40 MCP tools (1 deprecated for safety)  
+**Version:** 1.3.1 (Chunked Flight Monitoring + Landing Gate)  
+**Total Tools:** 41 MCP tools (1 deprecated for safety)  
 **Tested With:** ArduPilot, ChatGPT Developer Mode
 
 ---
 
-## 🎯 Available Tools (40 Total)
+## 🎯 Available Tools (41 Total)
 
 ### Basic Flight Control (5 tools)
 - ✅ `arm_drone` - Arm motors for flight
 - ✅ `disarm_drone` - Disarm motors safely
-- ✅ `takeoff` - Autonomous takeoff to specified altitude
-- ✅ `land` - Land at current position
+- ✅ `takeoff` - Autonomous takeoff to specified altitude (waits for altitude)
+- ✅ `land` - Land at current position (**LANDING GATE**: blocks if not at destination)
 - ✅ `hold_position` - Hold position in GUIDED mode (prevents altitude drift)
 
 ### Emergency & Safety (3 tools)
@@ -38,14 +38,15 @@ The MAVLink MCP Server is **production-ready** with complete flight operations, 
 - ✅ `kill_motors` - Emergency motor cutoff ⚠️
 - ✅ `get_battery` - Battery voltage & percentage monitoring
 
-### Navigation (7 tools)
+### Navigation (8 tools)
 - ✅ `get_position` - Current GPS coordinates & altitude
 - ✅ `move_to_relative` - Relative NED movement
-- ✅ `go_to_location` - Absolute GPS navigation
+- ✅ `go_to_location` - Absolute GPS navigation (returns immediately, registers destination)
+- ✅ `monitor_flight` - **NEW** Chunked flight monitoring (30s updates, call repeatedly for long flights)
 - ✅ `get_home_position` - Home/RTL location
 - ✅ `set_max_speed` - Speed limiting for safety
-- ✅ `set_yaw` - **NEW** Set heading without moving
-- ✅ `reposition` - **NEW** Move to location and loiter
+- ✅ `set_yaw` - Set heading without moving
+- ✅ `reposition` - Move to location and loiter
 
 ### Mission Management (10 tools)
 - ✅ `initiate_mission` - Upload and start waypoint missions
