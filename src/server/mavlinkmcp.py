@@ -1665,7 +1665,7 @@ async def check_arrival(
 
 
 @mcp.tool()
-async def monitor_flight(ctx: Context, wait_seconds: float = 20.0, arrival_threshold_m: float = 20.0, auto_land: bool = True) -> dict:
+async def monitor_flight(ctx: Context, wait_seconds: float = 5.0, arrival_threshold_m: float = 20.0, auto_land: bool = True) -> dict:
     """
     Monitor flight progress. YOU MUST CALL THIS IN A LOOP UNTIL mission_complete IS TRUE.
     
