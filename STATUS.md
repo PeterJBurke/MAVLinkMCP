@@ -43,7 +43,8 @@ Traditional drone APIs simply forward commands to the flight controller. This MC
 - Other tools know where you're heading and can verify arrival
 
 #### Chunked Flight Monitoring
-- `monitor_flight()` provides 10-second progress updates
+- `monitor_flight()` provides 5-second progress updates
+- Each response includes `DISPLAY_TO_USER` string to show the user
 - Each response includes `action_required` telling LLM what to do next
 - Tracks full lifecycle: in_progress → arrived → landing → landed
 - Returns `mission_complete: true` only when safely on ground
@@ -53,21 +54,21 @@ Traditional drone APIs simply forward commands to the flight controller. This MC
 ```
 Arm the drone, takeoff to 50 meters, and fly to [DESTINATION].
 
-After go_to_location, call monitor_flight() every 10 seconds.
-Show me each progress update.
+After go_to_location, call monitor_flight() every 5 seconds.
+ALWAYS show me the DISPLAY_TO_USER field from each response.
 When arrived, call land().
 Keep calling monitor_flight() until mission_complete is true.
 ```
 
-### Example Flight Monitoring Output
+### Example Flight Monitoring Output (DISPLAY_TO_USER)
 
 ```
-🚁 Flying: 2.5km remaining (0% complete) | ETA: 4m 10s
-🚁 Flying: 1.5km remaining (40% complete) | ETA: 2m 30s
-🚁 Flying: 0.5km remaining (80% complete) | ETA: 50s
-✅ ARRIVED at destination! Distance: 8m
-🛬 Landing in progress... altitude: 25m
-🛬 Landing in progress... altitude: 10m
+🚁 FLYING | Dist: 2500m | Alt: 50.0m | Speed: 10.5m/s | ETA: 3m 58s | 0%
+🚁 FLYING | Dist: 1500m | Alt: 50.0m | Speed: 10.8m/s | ETA: 2m 19s | 40%
+🚁 FLYING | Dist: 500m | Alt: 50.0m | Speed: 10.1m/s | ETA: 49s | 80%
+✅ ARRIVED! | Distance: 8.2m | Alt: 50.0m | Flight time: 248s
+🛬 LANDING | Alt: 25.0m | Descending...
+🛬 LANDING | Alt: 10.0m | Descending...
 ✅ MISSION COMPLETE - Drone has landed safely!
 ```
 
@@ -103,7 +104,7 @@ The MAVLink MCP Server is **production-ready** with complete flight operations, 
 - ✅ `get_position` - Current GPS coordinates & altitude
 - ✅ `move_to_relative` - Relative NED movement
 - ✅ `go_to_location` - Absolute GPS navigation (returns immediately, registers destination)
-- ✅ `monitor_flight` - **NEW** Chunked flight monitoring (10s updates, tracks until landed)
+- ✅ `monitor_flight` - **NEW** Real-time flight updates (5s, returns DISPLAY_TO_USER for user)
 - ✅ `get_home_position` - Home/RTL location
 - ✅ `set_max_speed` - Speed limiting for safety
 - ✅ `set_yaw` - Set heading without moving

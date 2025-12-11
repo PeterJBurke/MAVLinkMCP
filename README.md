@@ -60,58 +60,60 @@ ChatGPT: "Landing... 10m... 5m... 1m... Landed successfully!"
 
 ### 📋 Recommended Prompt for Navigation
 
-Copy this prompt template for safe, monitored flights:
+Copy this prompt template for safe, monitored flights with real-time updates:
 
 ```
 Arm the drone, takeoff to [ALTITUDE] meters, and fly to [DESTINATION].
 
 After calling go_to_location:
-1. Call monitor_flight() and show me each progress update
-2. Keep calling monitor_flight() every 10 seconds until arrived
+1. Call monitor_flight() every 5 seconds
+2. ALWAYS show me the DISPLAY_TO_USER field from each response
 3. When arrived, call land()
-4. Keep calling monitor_flight() until landed (mission_complete: true)
+4. Keep calling monitor_flight() and showing updates until mission_complete is true
 
-Do not stop until the drone has landed and mission is complete.
+Show me every update. Do not stop until the drone has landed.
 ```
 
 **Example with a real destination:**
 ```
-Arm the drone, takeoff to 50 meters, and fly to the Chevron gas station 
-at 5301 University Dr, Irvine, CA (33.6516, -117.8270).
+Arm the drone, takeoff to 50 meters, and fly to the UCI athletic fields
+at coordinates (33.6420, -117.8269).
 
-Show me progress updates every 10 seconds until the drone has landed.
+Call monitor_flight() every 5 seconds and show me each DISPLAY_TO_USER update.
+Keep showing updates until the drone has landed and mission is complete.
 ```
 
 ### What the User Will See
 
-The LLM provides continuous updates throughout the entire flight:
+The LLM shows real-time updates every 5 seconds:
 
 ```
-🚁 Flying: 2.5km remaining (0% complete) | ETA: 4m 10s | Speed: 10m/s
-🚁 Flying: 2.1km remaining (16% complete) | ETA: 3m 30s | Speed: 10m/s
-🚁 Flying: 1.5km remaining (40% complete) | ETA: 2m 30s | Speed: 10m/s
-🚁 Flying: 0.8km remaining (68% complete) | ETA: 1m 20s | Speed: 10m/s
-🚁 Flying: 0.2km remaining (92% complete) | ETA: 20s | Speed: 10m/s
-✅ ARRIVED at destination! Distance: 8m
-🛬 Landing in progress... altitude: 35m
-🛬 Landing in progress... altitude: 20m
-🛬 Landing in progress... altitude: 8m
+🚁 FLYING | Dist: 2500m | Alt: 50.0m | Speed: 10.5m/s | ETA: 3m 58s | 0%
+🚁 FLYING | Dist: 2100m | Alt: 50.0m | Speed: 10.2m/s | ETA: 3m 26s | 16%
+🚁 FLYING | Dist: 1500m | Alt: 50.0m | Speed: 10.8m/s | ETA: 2m 19s | 40%
+🚁 FLYING | Dist: 800m | Alt: 50.0m | Speed: 10.1m/s | ETA: 1m 19s | 68%
+🚁 FLYING | Dist: 200m | Alt: 50.0m | Speed: 9.8m/s | ETA: 20s | 92%
+✅ ARRIVED! | Distance: 8.2m | Alt: 50.0m | Flight time: 248s
+🛬 LANDING | Alt: 35.0m | Descending...
+🛬 LANDING | Alt: 20.0m | Descending...
+🛬 LANDING | Alt: 8.0m | Descending...
 ✅ MISSION COMPLETE - Drone has landed safely!
 ```
 
 ### How It Works
 
-| Step | Tool Called | Server Response |
+| Step | Tool Called | DISPLAY_TO_USER |
 |------|-------------|-----------------|
-| 1 | `takeoff(50)` | Waits for 50m altitude, then returns |
-| 2 | `go_to_location(...)` | Returns immediately, registers destination |
-| 3 | `monitor_flight()` | Returns progress after 10s, says "CALL AGAIN" |
-| 4 | `monitor_flight()` | Repeats until "arrived" status |
-| 5 | `land()` | Initiates landing (Landing Gate checks destination) |
-| 6 | `monitor_flight()` | Returns "landing" status, says "CALL AGAIN" |
-| 7 | `monitor_flight()` | Returns "landed" with `mission_complete: true` |
+| 1 | `takeoff(50)` | (waits for altitude) |
+| 2 | `go_to_location(...)` | "Navigation started..." |
+| 3 | `monitor_flight()` | "🚁 FLYING \| Dist: 2500m \| Alt: 50m \| Speed: 10m/s..." |
+| 4 | `monitor_flight()` | "🚁 FLYING \| Dist: 1500m \| ..." (repeat every 5s) |
+| 5 | `monitor_flight()` | "✅ ARRIVED! \| Distance: 8m \| ..." |
+| 6 | `land()` | "Landing initiated" |
+| 7 | `monitor_flight()` | "🛬 LANDING \| Alt: 25m \| Descending..." |
+| 8 | `monitor_flight()` | "✅ MISSION COMPLETE - Drone has landed safely!" |
 
-**The LLM keeps calling `monitor_flight()` because each response includes `action_required` telling it exactly what to do next.**
+**Each response includes `DISPLAY_TO_USER` which the LLM should show to the user, and `action_required` telling the LLM what to do next.**
 
 **Setup Steps:**
 1. Enable **Developer Mode** in ChatGPT settings (ChatGPT Plus/Pro required)

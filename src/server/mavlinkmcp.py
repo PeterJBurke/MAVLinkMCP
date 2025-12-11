@@ -1655,27 +1655,31 @@ async def check_arrival(
 
 
 @mcp.tool()
-async def monitor_flight(ctx: Context, wait_seconds: float = 10.0, arrival_threshold_m: float = 10.0) -> dict:
+async def monitor_flight(ctx: Context, wait_seconds: float = 5.0, arrival_threshold_m: float = 10.0) -> dict:
     """
-    Monitor flight progress and landing status. Call repeatedly every 10 seconds
-    to give the user updates until the mission is complete (drone has landed).
+    Monitor flight progress and provide real-time updates to show the user.
     
-    IMPORTANT: Keep calling this function until status is "landed" to ensure
-    the user sees all progress updates and the mission completes safely.
+    *** IMPORTANT: DISPLAY THE "DISPLAY_TO_USER" FIELD TO THE USER! ***
+    
+    This function returns a "DISPLAY_TO_USER" string that MUST be shown to the user.
+    It contains formatted flight data: distance, altitude, speed, ETA.
+    
+    Call this function repeatedly (every 5 seconds) and ALWAYS show the 
+    DISPLAY_TO_USER content to keep the user informed of flight progress.
     
     Status flow:
-    - "in_progress" → Still flying to destination. CALL AGAIN in 10 seconds.
-    - "arrived" → At destination. CALL land() NOW, then call monitor_flight() again.
-    - "landing" → Drone is descending. CALL AGAIN to confirm touchdown.
-    - "landed" → Mission complete! Drone is safely on the ground.
+    - "in_progress" → Show update to user, CALL AGAIN in 5 seconds
+    - "arrived" → Show to user, CALL land() NOW, then monitor_flight() again
+    - "landing" → Show to user, CALL AGAIN to confirm touchdown
+    - "landed" → Show to user, mission complete!
 
     Args:
         ctx (Context): The context of the request.
-        wait_seconds (float): How long to monitor before returning update (default: 10 seconds).
+        wait_seconds (float): How long to wait before returning update (default: 5 seconds).
         arrival_threshold_m (float): Distance to consider "arrived" (default: 10.0m).
 
     Returns:
-        dict: Progress status with action_required instructions.
+        dict: Contains "DISPLAY_TO_USER" string to show the user, plus flight data.
     """
     log_tool_call("monitor_flight", wait_seconds=wait_seconds, arrival_threshold_m=arrival_threshold_m)
     connector = ctx.request_context.lifespan_context
@@ -1712,14 +1716,9 @@ async def monitor_flight(ctx: Context, wait_seconds: float = 10.0, arrival_thres
             connector.pending_destination = None
             
             result = {
+                "DISPLAY_TO_USER": "✅ MISSION COMPLETE - Drone has landed safely!",
                 "status": "landed",
-                "message": "✅ MISSION COMPLETE - Drone has landed safely!",
-                "landed_state": landed_state_str,
                 "altitude_m": round(current_alt, 1),
-                "current_position": {
-                    "latitude": current_lat,
-                    "longitude": current_lon
-                },
                 "action_required": None,
                 "mission_complete": True
             }
@@ -1731,11 +1730,10 @@ async def monitor_flight(ctx: Context, wait_seconds: float = 10.0, arrival_thres
             logger.info(f"🛬 Landing in progress... altitude: {current_alt:.1f}m")
             
             result = {
+                "DISPLAY_TO_USER": f"🛬 LANDING | Alt: {current_alt:.1f}m | Descending...",
                 "status": "landing",
-                "message": f"🛬 Landing in progress... altitude: {current_alt:.1f}m",
                 "altitude_m": round(current_alt, 1),
-                "landed_state": landed_state_str,
-                "action_required": "CALL monitor_flight() AGAIN in 10 seconds to confirm landing",
+                "action_required": "SHOW the DISPLAY_TO_USER to user, then CALL monitor_flight() AGAIN",
                 "mission_complete": False
             }
             log_tool_output(result)
@@ -1745,13 +1743,9 @@ async def monitor_flight(ctx: Context, wait_seconds: float = 10.0, arrival_thres
         if not connector.pending_destination:
             # No destination - drone is just hovering
             result = {
+                "DISPLAY_TO_USER": f"🚁 HOVERING | Alt: {current_alt:.1f}m | No destination set",
                 "status": "hovering",
-                "message": f"Drone is hovering at {current_alt:.1f}m. No destination set.",
                 "altitude_m": round(current_alt, 1),
-                "current_position": {
-                    "latitude": current_lat,
-                    "longitude": current_lon
-                },
                 "action_required": "Call go_to_location() to set destination, or land() to land here",
                 "mission_complete": False
             }
@@ -1815,17 +1809,12 @@ async def monitor_flight(ctx: Context, wait_seconds: float = 10.0, arrival_thres
                 total_flight_time = asyncio.get_event_loop().time() - start_time
                 
                 result = {
+                    "DISPLAY_TO_USER": f"✅ ARRIVED! | Distance: {distance:.1f}m | Alt: {current_alt:.1f}m | Flight time: {total_flight_time:.0f}s",
                     "status": "arrived",
-                    "message": f"✅ ARRIVED at destination! Distance: {distance:.1f}m",
                     "distance_m": round(distance, 1),
-                    "progress_percent": 100,
-                    "flight_time_seconds": round(total_flight_time, 0),
                     "altitude_m": round(current_alt, 1),
-                    "current_position": {
-                        "latitude": current_lat,
-                        "longitude": current_lon
-                    },
-                    "action_required": "CALL land() NOW, then CALL monitor_flight() AGAIN to confirm landing",
+                    "flight_time_seconds": round(total_flight_time, 0),
+                    "action_required": "SHOW DISPLAY_TO_USER to user, then CALL land(), then CALL monitor_flight() AGAIN",
                     "mission_complete": False
                 }
                 log_tool_output(result)
@@ -1848,15 +1837,14 @@ async def monitor_flight(ctx: Context, wait_seconds: float = 10.0, arrival_thres
             eta_str = "calculating..."
         
         result = {
+            "DISPLAY_TO_USER": f"🚁 FLYING | Dist: {distance:.0f}m | Alt: {current_alt:.1f}m | Speed: {ground_speed:.1f}m/s | ETA: {eta_str} | {progress:.0f}%",
             "status": "in_progress",
-            "message": f"🚁 Flying: {distance:.0f}m remaining ({progress:.0f}% complete) | ETA: {eta_str} | Speed: {ground_speed:.1f}m/s",
             "distance_m": round(distance, 1),
-            "progress_percent": round(progress, 0),
-            "ground_speed_m_s": round(ground_speed, 1),
-            "eta_seconds": round(eta_seconds, 0) if eta_seconds else None,
-            "elapsed_seconds": round(total_elapsed, 0),
             "altitude_m": round(current_alt, 1),
-            "action_required": "CALL monitor_flight() AGAIN in 10 seconds to continue tracking",
+            "ground_speed_m_s": round(ground_speed, 1),
+            "progress_percent": round(progress, 0),
+            "eta_seconds": round(eta_seconds, 0) if eta_seconds else None,
+            "action_required": "SHOW DISPLAY_TO_USER to user, then CALL monitor_flight() AGAIN",
             "mission_complete": False
         }
         log_tool_output(result)
