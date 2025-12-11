@@ -2675,27 +2675,36 @@ async def get_rc_status(ctx: Context) -> dict:
             is_available = rc_status.is_available
             signal_strength = rc_status.signal_strength_percent
             
-            # Determine signal quality
+            # Determine signal quality and status text
             if not is_available:
-                quality = "NO RC CONNECTED"
-            elif signal_strength >= 80:
-                quality = "Excellent"
-            elif signal_strength >= 60:
-                quality = "Good"
-            elif signal_strength >= 40:
-                quality = "Fair"
-            elif signal_strength >= 20:
-                quality = "Poor"
+                quality = "N/A"
+                status_text = "RC Not Available"
+                signal_strength_output = None
             else:
-                quality = "Critical - Link may be lost"
+                # Handle NaN values that may occur
+                if math.isnan(signal_strength):
+                    signal_strength = 0
+                
+                if signal_strength >= 80:
+                    quality = "Excellent"
+                elif signal_strength >= 60:
+                    quality = "Good"
+                elif signal_strength >= 40:
+                    quality = "Fair"
+                elif signal_strength >= 20:
+                    quality = "Poor"
+                else:
+                    quality = "Critical - Link may be lost"
+                
+                signal_strength_output = round(signal_strength, 1)
+                status_text = f"RC Available - Signal: {signal_strength:.0f}% ({quality})"
             
-            status_text = f"RC {'Available' if is_available else 'Not Available'} - Signal: {signal_strength:.0f}% ({quality})"
             logger.info(f"{LogColors.STATUS}RC Status: {status_text}{LogColors.RESET}")
             
             result = {
                 "status": "success",
                 "rc_available": is_available,
-                "signal_strength_percent": round(signal_strength, 1) if is_available else 0,
+                "signal_strength_percent": signal_strength_output,
                 "signal_quality": quality,
                 "status_text": status_text
             }
