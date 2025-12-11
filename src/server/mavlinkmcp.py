@@ -1833,7 +1833,7 @@ async def monitor_flight(ctx: Context, wait_seconds: float = 5.0, arrival_thresh
                 
                 if auto_land:
                     # Automatically initiate landing
-                    logger.info(f"{LogColors.CMD}🛬 Auto-landing initiated{LogColors.RESET}")
+                    logger.info(f"{LogColors.MAVLINK}🛬 Auto-landing initiated{LogColors.RESET}")
                     get_flight_logger().log_entry("AUTO_LAND", "Landing initiated automatically")
                     connector.landing_in_progress = True  # Track that we're landing
                     await drone.action.land()
