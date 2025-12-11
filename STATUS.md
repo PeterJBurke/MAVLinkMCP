@@ -42,53 +42,68 @@ Traditional drone APIs simply forward commands to the flight controller. This MC
 - `go_to_location()` registers the target in `pending_destination`
 - Other tools know where you're heading and can verify arrival
 
-#### Chunked Flight Monitoring
-- `monitor_flight()` provides 5-second progress updates
+#### Complete Flight Lifecycle Management (v1.4.0)
+- `monitor_flight()` provides 30-second progress updates (hardcoded, LLM cannot override)
 - Each response includes `DISPLAY_TO_USER` string to show the user
-- Each response includes `action_required` telling LLM what to do next
-- Tracks full lifecycle: in_progress → arrived → landing → landed
-- Returns `mission_complete: true` only when safely on ground
+- When drone arrives (within 20m): automatically initiates landing
+- Waits for confirmed touchdown: ON_GROUND + not in_air + altitude < 2m
+- Confirms stability for 3 seconds before declaring landed
+- Returns `mission_complete: true` only when drone is physically on the ground
+- **The LLM cannot return until the drone has landed**
 
-### Recommended Prompt
+### Recommended Prompt (v1.4.0)
 
 ```
-Arm the drone, takeoff to 50 meters, and fly to [DESTINATION].
+Arm the drone, takeoff to 50 meters, fly to [DESTINATION], and land.
 
-After go_to_location, you MUST call monitor_flight() repeatedly in a loop.
-Show me DISPLAY_TO_USER after each call.
-DO NOT STOP until mission_complete is true - the drone needs monitoring!
+After each monitor_flight, you MUST print the DISPLAY_TO_USER value.
+You MUST call monitor_flight at least 20 times or until mission_complete is true, whichever comes first.
 ```
 
-**Why "repeatedly in a loop" is critical:**
-- ChatGPT batches tool calls and stops after showing one result
-- Without explicit "loop" instruction, it abandons the drone mid-flight
-- Landing is automatic, but only if you keep calling `monitor_flight()`
+**Why this prompt works:**
+- "at least 20 times" prevents ChatGPT from stopping after a few calls
+- "print the DISPLAY_TO_USER value" forces visible output to the user
+- Landing is fully automatic - when drone arrives, `monitor_flight` lands it and waits for touchdown
+- `mission_complete: true` only returns when drone is physically on the ground
+
+**Update Interval:** 30 seconds (hardcoded, LLM cannot override)
 
 Set `auto_land=False` if you want to hover at destination instead of landing.
 
-### Example Flight Monitoring Output (DISPLAY_TO_USER)
+### Example Flight Output (v1.4.0)
+
+A typical 3-minute flight with 30-second updates:
 
 ```
-🚁 FLYING | Dist: 2500m | Alt: 50.0m | Speed: 10.5m/s | ETA: 3m 58s | 0%
-🚁 FLYING | Dist: 1500m | Alt: 50.0m | Speed: 10.8m/s | ETA: 2m 19s | 40%
-🚁 FLYING | Dist: 500m | Alt: 50.0m | Speed: 10.1m/s | ETA: 49s | 80%
-✅ ARRIVED! | Distance: 8.2m | Alt: 50.0m | Flight time: 248s
-🛬 LANDING | Alt: 25.0m | Descending...
-🛬 LANDING | Alt: 10.0m | Descending...
-✅ MISSION COMPLETE - Drone has landed safely!
+#1: 🚁 FLYING | Dist: 1096m | Alt: 36.9m | Speed: 9.9m/s | ETA: 1m 51s | 27%
+#2: 🚁 FLYING | Dist: 626m | Alt: 22.9m | Speed: 9.9m/s | ETA: 1m 3s | 59%
+#3: 🚁 FLYING | Dist: 57m | Alt: 6.0m | Speed: 9.9m/s | ETA: 5s | 96%
+#4: ✅ MISSION COMPLETE | Landed safely | Flight time: 198s
 ```
+
+**Only 4 monitor_flight calls needed!** The auto-land + touchdown wait happens inside call #4.
 
 ---
 
-## ✅ Current Status (v1.3.1 - Chunked Flight Monitoring)
+## ✅ Current Status (v1.4.0 - Complete Flight Lifecycle Management)
 
-### Production Ready with Enhanced Safety
-The MAVLink MCP Server is **production-ready** with complete flight operations, safety features, parameter management, advanced navigation, and enhanced telemetry. **v1.3.1 adds chunked flight monitoring and a landing gate safety feature.**
+### Production Ready with Full Autonomous Flight
+The MAVLink MCP Server is **production-ready** with complete autonomous flight from arm to confirmed landing. **v1.4.0 ensures the drone physically lands before returning mission_complete.**
 
-**Last Updated:** December 10, 2025  
-**Version:** 1.3.1 (Chunked Flight Monitoring + Landing Gate)  
+**Last Updated:** December 11, 2025  
+**Version:** 1.4.0 (Complete Flight Lifecycle Management)  
 **Total Tools:** 41 MCP tools (1 deprecated for safety)  
-**Tested With:** ArduPilot, ChatGPT Developer Mode
+**Tested With:** ArduPilot SITL, ChatGPT Developer Mode
+
+### What's New in v1.4.0
+
+| Feature | Description |
+|---------|-------------|
+| **Confirmed Touchdown** | `monitor_flight` now waits for drone to physically land before returning `mission_complete: true` |
+| **30-Second Updates** | Reduced update frequency to prevent ChatGPT from hitting tool call limits |
+| **Robust Landing Detection** | Requires: ON_GROUND + not in_air + altitude < 2m + 3-second stability check |
+| **Fixed wait_seconds Override** | Removed parameter so LLM can't override the 30-second interval |
+| **Bug Fixes** | Fixed LogColors.CMD typo that caused crashes at arrival |
 
 ---
 
@@ -492,8 +507,8 @@ We welcome contributions! Priority areas:
 
 ---
 
-**Current Version:** v1.3.0 (40 tools - Production Ready)  
-**Status:** ✅ Production Ready + Enhanced Telemetry  
+**Current Version:** v1.4.0 (41 tools - Complete Flight Lifecycle Management)  
+**Status:** ✅ Production Ready - Full Autonomous Flight from Arm to Confirmed Landing  
 **Next Release:** v2.0.0 (Intelligent Automation)  
 **Maintainer:** Peter J Burke  
 **Original Author:** Ion Gabriel
