@@ -15,9 +15,29 @@ During flight testing, this tool caused a drone crash (25m → ground impact). U
 - 🚁 **MAVLink Compatible**: Works with PX4, ArduPilot, and other MAVLink drones
 - 🔧 **MCP Protocol**: Standard Model Context Protocol for tool integration
 - 📡 **Network/Serial Support**: Connect via UDP, TCP, or serial ports
-- 🛡️ **Safe Configuration**: Secure handling of connection credentials
 - 💬 **ChatGPT Integration**: Direct control from ChatGPT web interface (see below)
-- 📝 **Flight Logging**: Automatic logging of all tool calls and MAVLink commands for debugging and auditing (see [FLIGHT_LOGS.md](FLIGHT_LOGS.md))
+- 📝 **Flight Logging**: Automatic logging of all tool calls and MAVLink commands (see [FLIGHT_LOGS.md](FLIGHT_LOGS.md))
+
+## 🛡️ Active Flight Management (Not Just MAVLink Pass-Through!)
+
+**This MCP server doesn't just send MAVLink commands** — it actively manages flight safety:
+
+| Feature | What It Does |
+|---------|--------------|
+| **Takeoff Altitude Wait** | `takeoff()` waits until target altitude is reached before returning, preventing navigation commands while still climbing |
+| **Landing Gate** | `land()` blocks landing if drone is >20m from destination, preventing accidental landing in wrong location |
+| **Destination Tracking** | `go_to_location()` registers the target so other tools know where you're heading |
+| **Progress Monitoring** | `monitor_flight()` provides 10-second updates with distance, ETA, and speed |
+| **Mission Lifecycle** | Tracks status through: in_progress → arrived → landing → landed |
+| **Flight Logging** | Every command and response is logged for debugging and auditing |
+
+**Example of active safety:**
+```
+LLM: land()
+MCP: "BLOCKED - Drone is 1.2km from destination! Call monitor_flight() first."
+```
+
+The server protects against common AI mistakes like landing before arrival or navigating before reaching takeoff altitude.
 
 ## 🌐 Control Your Drone with ChatGPT (NEW!)
 
@@ -40,15 +60,18 @@ ChatGPT: "Landing... 10m... 5m... 1m... Landed successfully!"
 
 ### 📋 Recommended Prompt for Navigation
 
-When flying to a destination, use `monitor_flight()` every 10 seconds to give the user updates:
+Copy this prompt template for safe, monitored flights:
 
 ```
-Arm the drone, takeoff to 50 meters, and fly to [YOUR DESTINATION].
+Arm the drone, takeoff to [ALTITUDE] meters, and fly to [DESTINATION].
 
-After go_to_location, call monitor_flight() every 10 seconds.
-Show the user each progress update.
-When status is "arrived", call land().
-Keep calling monitor_flight() until status is "landed" (mission complete).
+After calling go_to_location:
+1. Call monitor_flight() and show me each progress update
+2. Keep calling monitor_flight() every 10 seconds until arrived
+3. When arrived, call land()
+4. Keep calling monitor_flight() until landed (mission_complete: true)
+
+Do not stop until the drone has landed and mission is complete.
 ```
 
 **Example with a real destination:**
@@ -56,20 +79,39 @@ Keep calling monitor_flight() until status is "landed" (mission complete).
 Arm the drone, takeoff to 50 meters, and fly to the Chevron gas station 
 at 5301 University Dr, Irvine, CA (33.6516, -117.8270).
 
-Call monitor_flight() every 10 seconds and show me the progress.
-When arrived, land and confirm landing is complete.
+Show me progress updates every 10 seconds until the drone has landed.
 ```
 
-**The LLM will show updates like:**
-- "🚁 Flying: 1.8km remaining (28% complete) | ETA: 2m 30s"
-- "🚁 Flying: 0.5km remaining (80% complete) | ETA: 45s"
-- "✅ ARRIVED at destination!"
-- "🛬 Landing in progress... altitude: 15m"
-- "✅ MISSION COMPLETE - Drone has landed safely!"
+### What the User Will See
 
-**Safety Note:** The **Landing Gate** blocks landing if >20m from destination.
+The LLM provides continuous updates throughout the entire flight:
 
-**Why this matters:** Without `check_arrival`, ChatGPT may send the `land` command immediately after `go_to_location`, causing the drone to land before reaching its destination.
+```
+🚁 Flying: 2.5km remaining (0% complete) | ETA: 4m 10s | Speed: 10m/s
+🚁 Flying: 2.1km remaining (16% complete) | ETA: 3m 30s | Speed: 10m/s
+🚁 Flying: 1.5km remaining (40% complete) | ETA: 2m 30s | Speed: 10m/s
+🚁 Flying: 0.8km remaining (68% complete) | ETA: 1m 20s | Speed: 10m/s
+🚁 Flying: 0.2km remaining (92% complete) | ETA: 20s | Speed: 10m/s
+✅ ARRIVED at destination! Distance: 8m
+🛬 Landing in progress... altitude: 35m
+🛬 Landing in progress... altitude: 20m
+🛬 Landing in progress... altitude: 8m
+✅ MISSION COMPLETE - Drone has landed safely!
+```
+
+### How It Works
+
+| Step | Tool Called | Server Response |
+|------|-------------|-----------------|
+| 1 | `takeoff(50)` | Waits for 50m altitude, then returns |
+| 2 | `go_to_location(...)` | Returns immediately, registers destination |
+| 3 | `monitor_flight()` | Returns progress after 10s, says "CALL AGAIN" |
+| 4 | `monitor_flight()` | Repeats until "arrived" status |
+| 5 | `land()` | Initiates landing (Landing Gate checks destination) |
+| 6 | `monitor_flight()` | Returns "landing" status, says "CALL AGAIN" |
+| 7 | `monitor_flight()` | Returns "landed" with `mission_complete: true` |
+
+**The LLM keeps calling `monitor_flight()` because each response includes `action_required` telling it exactly what to do next.**
 
 **Setup Steps:**
 1. Enable **Developer Mode** in ChatGPT settings (ChatGPT Plus/Pro required)

@@ -12,31 +12,64 @@ During flight testing, `pause_mission()` caused a **drone crash** by descending 
 
 ---
 
-## 🛡️ Safety Features (v1.3.1)
+## 🛡️ Active Flight Management System
 
-### Landing Gate
-The `land()` function includes a **Landing Gate** that prevents unsafe landings:
-- If you called `go_to_location()`, the destination is tracked
-- If you try to `land()` before arriving (>20m from destination), landing is **BLOCKED**
-- You'll see: `"Cannot land - drone is 1.2km from destination!"`
+**This MCP server is NOT just a MAVLink command pass-through!**
+
+Traditional drone APIs simply forward commands to the flight controller. This MCP server actively manages the flight to prevent common AI mistakes:
+
+### Why Active Management Matters
+
+| Problem | Without Active Management | With MAVLink MCP |
+|---------|--------------------------|------------------|
+| LLM sends `go_to_location` then immediately `land` | Drone lands before reaching destination | **Landing Gate BLOCKS** - "Cannot land, 1.2km from destination!" |
+| LLM sends `go_to_location` before takeoff completes | Drone flies horizontally at low altitude | **Takeoff waits** for altitude before returning |
+| LLM forgets to check arrival status | User doesn't know flight progress | **monitor_flight** guides LLM with "CALL AGAIN" instructions |
+| LLM stops monitoring mid-flight | Mission abandoned, drone left hovering | **action_required** field keeps LLM engaged until landed |
+
+### Safety Features (v1.3.1)
+
+#### Landing Gate
+- `land()` checks if drone is at the registered destination
+- If >20m away, landing is **BLOCKED** with helpful error
 - Use `land(force=True)` only for emergencies
 
-### Takeoff Altitude Wait
-The `takeoff()` function waits until the drone reaches target altitude before returning. This prevents navigation commands from being sent while still climbing.
+#### Takeoff Altitude Wait
+- `takeoff()` waits until target altitude is reached before returning
+- Prevents navigation commands while still climbing
 
-### Chunked Flight Monitoring
-Use `monitor_flight()` every 10 seconds to give user updates until landed:
+#### Destination Tracking
+- `go_to_location()` registers the target in `pending_destination`
+- Other tools know where you're heading and can verify arrival
+
+#### Chunked Flight Monitoring
+- `monitor_flight()` provides 10-second progress updates
+- Each response includes `action_required` telling LLM what to do next
+- Tracks full lifecycle: in_progress → arrived → landing → landed
+- Returns `mission_complete: true` only when safely on ground
+
+### Recommended Prompt
+
 ```
-go_to_location() → returns immediately
-monitor_flight() → "🚁 Flying: 1.8km (28%) | ETA: 2m 30s" → CALL AGAIN
-monitor_flight() → "🚁 Flying: 0.5km (80%) | ETA: 45s" → CALL AGAIN
-monitor_flight() → "✅ ARRIVED!" → CALL land() NOW
-land() → "Landing initiated"
-monitor_flight() → "🛬 Landing... altitude: 15m" → CALL AGAIN
-monitor_flight() → "✅ MISSION COMPLETE - Landed safely!"
+Arm the drone, takeoff to 50 meters, and fly to [DESTINATION].
+
+After go_to_location, call monitor_flight() every 10 seconds.
+Show me each progress update.
+When arrived, call land().
+Keep calling monitor_flight() until mission_complete is true.
 ```
 
-The LLM should keep calling `monitor_flight()` until `mission_complete: true`.
+### Example Flight Monitoring Output
+
+```
+🚁 Flying: 2.5km remaining (0% complete) | ETA: 4m 10s
+🚁 Flying: 1.5km remaining (40% complete) | ETA: 2m 30s
+🚁 Flying: 0.5km remaining (80% complete) | ETA: 50s
+✅ ARRIVED at destination! Distance: 8m
+🛬 Landing in progress... altitude: 25m
+🛬 Landing in progress... altitude: 10m
+✅ MISSION COMPLETE - Drone has landed safely!
+```
 
 ---
 
@@ -70,7 +103,7 @@ The MAVLink MCP Server is **production-ready** with complete flight operations, 
 - ✅ `get_position` - Current GPS coordinates & altitude
 - ✅ `move_to_relative` - Relative NED movement
 - ✅ `go_to_location` - Absolute GPS navigation (returns immediately, registers destination)
-- ✅ `monitor_flight` - **NEW** Chunked flight monitoring (30s updates, call repeatedly for long flights)
+- ✅ `monitor_flight` - **NEW** Chunked flight monitoring (10s updates, tracks until landed)
 - ✅ `get_home_position` - Home/RTL location
 - ✅ `set_max_speed` - Speed limiting for safety
 - ✅ `set_yaw` - Set heading without moving
