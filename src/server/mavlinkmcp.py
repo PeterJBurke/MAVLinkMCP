@@ -1563,8 +1563,7 @@ async def go_to_location(ctx: Context, latitude_deg: float, longitude_deg: float
                 "altitude_agl": round(relative_alt, 1),
                 "yaw": yaw_deg if not math.isnan(yaw_deg) else "maintain current"
             },
-            "WARNING": "DRONE IS NOW FLYING - YOU MUST MONITOR IT",
-            "next_step": "Call monitor_flight() in a LOOP until mission_complete is true. Print DISPLAY_TO_USER each time."
+            "next_step": "Call monitor_flight() repeatedly until mission_complete is true"
         }
         log_tool_output(result)
         return result
@@ -1759,9 +1758,6 @@ async def monitor_flight(ctx: Context, wait_seconds: float = 5.0, arrival_thresh
                     "DISPLAY_TO_USER": f"🛬 LANDING | Alt: {current_alt:.1f}m | Descending...",
                     "status": "landing",
                     "altitude_m": round(current_alt, 1),
-                    "WARNING": "DRONE STILL DESCENDING - DO NOT STOP",
-                    "action_required": "PRINT DISPLAY_TO_USER, then CALL monitor_flight() AGAIN",
-                    "must_call_next": "monitor_flight()",
                     "mission_complete": False
                 }
                 log_tool_output(result)
@@ -1846,22 +1842,17 @@ async def monitor_flight(ctx: Context, wait_seconds: float = 5.0, arrival_thresh
                         "status": "landing",
                         "distance_m": round(distance, 1),
                         "altitude_m": round(current_alt, 1),
-                        "flight_time_seconds": round(total_flight_time, 0),
-                        "action_required": "PRINT DISPLAY_TO_USER, then CALL monitor_flight() until mission_complete",
                         "mission_complete": False
                     }
                     log_tool_output(result)
                     return result
                 else:
-                    # Manual landing required
+                    # Manual landing required (auto_land=False)
                     result = {
-                        "DISPLAY_TO_USER": f"✅ ARRIVED! | Distance: {distance:.1f}m | Alt: {current_alt:.1f}m | Flight time: {total_flight_time:.0f}s | Ready to land",
+                        "DISPLAY_TO_USER": f"✅ ARRIVED | Distance: {distance:.1f}m | Alt: {current_alt:.1f}m | Call land() to land",
                         "status": "arrived",
                         "distance_m": round(distance, 1),
                         "altitude_m": round(current_alt, 1),
-                        "flight_time_seconds": round(total_flight_time, 0),
-                        "action_required": "PRINT DISPLAY_TO_USER, call land() to land, then monitor_flight() until mission_complete",
-                        "must_call_next": "land()",
                         "mission_complete": False
                     }
                     log_tool_output(result)
