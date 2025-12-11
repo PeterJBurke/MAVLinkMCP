@@ -1665,7 +1665,7 @@ async def check_arrival(
 
 
 @mcp.tool()
-async def monitor_flight(ctx: Context, wait_seconds: float = 30.0, arrival_threshold_m: float = 20.0, auto_land: bool = True) -> dict:
+async def monitor_flight(ctx: Context, arrival_threshold_m: float = 20.0, auto_land: bool = True) -> dict:
     """
     Monitor flight progress. YOU MUST CALL THIS IN A LOOP UNTIL mission_complete IS TRUE.
     
@@ -1683,14 +1683,16 @@ async def monitor_flight(ctx: Context, wait_seconds: float = 30.0, arrival_thres
 
     Args:
         ctx (Context): The context of the request.
-        wait_seconds (float): Seconds to wait before returning (default: 5).
-        arrival_threshold_m (float): Distance to consider "arrived" (default: 10m).
+        arrival_threshold_m (float): Distance to consider "arrived" (default: 20m).
         auto_land (bool): Automatically land when arrived (default: True).
 
     Returns:
         dict: DISPLAY_TO_USER (print this!), status, mission_complete (ONLY stop when true).
     """
-    log_tool_call("monitor_flight", wait_seconds=wait_seconds, arrival_threshold_m=arrival_threshold_m, auto_land=auto_land)
+    # Fixed 30-second update interval (not configurable to prevent LLM from overriding)
+    wait_seconds = 30.0
+    
+    log_tool_call("monitor_flight", arrival_threshold_m=arrival_threshold_m, auto_land=auto_land)
     connector = ctx.request_context.lifespan_context
     
     # Wait for connection
