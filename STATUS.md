@@ -25,14 +25,18 @@ The `land()` function includes a **Landing Gate** that prevents unsafe landings:
 The `takeoff()` function waits until the drone reaches target altitude before returning. This prevents navigation commands from being sent while still climbing.
 
 ### Chunked Flight Monitoring
-Use `monitor_flight()` to track long flights in 30-second chunks:
+Use `monitor_flight()` every 10 seconds to give user updates until landed:
 ```
 go_to_location() → returns immediately
-monitor_flight() → "In progress: 1.8km (28% complete)"
-monitor_flight() → "In progress: 0.5km (80% complete)"  
-monitor_flight() → "Arrived! Safe to land."
-land() → succeeds
+monitor_flight() → "🚁 Flying: 1.8km (28%) | ETA: 2m 30s" → CALL AGAIN
+monitor_flight() → "🚁 Flying: 0.5km (80%) | ETA: 45s" → CALL AGAIN
+monitor_flight() → "✅ ARRIVED!" → CALL land() NOW
+land() → "Landing initiated"
+monitor_flight() → "🛬 Landing... altitude: 15m" → CALL AGAIN
+monitor_flight() → "✅ MISSION COMPLETE - Landed safely!"
 ```
+
+The LLM should keep calling `monitor_flight()` until `mission_complete: true`.
 
 ---
 

@@ -1655,24 +1655,27 @@ async def check_arrival(
 
 
 @mcp.tool()
-async def monitor_flight(ctx: Context, wait_seconds: float = 30.0, arrival_threshold_m: float = 10.0) -> dict:
+async def monitor_flight(ctx: Context, wait_seconds: float = 10.0, arrival_threshold_m: float = 10.0) -> dict:
     """
-    Monitor flight progress toward the destination set by go_to_location.
-    Waits for a specified time while checking progress, then returns status.
+    Monitor flight progress and landing status. Call repeatedly every 10 seconds
+    to give the user updates until the mission is complete (drone has landed).
     
-    This provides chunked progress updates - call repeatedly to track long flights.
-    If no destination is pending, returns current position info.
+    IMPORTANT: Keep calling this function until status is "landed" to ensure
+    the user sees all progress updates and the mission completes safely.
     
-    The landing gate in land() prevents unsafe landing even if you forget to monitor,
-    but monitoring gives you real-time progress updates.
+    Status flow:
+    - "in_progress" → Still flying to destination. CALL AGAIN in 10 seconds.
+    - "arrived" → At destination. CALL land() NOW, then call monitor_flight() again.
+    - "landing" → Drone is descending. CALL AGAIN to confirm touchdown.
+    - "landed" → Mission complete! Drone is safely on the ground.
 
     Args:
         ctx (Context): The context of the request.
-        wait_seconds (float): How long to monitor before returning (default: 30 seconds).
+        wait_seconds (float): How long to monitor before returning update (default: 10 seconds).
         arrival_threshold_m (float): Distance to consider "arrived" (default: 10.0m).
 
     Returns:
-        dict: Progress status with distance, ETA, and instructions.
+        dict: Progress status with action_required instructions.
     """
     log_tool_call("monitor_flight", wait_seconds=wait_seconds, arrival_threshold_m=arrival_threshold_m)
     connector = ctx.request_context.lifespan_context
@@ -1683,39 +1686,90 @@ async def monitor_flight(ctx: Context, wait_seconds: float = 30.0, arrival_thres
     
     drone = connector.drone
     
-    # Check if there's a pending destination
-    if not connector.pending_destination:
-        # No destination set - just return current position
-        try:
-            async for position in drone.telemetry.position():
-                result = {
-                    "status": "no_destination",
-                    "message": "No active navigation. Call go_to_location() first to set a destination.",
-                    "current_position": {
-                        "latitude": position.latitude_deg,
-                        "longitude": position.longitude_deg,
-                        "altitude_m": position.relative_altitude_m
-                    }
-                }
-                log_tool_output(result)
-                return result
-        except Exception as e:
-            return {"status": "failed", "error": f"Could not get position: {str(e)}"}
-    
-    # Get destination from pending navigation
-    dest = connector.pending_destination
-    dest_lat = dest["latitude"]
-    dest_lon = dest["longitude"]
-    initial_distance = dest["initial_distance"]
-    start_time = dest.get("start_time", asyncio.get_event_loop().time())
-    
-    logger.info(f"Monitoring flight to ({dest_lat:.6f}, {dest_lon:.6f}) for {wait_seconds}s...")
-    
-    check_interval = 5.0  # Check every 5 seconds
-    elapsed_in_monitor = 0
-    last_distance = None
-    
     try:
+        # First, check if drone is on the ground (mission complete)
+        async for landed_state in drone.telemetry.landed_state():
+            landed_state_str = str(landed_state).split(".")[-1]
+            break
+        
+        async for in_air in drone.telemetry.in_air():
+            is_in_air = in_air
+            break
+        
+        # Get current position
+        async for position in drone.telemetry.position():
+            current_lat = position.latitude_deg
+            current_lon = position.longitude_deg
+            current_alt = position.relative_altitude_m
+            break
+        
+        # Check if landed (mission complete!)
+        if landed_state_str == "ON_GROUND" or (not is_in_air and current_alt < 1.0):
+            logger.info(f"{LogColors.SUCCESS}✅ MISSION COMPLETE - Drone has landed!{LogColors.RESET}")
+            get_flight_logger().log_entry("LANDED", "Mission complete")
+            
+            # Clear any pending destination
+            connector.pending_destination = None
+            
+            result = {
+                "status": "landed",
+                "message": "✅ MISSION COMPLETE - Drone has landed safely!",
+                "landed_state": landed_state_str,
+                "altitude_m": round(current_alt, 1),
+                "current_position": {
+                    "latitude": current_lat,
+                    "longitude": current_lon
+                },
+                "action_required": None,
+                "mission_complete": True
+            }
+            log_tool_output(result)
+            return result
+        
+        # Check if landing in progress
+        if landed_state_str == "LANDING":
+            logger.info(f"🛬 Landing in progress... altitude: {current_alt:.1f}m")
+            
+            result = {
+                "status": "landing",
+                "message": f"🛬 Landing in progress... altitude: {current_alt:.1f}m",
+                "altitude_m": round(current_alt, 1),
+                "landed_state": landed_state_str,
+                "action_required": "CALL monitor_flight() AGAIN in 10 seconds to confirm landing",
+                "mission_complete": False
+            }
+            log_tool_output(result)
+            return result
+        
+        # Check if there's a pending destination (still navigating)
+        if not connector.pending_destination:
+            # No destination - drone is just hovering
+            result = {
+                "status": "hovering",
+                "message": f"Drone is hovering at {current_alt:.1f}m. No destination set.",
+                "altitude_m": round(current_alt, 1),
+                "current_position": {
+                    "latitude": current_lat,
+                    "longitude": current_lon
+                },
+                "action_required": "Call go_to_location() to set destination, or land() to land here",
+                "mission_complete": False
+            }
+            log_tool_output(result)
+            return result
+        
+        # Get destination from pending navigation
+        dest = connector.pending_destination
+        dest_lat = dest["latitude"]
+        dest_lon = dest["longitude"]
+        initial_distance = dest["initial_distance"]
+        start_time = dest.get("start_time", asyncio.get_event_loop().time())
+        
+        logger.info(f"Monitoring flight for {wait_seconds}s...")
+        
+        check_interval = 5.0  # Check every 5 seconds internally
+        elapsed_in_monitor = 0
+        
         while elapsed_in_monitor < wait_seconds:
             # Get current position
             async for position in drone.telemetry.position():
@@ -1730,7 +1784,7 @@ async def monitor_flight(ctx: Context, wait_seconds: float = 30.0, arrival_thres
             # Calculate progress percentage
             if initial_distance > 0:
                 progress = ((initial_distance - distance) / initial_distance) * 100
-                progress = max(0, min(100, progress))  # Clamp to 0-100
+                progress = max(0, min(100, progress))
             else:
                 progress = 100 if distance <= arrival_threshold_m else 0
             
@@ -1746,11 +1800,11 @@ async def monitor_flight(ctx: Context, wait_seconds: float = 30.0, arrival_thres
             if ground_speed > 0.5:
                 eta_seconds = distance / ground_speed
             else:
-                eta_seconds = None  # Unknown if not moving
+                eta_seconds = None
             
-            logger.info(f"  📍 Distance: {distance:.1f}m ({progress:.0f}% complete), Speed: {ground_speed:.1f}m/s")
+            logger.info(f"  📍 Distance: {distance:.1f}m ({progress:.0f}%), Speed: {ground_speed:.1f}m/s, Alt: {current_alt:.1f}m")
             
-            # Check if arrived
+            # Check if arrived at destination
             if distance <= arrival_threshold_m:
                 logger.info(f"{LogColors.SUCCESS}✅ ARRIVED at destination! Distance: {distance:.1f}m{LogColors.RESET}")
                 get_flight_logger().log_entry("ARRIVED", f"Distance: {distance:.1f}m")
@@ -1762,21 +1816,20 @@ async def monitor_flight(ctx: Context, wait_seconds: float = 30.0, arrival_thres
                 
                 result = {
                     "status": "arrived",
-                    "message": "Drone has arrived at destination!",
+                    "message": f"✅ ARRIVED at destination! Distance: {distance:.1f}m",
                     "distance_m": round(distance, 1),
                     "progress_percent": 100,
                     "flight_time_seconds": round(total_flight_time, 0),
+                    "altitude_m": round(current_alt, 1),
                     "current_position": {
                         "latitude": current_lat,
-                        "longitude": current_lon,
-                        "altitude_m": current_alt
+                        "longitude": current_lon
                     },
-                    "safe_to_land": True
+                    "action_required": "CALL land() NOW, then CALL monitor_flight() AGAIN to confirm landing",
+                    "mission_complete": False
                 }
                 log_tool_output(result)
                 return result
-            
-            last_distance = distance
             
             # Wait before next check
             await asyncio.sleep(check_interval)
@@ -1785,24 +1838,26 @@ async def monitor_flight(ctx: Context, wait_seconds: float = 30.0, arrival_thres
         # Monitoring period ended, still in progress
         total_elapsed = asyncio.get_event_loop().time() - start_time
         
+        # Format ETA nicely
+        if eta_seconds:
+            if eta_seconds > 60:
+                eta_str = f"{int(eta_seconds // 60)}m {int(eta_seconds % 60)}s"
+            else:
+                eta_str = f"{int(eta_seconds)}s"
+        else:
+            eta_str = "calculating..."
+        
         result = {
             "status": "in_progress",
-            "message": f"Still flying - {distance:.0f}m remaining ({progress:.0f}% complete)",
+            "message": f"🚁 Flying: {distance:.0f}m remaining ({progress:.0f}% complete) | ETA: {eta_str} | Speed: {ground_speed:.1f}m/s",
             "distance_m": round(distance, 1),
             "progress_percent": round(progress, 0),
             "ground_speed_m_s": round(ground_speed, 1),
             "eta_seconds": round(eta_seconds, 0) if eta_seconds else None,
             "elapsed_seconds": round(total_elapsed, 0),
-            "current_position": {
-                "latitude": current_lat,
-                "longitude": current_lon,
-                "altitude_m": current_alt
-            },
-            "target": {
-                "latitude": dest_lat,
-                "longitude": dest_lon
-            },
-            "instruction": "Call monitor_flight() again to continue tracking, or call land() when ready"
+            "altitude_m": round(current_alt, 1),
+            "action_required": "CALL monitor_flight() AGAIN in 10 seconds to continue tracking",
+            "mission_complete": False
         }
         log_tool_output(result)
         return result

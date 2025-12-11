@@ -40,14 +40,15 @@ ChatGPT: "Landing... 10m... 5m... 1m... Landed successfully!"
 
 ### 📋 Recommended Prompt for Navigation
 
-When flying to a destination, use `monitor_flight()` to track progress:
+When flying to a destination, use `monitor_flight()` every 10 seconds to give the user updates:
 
 ```
 Arm the drone, takeoff to 50 meters, and fly to [YOUR DESTINATION].
 
-After go_to_location, call monitor_flight() to track progress.
-If still in progress, call monitor_flight() again.
-Repeat until arrived, then land.
+After go_to_location, call monitor_flight() every 10 seconds.
+Show the user each progress update.
+When status is "arrived", call land().
+Keep calling monitor_flight() until status is "landed" (mission complete).
 ```
 
 **Example with a real destination:**
@@ -55,10 +56,18 @@ Repeat until arrived, then land.
 Arm the drone, takeoff to 50 meters, and fly to the Chevron gas station 
 at 5301 University Dr, Irvine, CA (33.6516, -117.8270).
 
-Use monitor_flight() to track progress until arrived, then land.
+Call monitor_flight() every 10 seconds and show me the progress.
+When arrived, land and confirm landing is complete.
 ```
 
-**Safety Note:** Even if you forget to monitor, the **Landing Gate** will block landing if the drone hasn't reached its destination. You'll see: "Cannot land - drone is 1.2km from destination!"
+**The LLM will show updates like:**
+- "🚁 Flying: 1.8km remaining (28% complete) | ETA: 2m 30s"
+- "🚁 Flying: 0.5km remaining (80% complete) | ETA: 45s"
+- "✅ ARRIVED at destination!"
+- "🛬 Landing in progress... altitude: 15m"
+- "✅ MISSION COMPLETE - Drone has landed safely!"
+
+**Safety Note:** The **Landing Gate** blocks landing if >20m from destination.
 
 **Why this matters:** Without `check_arrival`, ChatGPT may send the `land` command immediately after `go_to_location`, causing the drone to land before reaching its destination.
 
