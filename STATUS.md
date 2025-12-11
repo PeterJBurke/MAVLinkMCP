@@ -153,6 +153,27 @@ The MAVLink MCP Server is **production-ready** with complete flight operations, 
 
 ---
 
+### v1.3.0 - Telemetry & Monitoring Enhancements
+
+**Target:** 1-2 months  
+**Focus:** Complete telemetry coverage and monitoring tools
+
+#### Enhanced Telemetry Tools
+- [ ] `get_health_all_ok` - Quick health check (all systems OK?)
+- [ ] `get_landed_state` - Detailed landed state (on ground / taking off / in air / landing)
+- [ ] `get_rc_status` - RC controller connection status and signal strength
+- [ ] `get_heading` - Compass heading in degrees
+- [ ] `get_odometry` - Combined position, velocity, and orientation data
+
+#### Mission Tools (Already Implemented)
+- ✅ `start_mission` - Available via `initiate_mission` and `resume_mission`
+- ⛔ `pause_mission` - DEPRECATED (use `hold_mission_position` instead)
+- ✅ `clear_mission` - Already implemented
+
+**Estimated Time:** 2-3 weeks
+
+---
+
 ### v2.0.0 - Intelligent Automation
 
 **Target:** 3-6 months  
@@ -225,17 +246,18 @@ The MAVLink MCP Server is **production-ready** with complete flight operations, 
 
 ## 📊 Version Comparison
 
-| Feature | v1.0.0 | v1.1.0 | v1.2.0 (Near Complete) |
-|---------|--------|--------|------------------|
-| **Total Tools** | 10 | 25 | 35 (current) |
-| **Safety Tools** | 1 | 5 | 5 |
-| **Complete Flight Cycle** | ❌ | ✅ | ✅ |
-| **Emergency Procedures** | ❌ | ✅ | ✅ |
-| **Battery Monitoring** | ❌ | ✅ | ✅ |
-| **Parameter Access** | ❌ | ❌ | ✅ **NEW** |
-| **Advanced Navigation** | ❌ | ❌ | ✅ **NEW** |
-| **Mission Enhancements** | Basic | Basic | Advanced ✅ |
-| **Production Ready** | ❌ | ✅ | ✅ |
+| Feature | v1.0.0 | v1.1.0 | v1.2.0 | v1.3.0 (Planned) |
+|---------|--------|--------|--------|------------------|
+| **Total Tools** | 10 | 25 | 35 | 40 (planned) |
+| **Safety Tools** | 1 | 5 | 5 | 5 |
+| **Complete Flight Cycle** | ❌ | ✅ | ✅ | ✅ |
+| **Emergency Procedures** | ❌ | ✅ | ✅ | ✅ |
+| **Battery Monitoring** | ❌ | ✅ | ✅ | ✅ |
+| **Parameter Access** | ❌ | ❌ | ✅ | ✅ |
+| **Advanced Navigation** | ❌ | ❌ | ✅ | ✅ |
+| **Mission Enhancements** | Basic | Basic | Advanced | Advanced |
+| **Enhanced Telemetry** | ❌ | ❌ | ❌ | ✅ **NEW** |
+| **Production Ready** | ❌ | ✅ | ✅ | ✅ |
 
 ---
 
@@ -253,6 +275,12 @@ The MAVLink MCP Server is **production-ready** with complete flight operations, 
 - ✅ Parameter configuration via ChatGPT
 - ✅ Professional pilot feature set
 - ✅ Enhanced navigation capabilities
+
+### v1.3.0 Goals
+- [ ] Complete telemetry coverage (health_all_ok, landed_state, rc_status, heading, odometry)
+- [ ] Enhanced monitoring capabilities for AI agents
+- [ ] Better safety checks with RC status monitoring
+- [ ] Improved flight state awareness
 
 ### v2.0.0 Goals
 - ✅ Autonomous survey missions
@@ -365,7 +393,7 @@ The MAVLink MCP Server is **production-ready** with complete flight operations, 
 
 We welcome contributions! Priority areas:
 
-1. **Parameter Management Tools** - Implement v1.2.0 features
+1. **Telemetry & Monitoring Tools** - Implement v1.3.0 features (health_all_ok, landed_state, rc_status, heading, odometry)
 2. **Testing** - Test on different autopilots (PX4, ArduPlane)
 3. **Documentation** - Improve setup guides and examples
 4. **Bug Reports** - Report issues on GitHub
@@ -390,8 +418,8 @@ We welcome contributions! Priority areas:
 
 ---
 
-**Current Version:** v1.2.0 (near complete - 35 tools)  
+**Current Version:** v1.2.4 (35 tools - Production Ready)  
 **Status:** ✅ Production Ready + Full Feature Set  
-**Next Release:** v1.3.0 (Intelligent Automation)  
+**Next Release:** v1.3.0 (Telemetry & Monitoring Enhancements)  
 **Maintainer:** Peter J Burke  
 **Original Author:** Ion Gabriel
