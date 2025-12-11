@@ -1659,21 +1659,19 @@ async def check_arrival(
 @mcp.tool()
 async def monitor_flight(ctx: Context, wait_seconds: float = 5.0, arrival_threshold_m: float = 10.0) -> dict:
     """
-    Monitor flight progress. IMMEDIATELY PRINT the DISPLAY_TO_USER value to the user after each call.
+    Monitor flight progress. PRINT the DISPLAY_TO_USER value to user after EACH call.
     
-    REQUIRED BEHAVIOR:
-    1. Call this function
-    2. PRINT/SAY the "DISPLAY_TO_USER" value to the user (do not skip this!)
-    3. Check if mission_complete is true - if not, repeat from step 1
-    4. If status is "arrived", call land() then continue monitoring
+    REQUIRED LOOP - DO NOT STOP UNTIL mission_complete IS TRUE:
+    1. Call monitor_flight()
+    2. PRINT the DISPLAY_TO_USER value to the user
+    3. If status is "arrived": CALL land() IMMEDIATELY
+    4. If mission_complete is false: GO BACK TO STEP 1
+    5. If mission_complete is true: STOP - drone has landed
     
-    The DISPLAY_TO_USER field contains a formatted status line like:
-    "🚁 FLYING | Dist: 500m | Alt: 50m | Speed: 10m/s | ETA: 49s | 80%"
+    CRITICAL: When status is "arrived", you MUST call land() before calling 
+    monitor_flight() again. Do NOT stop at "arrived" - the drone is still in the air!
     
-    You MUST print this to the user after EACH call so they see real-time progress.
-    Do NOT batch calls without showing output. Show each update immediately.
-    
-    Continue calling until mission_complete is true (drone has landed).
+    The drone is only safe when mission_complete is true (status = "landed").
 
     Args:
         ctx (Context): The context of the request.
@@ -1681,7 +1679,7 @@ async def monitor_flight(ctx: Context, wait_seconds: float = 5.0, arrival_thresh
         arrival_threshold_m (float): Distance to consider "arrived" (default: 10m).
 
     Returns:
-        dict: DISPLAY_TO_USER (print this!), status, action_required, mission_complete.
+        dict: DISPLAY_TO_USER (print this!), status, must_call_next, mission_complete.
     """
     log_tool_call("monitor_flight", wait_seconds=wait_seconds, arrival_threshold_m=arrival_threshold_m)
     connector = ctx.request_context.lifespan_context
@@ -1811,12 +1809,13 @@ async def monitor_flight(ctx: Context, wait_seconds: float = 5.0, arrival_thresh
                 total_flight_time = asyncio.get_event_loop().time() - start_time
                 
                 result = {
-                    "DISPLAY_TO_USER": f"✅ ARRIVED! | Distance: {distance:.1f}m | Alt: {current_alt:.1f}m | Flight time: {total_flight_time:.0f}s",
+                    "DISPLAY_TO_USER": f"✅ ARRIVED! | Distance: {distance:.1f}m | Alt: {current_alt:.1f}m | Flight time: {total_flight_time:.0f}s | NOW LANDING...",
                     "status": "arrived",
                     "distance_m": round(distance, 1),
                     "altitude_m": round(current_alt, 1),
                     "flight_time_seconds": round(total_flight_time, 0),
-                    "action_required": "SHOW DISPLAY_TO_USER to user, then CALL land(), then CALL monitor_flight() AGAIN",
+                    "action_required": "PRINT DISPLAY_TO_USER, then IMMEDIATELY call land(), then call monitor_flight() until mission_complete",
+                    "must_call_next": "land()",
                     "mission_complete": False
                 }
                 log_tool_output(result)

@@ -80,12 +80,14 @@ Do not batch the calls - show me each update as you get it.
 Arm the drone, takeoff to 50 meters, and fly to the UCI athletic fields
 at coordinates (33.6420, -117.8269).
 
-After go_to_location, call monitor_flight() in a loop.
-Print the DISPLAY_TO_USER value to me after each call.
-When status is "arrived", call land() and continue monitoring until landed.
+ALWAYS show me the DISPLAY_TO_USER from each monitor_flight response.
+When arrived, call land() and keep monitoring until mission_complete is true.
+Do NOT stop until the drone has landed (mission_complete: true).
 ```
 
-**Why this prompt format?** ChatGPT batches tool calls by default. The explicit "print to me" instruction forces it to output each update as conversation text so you see real-time progress.
+**Why this prompt format?** 
+- ChatGPT batches tool calls by default - "show me DISPLAY_TO_USER" forces visible output
+- LLMs may stop at "arrived" - explicit "until mission_complete" ensures landing completes
 
 ### What the User Will See
 

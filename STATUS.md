@@ -51,21 +51,20 @@ Traditional drone APIs simply forward commands to the flight controller. This MC
 
 ### Recommended Prompt
 
-**Important:** ChatGPT batches tool calls by default. Use this prompt format to force it to show each update:
+**Important:** ChatGPT batches tool calls and may stop before landing. Use this prompt:
 
 ```
 Arm the drone, takeoff to 50 meters, and fly to [DESTINATION].
 
-After go_to_location, do the following in a loop:
-1. Call monitor_flight()
-2. Print the DISPLAY_TO_USER value from the response to me
-3. If mission_complete is false, repeat from step 1
-4. If status is "arrived", call land() first, then continue the loop
-
-You MUST print the DISPLAY_TO_USER text to me after EACH monitor_flight call.
+ALWAYS show me the DISPLAY_TO_USER from each monitor_flight response.
+When arrived, call land() and keep monitoring until mission_complete is true.
+Do NOT stop until the drone has landed (mission_complete: true).
 ```
 
-The key is "print the DISPLAY_TO_USER to me" - this forces the LLM to output updates as conversation text rather than hiding them in collapsed tool call results.
+**Why this format?**
+- "ALWAYS show me DISPLAY_TO_USER" → Forces visible output instead of hidden tool results
+- "until mission_complete is true" → Ensures LLM doesn't stop at "arrived" (still in air!)
+- "Do NOT stop until landed" → Explicit instruction to complete the full landing sequence
 
 ### Example Flight Monitoring Output (DISPLAY_TO_USER)
 
