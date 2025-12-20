@@ -1,6 +1,6 @@
 # Documentation Index
 
-Complete list of all markdown files in the MAVLink MCP project with descriptions.
+Complete list of all markdown files in the droneserver project with descriptions.
 
 **Last Updated:** December 2024
 
