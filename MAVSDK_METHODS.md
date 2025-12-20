@@ -368,7 +368,7 @@ Want to help implement more MAVSDK methods? Contributions welcome!
 
 1. Pick a method from the "not implemented" list
 2. Check the [MAVSDK Python docs](https://mavsdk.mavlink.io/)
-3. Add the tool to `src/server/mavlinkmcp.py`
+3. Add the tool to `src/server/droneserver.py`
 4. Test with SITL
 5. Submit a PR
 
@@ -381,4 +381,4 @@ See [STATUS.md](STATUS.md) for the development roadmap.
 - [MAVSDK Python GitHub](https://github.com/mavlink/MAVSDK-Python)
 - [MAVSDK Documentation](https://mavsdk.mavlink.io/)
 - [MAVLink Protocol](https://mavlink.io/en/)
-- [MAVLink MCP GitHub](https://github.com/PeterJBurke/MAVLinkMCP)
+- [MAVLink MCP GitHub](https://github.com/PeterJBurke/droneserver)

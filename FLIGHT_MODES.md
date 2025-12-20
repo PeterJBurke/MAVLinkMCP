@@ -117,11 +117,11 @@ get_flight_mode()
 ```
 
 ### In Logs
-When running `sudo journalctl -u mavlinkmcp -f`, you'll see:
+When running `sudo journalctl -u droneserver -f`, you'll see:
 ```
-2025-11-17 10:30:00 - MAVLinkMCP - INFO - 🔧 MCP TOOL: initiate_mission(...)
-2025-11-17 10:30:00 - MAVLinkMCP - INFO - ⚠️  Mission starting - drone will switch to AUTO flight mode
-2025-11-17 10:30:00 - MAVLinkMCP - INFO - 📡 MAVLink → drone.mission.start_mission()
+2025-11-17 10:30:00 - droneserver - INFO - 🔧 MCP TOOL: initiate_mission(...)
+2025-11-17 10:30:00 - droneserver - INFO - ⚠️  Mission starting - drone will switch to AUTO flight mode
+2025-11-17 10:30:00 - droneserver - INFO - 📡 MAVLink → drone.mission.start_mission()
 ```
 
 ---
@@ -167,7 +167,7 @@ Tools that change flight modes now log warnings:
 
 **Check your version:**
 ```bash
-sudo journalctl -u mavlinkmcp -n 50 | grep "hold_position"
+sudo journalctl -u droneserver -n 50 | grep "hold_position"
 ```
 
 **Should see:**
@@ -187,8 +187,8 @@ hold_position()  # Will switch to GUIDED and hold
 **After this update:** Logs are unbuffered and will show immediately
 **Restart service:**
 ```bash
-sudo systemctl restart mavlinkmcp
-sudo journalctl -u mavlinkmcp -f
+sudo systemctl restart droneserver
+sudo journalctl -u droneserver -f
 ```
 
 ---

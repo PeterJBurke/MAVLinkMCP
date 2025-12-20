@@ -495,9 +495,9 @@ Expected execution times:
 Found an issue or have suggestions?
 
 **How to report:**
-1. Open an issue at: https://github.com/PeterJBurke/MAVLinkMCP/issues
+1. Open an issue at: https://github.com/PeterJBurke/droneserver/issues
 2. Include your test results (use template above)
-3. Provide MCP server logs: `sudo journalctl -u mavlinkmcp --since "1 hour ago"`
+3. Provide MCP server logs: `sudo journalctl -u droneserver --since "1 hour ago"`
 4. Describe your setup:
    - Drone model
    - Autopilot type and version
@@ -507,10 +507,10 @@ Found an issue or have suggestions?
 **What to include in logs:**
 ```bash
 # Get MCP server logs (last 100 lines):
-sudo journalctl -u mavlinkmcp -n 100
+sudo journalctl -u droneserver -n 100
 
 # Get flight logs (if available):
-cat ~/MAVLinkMCP/flight_logs/flight_*.log
+cat ~/droneserver/flight_logs/flight_*.log
 
 # Get autopilot logs (SITL):
 # Look in terminal where you started SITL

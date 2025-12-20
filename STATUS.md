@@ -543,9 +543,9 @@ We welcome contributions! Priority areas:
 
 ## 📞 Support & Resources
 
-- **Repository:** https://github.com/PeterJBurke/MAVLinkMCP
-- **Issues:** https://github.com/PeterJBurke/MAVLinkMCP/issues
-- **Discussions:** https://github.com/PeterJBurke/MAVLinkMCP/discussions
+- **Repository:** https://github.com/PeterJBurke/droneserver
+- **Issues:** https://github.com/PeterJBurke/droneserver/issues
+- **Discussions:** https://github.com/PeterJBurke/droneserver/discussions
 - **Documentation:** See README.md and other guides
 - **Original Project:** https://github.com/ion-g-ion/MAVLinkMCP
 

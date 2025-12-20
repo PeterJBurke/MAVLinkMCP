@@ -154,8 +154,8 @@ The mission has completed in 4 monitor_flight calls. The drone has landed safely
 ### Installation
 
 ```bash
-git clone https://github.com/PeterJBurke/MAVLinkMCP.git
-cd MAVLinkMCP
+git clone https://github.com/PeterJBurke/droneserver.git
+cd droneserver
 uv sync
 cp .env.example .env
 # Edit .env with your drone's IP/port
@@ -164,7 +164,7 @@ cp .env.example .env
 ### Run the Server
 
 ```bash
-uv run src/server/mavlinkmcp.py
+uv run src/server/droneserver.py
 ```
 
 ---
@@ -230,8 +230,8 @@ MAVLINK_PROTOCOL=tcp  # tcp, udp, or serial
 
 ## 📞 Support
 
-- 🐛 [Report Issues](https://github.com/PeterJBurke/MAVLinkMCP/issues)
-- 💬 [Discussions](https://github.com/PeterJBurke/MAVLinkMCP/discussions)
+- 🐛 [Report Issues](https://github.com/PeterJBurke/droneserver/issues)
+- 💬 [Discussions](https://github.com/PeterJBurke/droneserver/discussions)
 - 📊 [Status & Roadmap](STATUS.md)
 
 ---

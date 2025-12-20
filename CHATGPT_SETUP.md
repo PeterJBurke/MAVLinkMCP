@@ -66,7 +66,7 @@ MCP_PORT=8080           # HTTP port for MCP server
 On your Ubuntu server:
 
 ```bash
-cd ~/MAVLinkMCP
+cd ~/droneserver
 
 # Make the script executable
 chmod +x start_http_server.sh
@@ -104,8 +104,8 @@ For production deployments, you can install the MCP server and ngrok as systemd 
 
 ```bash
 sudo ./install_services.sh
-sudo systemctl enable mavlinkmcp ngrok
-sudo systemctl start mavlinkmcp ngrok
+sudo systemctl enable droneserver ngrok
+sudo systemctl start droneserver ngrok
 ```
 
 This is recommended for persistent deployments. See **[SERVICE_SETUP.md](SERVICE_SETUP.md)** for complete instructions.
@@ -245,7 +245,7 @@ In the Agent Builder interface:
 
 **Connector Configuration:**
 ```
-Name: mavlinkmcp
+Name: droneserver
 Description: MAVLink drone control via MCP protocol
 Server URL: https://YOUR_NGROK_URL.ngrok-free.app/sse
 Type: MCP Server (SSE)
@@ -253,7 +253,7 @@ Type: MCP Server (SSE)
 
 **Example (use YOUR actual ngrok URL):**
 ```
-Name: mavlinkmcp
+Name: droneserver
 Description: AI-powered drone flight control
 Server URL: https://abc123xyz.ngrok-free.app/sse
 ```
@@ -262,7 +262,7 @@ Server URL: https://abc123xyz.ngrok-free.app/sse
 - Replace `abc123xyz.ngrok-free.app` with your actual ngrok URL from Step 3!
 - Use `/sse` endpoint, NOT `/mcp/sse` (the server defaults to `/sse`)
 - Must use HTTPS (ngrok provides this automatically)
-- Name should be lowercase, no spaces (e.g., `mavlinkmcp`)
+- Name should be lowercase, no spaces (e.g., `droneserver`)
 
 3. Click **Save** or **Add Tool**
 
@@ -388,7 +388,7 @@ All systems nominal - safe to fly!"
 2. **Check MCP server is running:**
    ```bash
    # On your server
-   ps aux | grep mavlinkmcp_http
+   ps aux | grep droneserver_http
    ```
 
 3. **Check ngrok tunnel is running:**
@@ -445,7 +445,7 @@ All systems nominal - safe to fly!"
 3. **Check both servers are running:**
    ```bash
    # Check MCP server
-   ps aux | grep mavlinkmcp_http
+   ps aux | grep droneserver_http
    
    # Check ngrok
    ps aux | grep ngrok
@@ -568,8 +568,8 @@ See [STATUS.md](STATUS.md) for current capabilities and development roadmap!
 
 ## Support
 
-- 🐛 [Report Issues](https://github.com/PeterJBurke/MAVLinkMCP/issues)
-- 💬 [Discussions](https://github.com/PeterJBurke/MAVLinkMCP/discussions)
+- 🐛 [Report Issues](https://github.com/PeterJBurke/droneserver/issues)
+- 💬 [Discussions](https://github.com/PeterJBurke/droneserver/discussions)
 - 📖 [Main README](README.md)
 - 📊 [Status & Roadmap](STATUS.md)
 - 🔧 [Service Setup](SERVICE_SETUP.md)

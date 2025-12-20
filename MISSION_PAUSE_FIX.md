@@ -231,7 +231,7 @@ If you were using `pause_mission()` and experiencing issues:
 
 ### Quick Fix (Minimal Changes)
 1. Update to v1.2.2 (pull latest code)
-2. Restart MCP server: `sudo systemctl restart mavlinkmcp`
+2. Restart MCP server: `sudo systemctl restart droneserver`
 3. Use same pause/resume workflow
 4. Check new diagnostic fields in responses
 
@@ -286,7 +286,7 @@ To verify these fixes work for your setup:
 
 3. **Check Flight Logs:**
    ```bash
-   sudo journalctl -u mavlinkmcp -f
+   sudo journalctl -u droneserver -f
    # Look for new diagnostic messages
    # Verify waypoint progress is shown
    # Confirm flight mode transitions
@@ -318,10 +318,10 @@ Check the response:
 
 Make sure you pulled the latest code:
 ```bash
-cd ~/MAVLinkMCP
+cd ~/droneserver
 git pull origin main
 uv sync
-sudo systemctl restart mavlinkmcp
+sudo systemctl restart droneserver
 ```
 
 ---

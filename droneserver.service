@@ -6,11 +6,11 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/root/MAVLinkMCP
+WorkingDirectory=/root/droneserver
 Environment="PATH=/root/.local/bin:/usr/local/bin:/usr/bin:/bin"
 
 # Start the MCP server
-ExecStart=/root/MAVLinkMCP/start_http_server.sh
+ExecStart=/root/droneserver/start_http_server.sh
 
 # Restart policy
 Restart=always
@@ -19,7 +19,7 @@ RestartSec=10
 # Logging
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=mavlinkmcp
+SyslogIdentifier=droneserver
 
 # Security hardening (optional)
 NoNewPrivileges=true

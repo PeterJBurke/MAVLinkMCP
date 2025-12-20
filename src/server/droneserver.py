@@ -18,7 +18,7 @@ env_path = Path(__file__).parent.parent.parent / '.env'
 load_dotenv(dotenv_path=env_path)
 
 # Configure logger with clean single-line format for systemd
-logger = logging.getLogger("MAVLinkMCP")
+logger = logging.getLogger("droneserver")
 logger.setLevel(logging.INFO)
 
 # Remove any existing handlers to avoid duplicates
@@ -34,7 +34,7 @@ logger.addHandler(console_handler)
 # Prevent propagation to avoid duplicate logs from parent loggers
 logger.propagate = False
 
-# Note: HTTP/framework log suppression is done in mavlinkmcp_http.py
+# Note: HTTP/framework log suppression is done in droneserver_http.py
 # (must be set right before server start to prevent uvicorn from overriding)
 
 # Ensure output is unbuffered for systemd journalctl
@@ -334,7 +334,7 @@ mcp = FastMCP("MAVLink MCP", lifespan=app_lifespan)
 async def initialize_drone_connection():
     """
     Initialize the global drone connection.
-    Call this from mavlinkmcp_http.py after the server starts.
+    Call this from droneserver_http.py after the server starts.
     """
     logger.info("=" * 60)
     logger.info("🚀 STARTUP: Initializing drone connection...")

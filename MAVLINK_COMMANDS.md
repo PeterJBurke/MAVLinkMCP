@@ -209,7 +209,7 @@ Complete reference of all MAVLink commands (MAV_CMD) and their implementation st
 ### Direct MAVLink Command Usage
 
 **MAV_CMD_NAV_WAYPOINT (16)**
-- **Location:** `src/server/mavlinkmcp.py` lines 678, 2272
+- **Location:** `src/server/droneserver.py` lines 678, 2272
 - **Usage:** Directly specified in `MissionItem` creation for mission upload
 - **Tools:** `upload_mission`, `initiate_mission`
 - **Code:**
@@ -334,7 +334,7 @@ The following are MAVLink messages (not commands) used for telemetry:
 - [MAVLink Common Message Set](https://mavlink.io/en/messages/common.html)
 - [MAVLink Command Enumeration](https://mavlink.io/en/messages/common.html#MAV_CMD)
 - [MAVSDK Documentation](https://mavsdk.mavlink.io/)
-- [MAVLink MCP GitHub](https://github.com/PeterJBurke/MAVLinkMCP)
+- [MAVLink MCP GitHub](https://github.com/PeterJBurke/droneserver)
 
 ---
 

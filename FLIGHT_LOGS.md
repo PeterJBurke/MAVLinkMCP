@@ -224,7 +224,7 @@ grep -E "goto_location|set_yaw|reposition" flight_logs/flight_*.log | wc -l
 - Look for error messages in the console/journalctl logs
 
 ### Missing log entries
-- Ensure you're using the updated version of `mavlinkmcp.py`
+- Ensure you're using the updated version of `droneserver.py`
 - Check if any errors occurred during command execution
 - Verify the tool calls were successful (not rejected)
 
@@ -324,7 +324,7 @@ Potential improvements for flight logging:
 
 For issues with flight logging:
 1. Check the main README.md for general troubleshooting
-2. Review the server logs (journalctl -u mavlinkmcp -f)
+2. Review the server logs (journalctl -u droneserver -f)
 3. Ensure you're on the latest version (v1.2.0+)
 4. Report issues on GitHub with sample log entries
 

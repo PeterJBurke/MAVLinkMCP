@@ -51,16 +51,16 @@ fi
 
 # Update service files with correct paths
 echo "📝 Updating service files with installation directory..."
-sed -i "s|WorkingDirectory=.*|WorkingDirectory=$INSTALL_DIR|g" mavlinkmcp.service
-sed -i "s|ExecStart=.*start_http_server.sh|ExecStart=$INSTALL_DIR/start_http_server.sh|g" mavlinkmcp.service
+sed -i "s|WorkingDirectory=.*|WorkingDirectory=$INSTALL_DIR|g" droneserver.service
+sed -i "s|ExecStart=.*start_http_server.sh|ExecStart=$INSTALL_DIR/start_http_server.sh|g" droneserver.service
 
 # Copy service files to systemd directory
 echo "📋 Copying service files to /etc/systemd/system/..."
-cp mavlinkmcp.service /etc/systemd/system/
+cp droneserver.service /etc/systemd/system/
 cp ngrok.service /etc/systemd/system/
 
 # Set correct permissions
-chmod 644 /etc/systemd/system/mavlinkmcp.service
+chmod 644 /etc/systemd/system/droneserver.service
 chmod 644 /etc/systemd/system/ngrok.service
 
 # Make start script executable
@@ -78,19 +78,19 @@ echo ""
 echo "📋 Next steps:"
 echo ""
 echo "1. Enable services to start on boot:"
-echo "   sudo systemctl enable mavlinkmcp"
+echo "   sudo systemctl enable droneserver"
 echo "   sudo systemctl enable ngrok"
 echo ""
 echo "2. Start the services:"
-echo "   sudo systemctl start mavlinkmcp"
+echo "   sudo systemctl start droneserver"
 echo "   sudo systemctl start ngrok"
 echo ""
 echo "3. Check service status:"
-echo "   sudo systemctl status mavlinkmcp"
+echo "   sudo systemctl status droneserver"
 echo "   sudo systemctl status ngrok"
 echo ""
 echo "4. View logs:"
-echo "   sudo journalctl -u mavlinkmcp -f"
+echo "   sudo journalctl -u droneserver -f"
 echo "   sudo journalctl -u ngrok -f"
 echo ""
 echo "5. Get ngrok URL:"

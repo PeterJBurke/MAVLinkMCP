@@ -1,6 +1,6 @@
 [Unit]
 Description=ngrok HTTPS Tunnel for MAVLink MCP Server
-After=network.target mavlinkmcp.service
+After=network.target droneserver.service
 Wants=network-online.target
 
 [Service]

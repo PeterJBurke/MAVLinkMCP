@@ -40,7 +40,7 @@ ngrok config add-authtoken YOUR_AUTHTOKEN
 Make sure your `.env` file is properly configured:
 
 ```bash
-cd ~/MAVLinkMCP
+cd ~/droneserver
 cp .env.example .env
 nano .env  # Edit with your drone connection details
 ```
@@ -52,7 +52,7 @@ nano .env  # Edit with your drone connection details
 ### Quick Install (Recommended)
 
 ```bash
-cd ~/MAVLinkMCP
+cd ~/droneserver
 sudo ./install_services.sh
 ```
 
@@ -70,28 +70,28 @@ The script will:
 ### Enable Services (Start on Boot)
 
 ```bash
-sudo systemctl enable mavlinkmcp
+sudo systemctl enable droneserver
 sudo systemctl enable ngrok
 ```
 
 ### Start Services
 
 ```bash
-sudo systemctl start mavlinkmcp
+sudo systemctl start droneserver
 sudo systemctl start ngrok
 ```
 
 ### Stop Services
 
 ```bash
-sudo systemctl stop mavlinkmcp
+sudo systemctl stop droneserver
 sudo systemctl stop ngrok
 ```
 
 ### Restart Services
 
 ```bash
-sudo systemctl restart mavlinkmcp
+sudo systemctl restart droneserver
 sudo systemctl restart ngrok
 ```
 
@@ -99,18 +99,18 @@ sudo systemctl restart ngrok
 
 ```bash
 # Check both services
-sudo systemctl status mavlinkmcp
+sudo systemctl status droneserver
 sudo systemctl status ngrok
 
 # Quick status check
-sudo systemctl is-active mavlinkmcp
+sudo systemctl is-active droneserver
 sudo systemctl is-active ngrok
 ```
 
 ### Disable Services (Prevent Auto-Start)
 
 ```bash
-sudo systemctl disable mavlinkmcp
+sudo systemctl disable droneserver
 sudo systemctl disable ngrok
 ```
 
@@ -122,36 +122,36 @@ sudo systemctl disable ngrok
 
 ```bash
 # MCP Server logs
-sudo journalctl -u mavlinkmcp -f
+sudo journalctl -u droneserver -f
 
 # ngrok logs
 sudo journalctl -u ngrok -f
 
 # Both services together
-sudo journalctl -u mavlinkmcp -u ngrok -f
+sudo journalctl -u droneserver -u ngrok -f
 ```
 
 ### Recent Logs
 
 ```bash
 # Last 100 lines
-sudo journalctl -u mavlinkmcp -n 100
+sudo journalctl -u droneserver -n 100
 
 # Last hour
-sudo journalctl -u mavlinkmcp --since "1 hour ago"
+sudo journalctl -u droneserver --since "1 hour ago"
 
 # Today's logs
-sudo journalctl -u mavlinkmcp --since today
+sudo journalctl -u droneserver --since today
 ```
 
 ### Filtered Logs
 
 ```bash
 # Only errors
-sudo journalctl -u mavlinkmcp -p err
+sudo journalctl -u droneserver -p err
 
 # Search for specific text
-sudo journalctl -u mavlinkmcp | grep "GPS LOCK"
+sudo journalctl -u droneserver | grep "GPS LOCK"
 ```
 
 ---
@@ -182,19 +182,19 @@ Open in browser: http://localhost:4040
 
 ```bash
 # Check detailed status
-sudo systemctl status mavlinkmcp -l
+sudo systemctl status droneserver -l
 
 # Check logs for errors
-sudo journalctl -u mavlinkmcp -n 50
+sudo journalctl -u droneserver -n 50
 ```
 
 ### Permission Errors
 
 ```bash
 # Make sure scripts are executable
-cd ~/MAVLinkMCP
+cd ~/droneserver
 chmod +x start_http_server.sh
-sudo systemctl restart mavlinkmcp
+sudo systemctl restart droneserver
 ```
 
 ### Port Already in Use
@@ -204,8 +204,8 @@ sudo systemctl restart mavlinkmcp
 sudo netstat -tulpn | grep 8080
 
 # Kill the process if needed
-sudo pkill -f mavlinkmcp_http
-sudo systemctl restart mavlinkmcp
+sudo pkill -f droneserver_http
+sudo systemctl restart droneserver
 ```
 
 ### ngrok Authentication Failed
@@ -228,10 +228,10 @@ ping YOUR_DRONE_IP
 telnet YOUR_DRONE_IP YOUR_DRONE_PORT
 
 # Verify .env configuration
-cat ~/MAVLinkMCP/.env
+cat ~/droneserver/.env
 
 # Check MCP server logs
-sudo journalctl -u mavlinkmcp -f
+sudo journalctl -u droneserver -f
 ```
 
 ---
@@ -241,11 +241,11 @@ sudo journalctl -u mavlinkmcp -f
 When you pull new code from GitHub:
 
 ```bash
-cd ~/MAVLinkMCP
+cd ~/droneserver
 git pull origin main
 
 # Restart the service to load new code
-sudo systemctl restart mavlinkmcp
+sudo systemctl restart droneserver
 ```
 
 No need to reinstall the service unless the service files themselves changed.
@@ -257,13 +257,13 @@ No need to reinstall the service unless the service files themselves changed.
 ### Customize Service Files
 
 Service files are located at:
-- `/etc/systemd/system/mavlinkmcp.service`
+- `/etc/systemd/system/droneserver.service`
 - `/etc/systemd/system/ngrok.service`
 
 After editing:
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl restart mavlinkmcp
+sudo systemctl restart droneserver
 sudo systemctl restart ngrok
 ```
 
@@ -271,7 +271,7 @@ sudo systemctl restart ngrok
 
 Edit your `.env` file:
 ```bash
-nano ~/MAVLinkMCP/.env
+nano ~/droneserver/.env
 # Change MCP_PORT=8080 to your desired port
 ```
 
@@ -297,7 +297,7 @@ User=your_username
 Then:
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl restart mavlinkmcp ngrok
+sudo systemctl restart droneserver ngrok
 ```
 
 ---
@@ -307,14 +307,14 @@ sudo systemctl restart mavlinkmcp ngrok
 ### Stop and Disable Services
 
 ```bash
-sudo systemctl stop mavlinkmcp ngrok
-sudo systemctl disable mavlinkmcp ngrok
+sudo systemctl stop droneserver ngrok
+sudo systemctl disable droneserver ngrok
 ```
 
 ### Remove Service Files
 
 ```bash
-sudo rm /etc/systemd/system/mavlinkmcp.service
+sudo rm /etc/systemd/system/droneserver.service
 sudo rm /etc/systemd/system/ngrok.service
 sudo systemctl daemon-reload
 ```
@@ -325,9 +325,9 @@ sudo systemctl daemon-reload
 
 After installation, verify everything works:
 
-- [ ] Services are enabled: `sudo systemctl is-enabled mavlinkmcp ngrok`
-- [ ] Services are running: `sudo systemctl is-active mavlinkmcp ngrok`
-- [ ] MCP server logs show "Drone is READY": `sudo journalctl -u mavlinkmcp -n 50`
+- [ ] Services are enabled: `sudo systemctl is-enabled droneserver ngrok`
+- [ ] Services are running: `sudo systemctl is-active droneserver ngrok`
+- [ ] MCP server logs show "Drone is READY": `sudo journalctl -u droneserver -n 50`
 - [ ] ngrok shows "Forwarding" URL: `sudo journalctl -u ngrok -n 20`
 - [ ] Can get ngrok URL: `curl http://localhost:4040/api/tunnels`
 - [ ] ChatGPT can connect to ngrok URL
@@ -341,24 +341,24 @@ After installation, verify everything works:
 sudo ./install_services.sh
 
 # Enable and start
-sudo systemctl enable mavlinkmcp ngrok
-sudo systemctl start mavlinkmcp ngrok
+sudo systemctl enable droneserver ngrok
+sudo systemctl start droneserver ngrok
 
 # Check status
-sudo systemctl status mavlinkmcp ngrok
+sudo systemctl status droneserver ngrok
 
 # View logs
-sudo journalctl -u mavlinkmcp -f
+sudo journalctl -u droneserver -f
 
 # Get ngrok URL
 curl -s http://localhost:4040/api/tunnels | grep -o 'https://[^"]*ngrok[^"]*'
 
 # Restart after code update
 git pull origin main
-sudo systemctl restart mavlinkmcp
+sudo systemctl restart droneserver
 
 # Stop services
-sudo systemctl stop mavlinkmcp ngrok
+sudo systemctl stop droneserver ngrok
 ```
 
 ---

@@ -12,18 +12,18 @@ Quick reference guide for updating the MAVLink MCP server running on your produc
 ```bash
 # Press Ctrl+C in the terminal where start_http_server.sh is running
 # Or if you can't find it:
-pkill -f "mavlinkmcp_http.py"
+pkill -f "droneserver_http.py"
 ```
 
 **If running as a service:**
 ```bash
-sudo systemctl stop mavlinkmcp
+sudo systemctl stop droneserver
 ```
 
 ### 2. Pull Latest Code
 
 ```bash
-cd ~/MAVLinkMCP
+cd ~/droneserver
 git pull origin main
 ```
 
@@ -42,7 +42,7 @@ uv sync
 
 **If running as a service:**
 ```bash
-sudo systemctl start mavlinkmcp
+sudo systemctl start droneserver
 ```
 
 ---
@@ -57,20 +57,20 @@ If you're currently running the server manually, upgrade to systemd services for
 ### Installation
 
 ```bash
-cd ~/MAVLinkMCP
+cd ~/droneserver
 
 # Stop any manually running servers
-pkill -f "mavlinkmcp_http.py"
+pkill -f "droneserver_http.py"
 
 # Install services
 sudo ./install_services.sh
 
 # Enable and start
-sudo systemctl enable mavlinkmcp ngrok
-sudo systemctl start mavlinkmcp ngrok
+sudo systemctl enable droneserver ngrok
+sudo systemctl start droneserver ngrok
 
 # Check status
-sudo systemctl status mavlinkmcp ngrok
+sudo systemctl status droneserver ngrok
 ```
 
 ### Get Your New ngrok URL
@@ -89,10 +89,10 @@ Update this URL in ChatGPT Developer Mode.
 
 ```bash
 # Manual mode
-ps aux | grep mavlinkmcp_http
+ps aux | grep droneserver_http
 
 # Service mode
-sudo systemctl status mavlinkmcp
+sudo systemctl status droneserver
 ```
 
 ### View Logs
@@ -102,25 +102,25 @@ sudo systemctl status mavlinkmcp
 # Check the terminal output
 
 # Service mode
-sudo journalctl -u mavlinkmcp -f
+sudo journalctl -u droneserver -f
 ```
 
 ### Restart After Update
 
 ```bash
 # Manual mode
-pkill -f "mavlinkmcp_http.py"
+pkill -f "droneserver_http.py"
 ./start_http_server.sh
 
 # Service mode
-sudo systemctl restart mavlinkmcp
+sudo systemctl restart droneserver
 ```
 
 ### Check Connection to Drone
 
 ```bash
 # From server logs
-sudo journalctl -u mavlinkmcp -n 50 | grep "Connected to drone"
+sudo journalctl -u droneserver -n 50 | grep "Connected to drone"
 
 # Test drone reachability
 ping YOUR_DRONE_IP
@@ -165,7 +165,7 @@ uv sync
 
 **Check logs:**
 ```bash
-sudo journalctl -u mavlinkmcp -n 50
+sudo journalctl -u droneserver -n 50
 ```
 
 **Common fixes:**
@@ -174,10 +174,10 @@ sudo journalctl -u mavlinkmcp -n 50
 sudo systemctl daemon-reload
 
 # Restart the service
-sudo systemctl restart mavlinkmcp
+sudo systemctl restart droneserver
 
 # Check permissions
-cd ~/MAVLinkMCP
+cd ~/droneserver
 chmod +x start_http_server.sh
 ```
 
@@ -204,13 +204,13 @@ Run these commands to verify everything is working:
 
 ```bash
 # 1. Check service status
-sudo systemctl status mavlinkmcp ngrok
+sudo systemctl status droneserver ngrok
 
 # 2. Verify server is listening
 sudo netstat -tulpn | grep 8080
 
 # 3. Check drone connection
-sudo journalctl -u mavlinkmcp -n 50 | grep -E "Connected to drone|GPS LOCK|READY"
+sudo journalctl -u droneserver -n 50 | grep -E "Connected to drone|GPS LOCK|READY"
 
 # 4. Get ngrok URL
 curl -s http://localhost:4040/api/tunnels | grep -o 'https://[^"]*ngrok[^"]*'

@@ -6,14 +6,14 @@ After pulling the latest code, restart the service:
 
 ```bash
 # Pull latest code
-cd ~/MAVLinkMCP
+cd ~/droneserver
 git pull origin main
 
 # Restart the MCP service
-sudo systemctl restart mavlinkmcp
+sudo systemctl restart droneserver
 
 # Check it started successfully
-sudo systemctl status mavlinkmcp
+sudo systemctl status droneserver
 ```
 
 ## 👀 View Live Logs
@@ -22,7 +22,7 @@ Now you can see **exactly** what's happening:
 
 ```bash
 # Watch live logs (Ctrl+C to stop)
-sudo journalctl -u mavlinkmcp -f
+sudo journalctl -u droneserver -f
 ```
 
 ## 📊 What You'll See
@@ -30,28 +30,28 @@ sudo journalctl -u mavlinkmcp -f
 ### Tool Calls
 Every time a tool is called, you'll see:
 ```
-2025-11-17 10:30:45 - MAVLinkMCP - INFO - 🔧 MCP TOOL: takeoff(takeoff_altitude=15.0)
+2025-11-17 10:30:45 - droneserver - INFO - 🔧 MCP TOOL: takeoff(takeoff_altitude=15.0)
 ```
 
 ### MAVLink Commands
 Every command sent to the drone:
 ```
-2025-11-17 10:30:45 - MAVLinkMCP - INFO - 📡 MAVLink → drone.action.set_takeoff_altitude(altitude=15.0)
-2025-11-17 10:30:45 - MAVLinkMCP - INFO - 📡 MAVLink → drone.action.takeoff()
+2025-11-17 10:30:45 - droneserver - INFO - 📡 MAVLink → drone.action.set_takeoff_altitude(altitude=15.0)
+2025-11-17 10:30:45 - droneserver - INFO - 📡 MAVLink → drone.action.takeoff()
 ```
 
 ### Flight Mode Warnings
 When modes change automatically:
 ```
-2025-11-17 10:30:50 - MAVLinkMCP - INFO - 🔧 MCP TOOL: initiate_mission(...)
-2025-11-17 10:30:50 - MAVLinkMCP - INFO - ⚠️  Mission starting - drone will switch to AUTO flight mode
-2025-11-17 10:30:50 - MAVLinkMCP - INFO - 📡 MAVLink → drone.mission.start_mission()
+2025-11-17 10:30:50 - droneserver - INFO - 🔧 MCP TOOL: initiate_mission(...)
+2025-11-17 10:30:50 - droneserver - INFO - ⚠️  Mission starting - drone will switch to AUTO flight mode
+2025-11-17 10:30:50 - droneserver - INFO - 📡 MAVLink → drone.mission.start_mission()
 ```
 
 ### hold_position (Stays in GUIDED)
 ```
-2025-11-17 10:31:00 - MAVLinkMCP - INFO - 🔧 MCP TOOL: hold_position()
-2025-11-17 10:31:00 - MAVLinkMCP - INFO - 📡 MAVLink → drone.action.goto_location(lat=33.6459, lon=-117.8427, alt=50.0)
+2025-11-17 10:31:00 - droneserver - INFO - 🔧 MCP TOOL: hold_position()
+2025-11-17 10:31:00 - droneserver - INFO - 📡 MAVLink → drone.action.goto_location(lat=33.6459, lon=-117.8427, alt=50.0)
 ```
 ✅ **No mode change - stays in GUIDED, no altitude drift!**
 
@@ -60,21 +60,21 @@ When modes change automatically:
 ### If logs still don't show:
 ```bash
 # Check service is actually running
-sudo systemctl status mavlinkmcp
+sudo systemctl status droneserver
 
 # Check for errors in startup
-sudo journalctl -u mavlinkmcp -n 100
+sudo journalctl -u droneserver -n 100
 
 # Restart and watch from the beginning
-sudo systemctl restart mavlinkmcp && sudo journalctl -u mavlinkmcp -f
+sudo systemctl restart droneserver && sudo journalctl -u droneserver -f
 ```
 
 ### If you see Python errors:
 ```bash
 # Make sure dependencies are updated
-cd ~/MAVLinkMCP
+cd ~/droneserver
 uv sync
-sudo systemctl restart mavlinkmcp
+sudo systemctl restart droneserver
 ```
 
 ## 🎯 What Changed

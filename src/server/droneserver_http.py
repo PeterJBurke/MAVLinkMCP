@@ -14,7 +14,7 @@ from pathlib import Path
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-# Configuration - must set BEFORE importing mavlinkmcp module
+# Configuration - must set BEFORE importing droneserver module
 PORT = int(os.environ.get("MCP_PORT", "8080"))
 HOST = os.environ.get("MCP_HOST", "0.0.0.0")
 MOUNT_PATH = os.environ.get("MCP_MOUNT_PATH", "/mcp")
@@ -25,7 +25,7 @@ env_path = Path(__file__).parent.parent.parent / '.env'
 load_dotenv(dotenv_path=env_path)
 
 # Now import after env vars are set
-from src.server.mavlinkmcp import logger
+from src.server.droneserver import logger
 
 if __name__ == "__main__":
     logger.info("=" * 60)
@@ -47,7 +47,7 @@ if __name__ == "__main__":
     logger.info("=" * 60)
     
     # Import the mcp instance with all tools registered
-    from src.server.mavlinkmcp import mcp
+    from src.server.droneserver import mcp
     import threading
     import time
     import requests

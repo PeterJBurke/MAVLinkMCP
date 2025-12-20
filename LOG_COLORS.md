@@ -61,54 +61,54 @@ Here's what a typical flight sequence looks like with color coding (clean, reada
 
 ### Watch live logs WITH colors:
 ```bash
-sudo journalctl -u mavlinkmcp -f --output=cat
+sudo journalctl -u droneserver -f --output=cat
 ```
 
 ### Watch live logs WITHOUT colors (but with systemd prefix):
 ```bash
-sudo journalctl -u mavlinkmcp -f
+sudo journalctl -u droneserver -f
 ```
 
 ### View last 50 lines with colors:
 ```bash
-sudo journalctl -u mavlinkmcp -n 50 --output=cat --no-pager
+sudo journalctl -u droneserver -n 50 --output=cat --no-pager
 ```
 
 ### View last 50 lines in less (scrollable, with colors):
 ```bash
-sudo journalctl -u mavlinkmcp -n 50 --output=cat | less -R
+sudo journalctl -u droneserver -n 50 --output=cat | less -R
 ```
 
 ### Filter by log type (with colors):
 
 **Only MAVLink commands (cyan):**
 ```bash
-sudo journalctl -u mavlinkmcp -f --output=cat | grep "📡 MAVLink"
+sudo journalctl -u droneserver -f --output=cat | grep "📡 MAVLink"
 ```
 
 **Only MCP tool calls (green):**
 ```bash
-sudo journalctl -u mavlinkmcp -f --output=cat | grep "🔧 MCP TOOL"
+sudo journalctl -u droneserver -f --output=cat | grep "🔧 MCP TOOL"
 ```
 
 **Only errors (red):**
 ```bash
-sudo journalctl -u mavlinkmcp -f --output=cat | grep "❌"
+sudo journalctl -u droneserver -f --output=cat | grep "❌"
 ```
 
 **Only warnings (yellow):**
 ```bash
-sudo journalctl -u mavlinkmcp -f --output=cat | grep "⚠️"
+sudo journalctl -u droneserver -f --output=cat | grep "⚠️"
 ```
 
 **Complete flight sequence (tool → MAVLink):**
 ```bash
-sudo journalctl -u mavlinkmcp -f --output=cat | grep -E "MCP TOOL|MAVLink"
+sudo journalctl -u droneserver -f --output=cat | grep -E "MCP TOOL|MAVLink"
 ```
 
 **Everything (tool + MAVLink + errors):**
 ```bash
-sudo journalctl -u mavlinkmcp -f --output=cat | grep -E "🔧|📡|❌"
+sudo journalctl -u droneserver -f --output=cat | grep -E "🔧|📡|❌"
 ```
 
 ---
@@ -187,12 +187,12 @@ Error jumps out in red - you see the problem instantly!
 To get the new colored logs:
 
 ```bash
-cd ~/MAVLinkMCP
+cd ~/droneserver
 git pull origin main
-sudo systemctl restart mavlinkmcp
+sudo systemctl restart droneserver
 
 # Watch logs WITH colors
-sudo journalctl -u mavlinkmcp -f --output=cat
+sudo journalctl -u droneserver -f --output=cat
 ```
 
 ---
@@ -205,14 +205,14 @@ sudo journalctl -u mavlinkmcp -f --output=cat
 
 **Solution:** Add `--output=cat` to your journalctl command:
 ```bash
-sudo journalctl -u mavlinkmcp -f --output=cat
+sudo journalctl -u droneserver -f --output=cat
 ```
 
 ### "How do I check if colors are actually in the logs?"
 
 Run this command to search for ANSI codes:
 ```bash
-sudo journalctl -u mavlinkmcp -n 20 | grep -E '\[0m|\[91m|\[92m|\[96m'
+sudo journalctl -u droneserver -n 20 | grep -E '\[0m|\[91m|\[92m|\[96m'
 ```
 
 If you see output with `[91m`, `[92m`, `[96m`, etc., then colors ARE present but journalctl is hiding them.
@@ -223,12 +223,12 @@ Unfortunately, journalctl's default output formats strip ANSI codes. You have tw
 
 **Option 1:** Colors without systemd prefix
 ```bash
-sudo journalctl -u mavlinkmcp -f --output=cat
+sudo journalctl -u droneserver -f --output=cat
 ```
 
 **Option 2:** Systemd prefix without colors
 ```bash
-sudo journalctl -u mavlinkmcp -f
+sudo journalctl -u droneserver -f
 ```
 
 Our logs include their own timestamp (`HH:MM:SS`), so `--output=cat` is recommended for best readability.

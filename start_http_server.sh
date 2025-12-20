@@ -50,5 +50,5 @@ echo "==========================================================="
 echo ""
 
 # Run the HTTP server
-uv run python src/server/mavlinkmcp_http.py
+uv run python src/server/droneserver_http.py
 

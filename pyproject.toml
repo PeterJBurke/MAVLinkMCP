@@ -1,5 +1,5 @@
 [project]
-name = "mavlinkmcp"
+name = "droneserver"
 version = "0.2.0"
 description = "MAVLink MCP Server - AI-powered drone control via Model Context Protocol"
 authors = [
@@ -17,8 +17,8 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/PeterJBurke/MAVLinkMCP"
-Repository = "https://github.com/PeterJBurke/MAVLinkMCP"
+Homepage = "https://github.com/PeterJBurke/droneserver"
+Repository = "https://github.com/PeterJBurke/droneserver"
 "Original Repository" = "https://github.com/ion-g-ion/MAVLinkMCP"
 
 [build-system]
