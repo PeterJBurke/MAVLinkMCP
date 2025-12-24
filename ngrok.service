@@ -9,7 +9,8 @@ User=root
 WorkingDirectory=/root
 
 # Start ngrok tunnel on port 8080
-ExecStart=/usr/local/bin/ngrok http 8080 --log=stdout
+# --host-header rewrites Host header to localhost:8080 (required for MCP SDK 1.23+)
+ExecStart=/usr/local/bin/ngrok http 8080 --host-header="localhost:8080" --log=stdout
 
 # Restart policy
 Restart=always
