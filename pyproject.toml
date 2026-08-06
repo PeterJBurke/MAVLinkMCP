@@ -66,6 +66,7 @@ python_functions = ["test_*"]
 addopts = "-v --tb=short -m 'not sitl'"
 markers = [
     "sitl: integration test requiring the local docker ArduPilot SITL (see tests/integration/README.md)",
+    "px4: requires a PX4 SITL - auto-skipped until llmuavpx4 exists; ArduPilot result recorded in docs/firmware_notes.csv",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -87,10 +88,14 @@ select = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-# v1 tool bodies are kept byte-identical in this refactor. Bare excepts (E722)
-# also catch asyncio.CancelledError, so "fixing" them to `except Exception:`
-# would change cancellation behavior - deferred to the Phase 2/3 rewrite.
-"src/droneserver/tools/*" = ["E722", "F841"]
+# v1 tool bodies are kept byte-identical from the Phase 6 refactor. Bare
+# excepts (E722) also catch asyncio.CancelledError, so "fixing" them to
+# `except Exception:` would change cancellation behavior - deferred to the
+# per-tool Phase 2 rewrite. New v2 tool modules get no exemption.
+"src/droneserver/tools/action.py" = ["E722", "F841"]
+"src/droneserver/tools/telemetry.py" = ["E722", "F841"]
+"src/droneserver/tools/mission.py" = ["E722", "F841"]
+"src/droneserver/tools/param.py" = ["E722", "F841"]
 
 [tool.mypy]
 # Permissive baseline; per-module strictness will be ratcheted up module by
@@ -108,5 +113,11 @@ warn_unused_configs = true
 # changes behavior/signatures, so it is deferred to the Phase 2 tool rewrite.
 # (20 findings as of the refactor: 18x missing-return in `async for` handlers,
 # 2x int-reassigned-to-float. Revisit per tool during Phase 2.)
-module = "droneserver.tools.*"
+# Scoped to the four v1 modules only - new v2 tool modules are fully checked.
+module = [
+    "droneserver.tools.action",
+    "droneserver.tools.telemetry",
+    "droneserver.tools.mission",
+    "droneserver.tools.param",
+]
 ignore_errors = true

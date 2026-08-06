@@ -1,4 +1,5 @@
-"""Smoke tests: the refactored package must expose exactly the 45 v1 tools.
+"""Smoke tests: the package must expose exactly the expected tool inventory
+(45 v1 tools + the v2 additions).
 
 No drone/SITL connection is made - only server-object introspection.
 """
@@ -55,12 +56,28 @@ V1_TOOLS = {
     "upload_mission",
 }
 
+# v2 additions (see docs/tool_groups.md)
+V2_TOOLS = {
+    "upload_geofence",
+    "clear_geofence",
+    "offboard_control",
+    "offboard_set_position_ned",
+    "offboard_set_position_global",
+    "offboard_set_velocity_ned",
+    "offboard_set_velocity_body",
+    "offboard_set_attitude",
+    "offboard_set_acceleration_ned",
+    "offboard_set_actuator_control",
+}
 
-async def test_all_45_v1_tools_registered():
+EXPECTED_TOOLS = V1_TOOLS | V2_TOOLS
+
+
+async def test_expected_tool_inventory_registered():
     tools = await mcp.list_tools()
     names = {t.name for t in tools}
-    assert names == V1_TOOLS
-    assert len(tools) == 45
+    assert names == EXPECTED_TOOLS
+    assert len(tools) == len(EXPECTED_TOOLS) == 55
 
 
 async def test_tools_have_descriptions():
