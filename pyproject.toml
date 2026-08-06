@@ -49,6 +49,7 @@ build-backend = "hatchling.build"
 dev = [
     "mypy>=1.10.0",
     "pre-commit>=3.7.0",
+    "pymavlink>=2.4.40",
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
     "pytest-cov>=4.1.0",
@@ -60,7 +61,12 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
-addopts = "-v --tb=short"
+# sitl-marked integration tests are excluded by default (and in CI);
+# run them explicitly: `uv run pytest -m sitl tests/integration`
+addopts = "-v --tb=short -m 'not sitl'"
+markers = [
+    "sitl: integration test requiring the local docker ArduPilot SITL (see tests/integration/README.md)",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/droneserver"]
