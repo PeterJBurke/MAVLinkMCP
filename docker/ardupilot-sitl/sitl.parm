@@ -12,6 +12,11 @@ SR0_EXTRA2 4
 SR0_EXTRA3 2
 SR0_RAW_SENS 2
 SR0_RC_CHAN 2
+# Simulated gimbal mount (servo type). Makes the MAVLink gimbal protocol v2
+# (GIMBAL_MANAGER/GIMBAL_DEVICE) available so the gimbal tools are testable.
+MNT1_TYPE 1
+MNT1_PITCH_MIN -90
+MNT1_PITCH_MAX 25
 SR1_EXT_STAT 2
 SR1_POSITION 4
 SR1_EXTRA1 4
