@@ -1,4 +1,4 @@
-plugin,plugin_class,method,kind,signature,description,implemented_in_v1,status,priority,firmware_notes
+plugin,plugin_class,method,kind,signature,description,implemented_by_tools,status,priority,firmware_notes
 action,Action,arm,async call,(),Send command to arm the drone.,arm_drone,implemented,,
 action,Action,arm_force,async call,(),Send command to force-arm the drone without any checks.,,missing,,
 action,Action,disarm,async call,(),Send command to disarm the drone.,disarm_drone,implemented,,
@@ -136,8 +136,8 @@ ftp,Ftp,remove_file,async call,(remote_file_path),Removes a remote file.,,missin
 ftp,Ftp,rename,async call,"(remote_from_path, remote_to_path)",Renames a remote file or remote directory.,,missing,P2,
 ftp,Ftp,set_target_compid,async call,(compid),Set target component ID. By default it is the autopilot.,,missing,P2,
 ftp,Ftp,upload,stream (async generator),"(local_file_path, remote_dir)",Uploads local file to remote directory.,,missing,P2,
-geofence,Geofence,clear_geofence,async call,(),Clear all geofences saved on the vehicle.,,missing,P0,
-geofence,Geofence,upload_geofence,async call,(geofence_data),Upload geofences.,,missing,P0,
+geofence,Geofence,clear_geofence,async call,(),Clear all geofences saved on the vehicle.,clear_geofence,implemented,P0,ArduCopter 4.5.7 SITL: works. PX4: untested (SITL pending).
+geofence,Geofence,upload_geofence,async call,(geofence_data),Upload geofences.,upload_geofence,implemented,P0,ArduCopter 4.5.7 SITL: works - polygon and circle (inclusion) uploads accepted via fence mission protocol; enforcement additionally requires FENCE_ENABLE=1. PX4: untested (SITL pending).
 gimbal,Gimbal,attitude,stream (async generator),(),Subscribe to attitude updates.,,missing,P1,
 gimbal,Gimbal,control_status,stream (async generator),(),Subscribe to control status updates.,,missing,P1,
 gimbal,Gimbal,get_attitude,async call,(gimbal_id),Get attitude for specific gimbal.,,missing,P1,
@@ -199,19 +199,19 @@ mission_raw_server,MissionRawServer,set_current_item_complete,async call,(),Set 
 mocap,Mocap,set_attitude_position_mocap,async call,(attitude_position_mocap),Send motion capture attitude and position.,,missing,,
 mocap,Mocap,set_odometry,async call,(odometry),Send odometry information with an external interface.,,missing,,
 mocap,Mocap,set_vision_position_estimate,async call,(vision_position_estimate),Send Global position/attitude estimate from a vision source.,,missing,,
-offboard,Offboard,is_active,async call,(),Check if offboard control is active.,,missing,P0,
-offboard,Offboard,set_acceleration_ned,async call,(acceleration_ned),Set the acceleration in NED coordinates.,,missing,P0,
-offboard,Offboard,set_actuator_control,async call,(actuator_control),Set direct actuator control values to groups #0 and #1.,,missing,P0,
-offboard,Offboard,set_attitude,async call,(attitude),"Set the attitude in terms of roll, pitch and yaw in degrees with thrust.",,missing,P0,
-offboard,Offboard,set_attitude_rate,async call,(attitude_rate),"Set the attitude rate in terms of pitch, roll and yaw angular rate along with thrust.",,missing,P0,
-offboard,Offboard,set_position_global,async call,(position_global_yaw),"Set the position in Global coordinates (latitude, longitude, altitude) and yaw",,missing,P0,
-offboard,Offboard,set_position_ned,async call,(position_ned_yaw),Set the position in NED coordinates and yaw.,,missing,P0,
-offboard,Offboard,set_position_velocity_acceleration_ned,async call,"(position_ned_yaw, velocity_ned_yaw, acceleration_ned)","Set the position, velocity and acceleration in NED coordinates, with velocity and acceleration used as feed-forward.",,missing,P0,
-offboard,Offboard,set_position_velocity_ned,async call,"(position_ned_yaw, velocity_ned_yaw)","Set the position in NED coordinates, with the velocity to be used as feed-forward.",,missing,P0,
-offboard,Offboard,set_velocity_body,async call,(velocity_body_yawspeed),Set the velocity in body coordinates and yaw angular rate. Not available for fixed-wing aircraft.,,missing,P0,
-offboard,Offboard,set_velocity_ned,async call,(velocity_ned_yaw),Set the velocity in NED coordinates and yaw. Not available for fixed-wing aircraft.,,missing,P0,
-offboard,Offboard,start,async call,(),Start offboard control.,,missing,P0,
-offboard,Offboard,stop,async call,(),Stop offboard control.,,missing,P0,
+offboard,Offboard,is_active,async call,(),Check if offboard control is active.,offboard_control,implemented,P0,ArduCopter 4.5.7 SITL: works - tracks start/stop correctly. PX4: untested (SITL pending).
+offboard,Offboard,set_acceleration_ned,async call,(acceleration_ned),Set the acceleration in NED coordinates.,offboard_set_acceleration_ned,implemented,P0,ArduCopter 4.5.7 SITL: accepted (ArduCopter GUIDED supports acceleration targets since 4.3); effect not quantitatively verified. PX4: untested (SITL pending).
+offboard,Offboard,set_actuator_control,async call,(actuator_control),Set direct actuator control values to groups #0 and #1.,offboard_set_actuator_control,implemented,P0,ArduCopter 4.5.7 SITL: RPC accepted but inert - ArduPilot has no SET_ACTUATOR_CONTROL_TARGET handler; treat as PX4-only. PX4: untested (SITL pending).
+offboard,Offboard,set_attitude,async call,(attitude),"Set the attitude in terms of roll, pitch and yaw in degrees with thrust.",offboard_set_attitude,implemented,P0,"ArduCopter 4.5.7 SITL: works - commanded pitch -5 deg, telemetry confirmed -5.0 deg. PX4: untested (SITL pending)."
+offboard,Offboard,set_attitude_rate,async call,(attitude_rate),"Set the attitude rate in terms of pitch, roll and yaw angular rate along with thrust.",offboard_set_attitude,implemented,P0,ArduCopter 4.5.7 SITL: accepted; rate tracking not quantitatively verified. PX4: untested (SITL pending).
+offboard,Offboard,set_position_global,async call,(position_global_yaw),"Set the position in Global coordinates (latitude, longitude, altitude) and yaw",offboard_set_position_global,implemented,P0,ArduCopter 4.5.7 SITL: accepted; vehicle response not independently verified. PX4: untested (SITL pending).
+offboard,Offboard,set_position_ned,async call,(position_ned_yaw),Set the position in NED coordinates and yaw.,offboard_set_position_ned,implemented,P0,ArduCopter 4.5.7 SITL: works - altitude target reached and held (verified 15 m). PX4: untested (SITL pending).
+offboard,Offboard,set_position_velocity_acceleration_ned,async call,"(position_ned_yaw, velocity_ned_yaw, acceleration_ned)","Set the position, velocity and acceleration in NED coordinates, with velocity and acceleration used as feed-forward.",offboard_set_position_ned,implemented,P0,ArduCopter 4.5.7 SITL: accepted; feed-forward effect not independently verified. PX4: untested (SITL pending).
+offboard,Offboard,set_position_velocity_ned,async call,"(position_ned_yaw, velocity_ned_yaw)","Set the position in NED coordinates, with the velocity to be used as feed-forward.",offboard_set_position_ned,implemented,P0,ArduCopter 4.5.7 SITL: accepted; feed-forward effect not independently verified. PX4: untested (SITL pending).
+offboard,Offboard,set_velocity_body,async call,(velocity_body_yawspeed),Set the velocity in body coordinates and yaw angular rate. Not available for fixed-wing aircraft.,offboard_set_velocity_body,implemented,P0,"ArduCopter 4.5.7 SITL: accepted in flight, motion consistent; not quantitatively verified. PX4: untested (SITL pending)."
+offboard,Offboard,set_velocity_ned,async call,(velocity_ned_yaw),Set the velocity in NED coordinates and yaw. Not available for fixed-wing aircraft.,"offboard_set_velocity_ned, [infra: _make_brake]",implemented,P0,"ArduCopter 4.5.7 SITL: works - commanded 2 m/s north, telemetry confirmed 2.0 m/s. PX4: untested (SITL pending)."
+offboard,Offboard,start,async call,(),Start offboard control.,offboard_control,implemented,P0,ArduCopter 4.5.7 SITL: works - MavSDK maps offboard to GUIDED mode. PX4: untested (SITL pending).
+offboard,Offboard,stop,async call,(),Stop offboard control.,offboard_control,implemented,P0,ArduCopter 4.5.7 SITL: works - vehicle switches to Loiter (reported as HOLD). PX4: untested (SITL pending).
 param,Param,get_all_params,async call,(),Get all parameters.,list_parameters,implemented,,
 param,Param,get_param_custom,async call,(name),Get a custom parameter.,,missing,,
 param,Param,get_param_float,async call,(name),Get a float parameter.,"get_parameter, set_parameter",implemented,,
@@ -249,7 +249,7 @@ telemetry,Telemetry,flight_mode,stream (async generator),(),Subscribe to 'flight
 telemetry,Telemetry,get_gps_global_origin,async call,(),Get the GPS location of where the estimator has been initialized.,,missing,,
 telemetry,Telemetry,gps_info,stream (async generator),(),Subscribe to 'GPS info' updates.,get_gps_info,implemented,,
 telemetry,Telemetry,ground_truth,stream (async generator),(),Subscribe to 'ground truth' updates.,,missing,,
-telemetry,Telemetry,heading,stream (async generator),(),Subscribe to 'Heading' updates.,get_heading,implemented,,
+telemetry,Telemetry,heading,stream (async generator),(),Subscribe to 'Heading' updates.,"get_heading, [infra: _make_brake]",implemented,,
 telemetry,Telemetry,health,stream (async generator),(),Subscribe to 'health' updates.,"get_health, [infra: connect_drone_background]",implemented,,
 telemetry,Telemetry,health_all_ok,stream (async generator),(),Subscribe to 'HealthAllOk' updates.,get_health_all_ok,implemented,,
 telemetry,Telemetry,home,stream (async generator),(),Subscribe to 'home position' updates.,get_home_position,implemented,,
