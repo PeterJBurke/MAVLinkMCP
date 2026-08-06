@@ -209,7 +209,7 @@ Complete reference of all MAVLink commands (MAV_CMD) and their implementation st
 ### Direct MAVLink Command Usage
 
 **MAV_CMD_NAV_WAYPOINT (16)**
-- **Location:** `src/server/droneserver.py` lines 678, 2272
+- **Location:** `src/droneserver/tools/` (see `get_imu`, `get_attitude`)
 - **Usage:** Directly specified in `MissionItem` creation for mission upload
 - **Tools:** `upload_mission`, `initiate_mission`
 - **Code:**

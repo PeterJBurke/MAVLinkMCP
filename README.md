@@ -164,7 +164,7 @@ cp .env.example .env
 ### Run the Server
 
 ```bash
-uv run src/server/droneserver.py
+uv run python -m droneserver.server --transport stdio
 ```
 
 ---

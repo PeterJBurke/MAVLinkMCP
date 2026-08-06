@@ -34,4 +34,4 @@ mcp:
     servers:
         mavlink_mcp:
             command: "python"
-            args: ["src/server/droneserver.py"]
+            args: ["-m", "droneserver.server", "--transport", "stdio"]

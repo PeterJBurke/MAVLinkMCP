@@ -368,7 +368,7 @@ Want to help implement more MAVSDK methods? Contributions welcome!
 
 1. Pick a method from the "not implemented" list
 2. Check the [MAVSDK Python docs](https://mavsdk.mavlink.io/)
-3. Add the tool to `src/server/droneserver.py`
+3. Add the tool to the matching module in `src/droneserver/tools/`
 4. Test with SITL
 5. Submit a PR
 
