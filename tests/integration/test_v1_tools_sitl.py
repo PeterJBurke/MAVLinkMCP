@@ -16,7 +16,9 @@ pytestmark = pytest.mark.sitl
 
 
 def test_tool_inventory_over_the_wire(drone_tools):
-    assert len(drone_tools.list_tools()) == 45
+    from tests.test_tool_registration import EXPECTED_TOOLS
+
+    assert set(drone_tools.list_tools()) == EXPECTED_TOOLS
 
 
 def test_get_position_reports_sitl_home(drone_tools):

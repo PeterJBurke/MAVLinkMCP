@@ -24,6 +24,18 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DOCKERFILE_DIR = REPO_ROOT / "docker" / "ardupilot-sitl"
+
+
+def pytest_collection_modifyitems(config, items):
+    """Auto-skip @pytest.mark.px4 tests until the PX4 SITL (llmuavpx4) exists."""
+    skip_px4 = pytest.mark.skip(
+        reason="PX4 SITL not yet available (llmuavpx4 pending); ArduPilot result in docs/firmware_notes.csv"
+    )
+    for item in items:
+        if "px4" in item.keywords:
+            item.add_marker(skip_px4)
+
+
 IMAGE_TAG = "droneserver-sitl-arducopter:4.5.7"
 
 # Must match SITL_HOME in docker/ardupilot-sitl/Dockerfile (CMAC test field).
