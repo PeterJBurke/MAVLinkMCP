@@ -1,0 +1,21 @@
+# Extra defaults layered on top of copter.parm (see Dockerfile --defaults list).
+#
+# Stream-rate defaults (Hz) for SERIAL0 (droneserver/MavSDK) and SERIAL1
+# (test-harness readiness probe). A raw SITL binary - unlike a sim_vehicle.py
+# setup - has no MAVProxy attached to request telemetry streams, so without
+# these the autopilot never sends GLOBAL_POSITION_INT, SYS_STATUS, etc., and
+# MavSDK telemetry subscriptions block forever.
+SR0_EXT_STAT 2
+SR0_POSITION 4
+SR0_EXTRA1 4
+SR0_EXTRA2 4
+SR0_EXTRA3 2
+SR0_RAW_SENS 2
+SR0_RC_CHAN 2
+SR1_EXT_STAT 2
+SR1_POSITION 4
+SR1_EXTRA1 4
+SR1_EXTRA2 4
+SR1_EXTRA3 2
+SR1_RAW_SENS 2
+SR1_RC_CHAN 2
