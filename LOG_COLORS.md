@@ -141,11 +141,11 @@ sudo journalctl -u droneserver -f --output=cat | grep -E "🔧|📡|❌"
 **ANSI Color Codes Used:**
 ```python
 class LogColors:
-    RESET = '\033[0m'
-    RED = '\033[91m'      # Errors
-    GREEN = '\033[92m'    # Tool calls
-    YELLOW = '\033[93m'   # Warnings
-    CYAN = '\033[96m'     # MAVLink commands
+    RESET = "\033[0m"
+    RED = "\033[91m"  # Errors
+    GREEN = "\033[92m"  # Tool calls
+    YELLOW = "\033[93m"  # Warnings
+    CYAN = "\033[96m"  # MAVLink commands
 ```
 
 **Applied to:**

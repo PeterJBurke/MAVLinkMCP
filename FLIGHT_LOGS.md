@@ -261,24 +261,22 @@ Python example:
 import re
 from datetime import datetime
 
+
 def parse_flight_log(log_file):
     entries = []
-    with open(log_file, 'r') as f:
+    with open(log_file, "r") as f:
         for line in f:
-            match = re.match(r'\[(\d{2}:\d{2}:\d{2}\.\d{3})\] (MCP_TOOL|MAVLink_CMD): (.+)', line)
+            match = re.match(r"\[(\d{2}:\d{2}:\d{2}\.\d{3})\] (MCP_TOOL|MAVLink_CMD): (.+)", line)
             if match:
                 time_str, entry_type, command = match.groups()
-                entries.append({
-                    'time': time_str,
-                    'type': entry_type,
-                    'command': command
-                })
+                entries.append({"time": time_str, "type": entry_type, "command": command})
     return entries
 
+
 # Usage
-entries = parse_flight_log('flight_logs/flight_20250117_143025.log')
-mcp_tools = [e for e in entries if e['type'] == 'MCP_TOOL']
-mavlink_cmds = [e for e in entries if e['type'] == 'MAVLink_CMD']
+entries = parse_flight_log("flight_logs/flight_20250117_143025.log")
+mcp_tools = [e for e in entries if e["type"] == "MCP_TOOL"]
+mavlink_cmds = [e for e in entries if e["type"] == "MAVLink_CMD"]
 
 print(f"Total MCP tool calls: {len(mcp_tools)}")
 print(f"Total MAVLink commands: {len(mavlink_cmds)}")

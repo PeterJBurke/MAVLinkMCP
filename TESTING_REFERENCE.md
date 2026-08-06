@@ -85,8 +85,8 @@ For inspection tasks requiring < 1m accuracy:
 **Correct Format:**
 ```python
 waypoints = [
-  {"latitude_deg": 33.6459, "longitude_deg": -117.8427, "relative_altitude_m": 15},
-  {"latitude_deg": 33.6460, "longitude_deg": -117.8427, "relative_altitude_m": 20}
+    {"latitude_deg": 33.6459, "longitude_deg": -117.8427, "relative_altitude_m": 15},
+    {"latitude_deg": 33.6460, "longitude_deg": -117.8427, "relative_altitude_m": 20},
 ]
 ```
 
@@ -410,19 +410,19 @@ Common mission patterns:
 **Square:**
 ```python
 waypoints = [
-  {"latitude_deg": lat, "longitude_deg": lon, "relative_altitude_m": 15},
-  {"latitude_deg": lat + 0.0001, "longitude_deg": lon, "relative_altitude_m": 15},
-  {"latitude_deg": lat + 0.0001, "longitude_deg": lon + 0.0001, "relative_altitude_m": 15},
-  {"latitude_deg": lat, "longitude_deg": lon + 0.0001, "relative_altitude_m": 15}
+    {"latitude_deg": lat, "longitude_deg": lon, "relative_altitude_m": 15},
+    {"latitude_deg": lat + 0.0001, "longitude_deg": lon, "relative_altitude_m": 15},
+    {"latitude_deg": lat + 0.0001, "longitude_deg": lon + 0.0001, "relative_altitude_m": 15},
+    {"latitude_deg": lat, "longitude_deg": lon + 0.0001, "relative_altitude_m": 15},
 ]
 ```
 
 **Vertical Stack (same position, different altitudes):**
 ```python
 waypoints = [
-  {"latitude_deg": lat, "longitude_deg": lon, "relative_altitude_m": 10},
-  {"latitude_deg": lat, "longitude_deg": lon, "relative_altitude_m": 20},
-  {"latitude_deg": lat, "longitude_deg": lon, "relative_altitude_m": 30}
+    {"latitude_deg": lat, "longitude_deg": lon, "relative_altitude_m": 10},
+    {"latitude_deg": lat, "longitude_deg": lon, "relative_altitude_m": 20},
+    {"latitude_deg": lat, "longitude_deg": lon, "relative_altitude_m": 30},
 ]
 ```
 
@@ -430,15 +430,15 @@ waypoints = [
 ```python
 # 3 parallel lines, 20m apart
 waypoints = [
-  # Line 1
-  {"latitude_deg": lat, "longitude_deg": lon, "relative_altitude_m": 15},
-  {"latitude_deg": lat + 0.0009, "longitude_deg": lon, "relative_altitude_m": 15},
-  # Line 2
-  {"latitude_deg": lat + 0.0009, "longitude_deg": lon + 0.00022, "relative_altitude_m": 15},
-  {"latitude_deg": lat, "longitude_deg": lon + 0.00022, "relative_altitude_m": 15},
-  # Line 3
-  {"latitude_deg": lat, "longitude_deg": lon + 0.00044, "relative_altitude_m": 15},
-  {"latitude_deg": lat + 0.0009, "longitude_deg": lon + 0.00044, "relative_altitude_m": 15}
+    # Line 1
+    {"latitude_deg": lat, "longitude_deg": lon, "relative_altitude_m": 15},
+    {"latitude_deg": lat + 0.0009, "longitude_deg": lon, "relative_altitude_m": 15},
+    # Line 2
+    {"latitude_deg": lat + 0.0009, "longitude_deg": lon + 0.00022, "relative_altitude_m": 15},
+    {"latitude_deg": lat, "longitude_deg": lon + 0.00022, "relative_altitude_m": 15},
+    # Line 3
+    {"latitude_deg": lat, "longitude_deg": lon + 0.00044, "relative_altitude_m": 15},
+    {"latitude_deg": lat + 0.0009, "longitude_deg": lon + 0.00044, "relative_altitude_m": 15},
 ]
 ```
 

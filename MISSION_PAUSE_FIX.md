@@ -68,7 +68,7 @@ result = hold_mission_position()
 
 # To resume the mission:
 # Option 1: Continue from where you paused
-set_current_waypoint(waypoint_index=result['was_at_waypoint'])
+set_current_waypoint(waypoint_index=result["was_at_waypoint"])
 resume_mission()
 
 # Option 2: Start a new mission
@@ -242,8 +242,8 @@ If you were using `pause_mission()` and experiencing issues:
    ```python
    # Get the waypoint from hold_mission_position response
    result = hold_mission_position()
-   waypoint = result['was_at_waypoint']
-   
+   waypoint = result["was_at_waypoint"]
+
    # Resume from that waypoint
    set_current_waypoint(waypoint_index=waypoint)
    resume_mission()

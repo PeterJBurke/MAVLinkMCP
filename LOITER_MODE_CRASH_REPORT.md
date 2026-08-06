@@ -162,7 +162,7 @@ LOITER mode is designed for **manual RC piloting**, not autonomous MAVLink contr
 async def pause_mission(ctx: Context) -> dict:
     """Pause the currently executing mission."""
     await drone.mission.pause_mission()  # ← Enters LOITER mode
-    return {"status": "success"}         # ← CRASH RISK!
+    return {"status": "success"}  # ← CRASH RISK!
 ```
 
 **After (SAFE):**
@@ -170,10 +170,8 @@ async def pause_mission(ctx: Context) -> dict:
 async def pause_mission(ctx: Context) -> dict:
     """⛔ DEPRECATED - DO NOT USE ⛔"""
     logger.error("pause_mission() is UNSAFE - causes crashes!")
-    return {
-        "status": "failed",
-        "error": "Use hold_mission_position() instead"
-    }
+    return {"status": "failed", "error": "Use hold_mission_position() instead"}
+
 
 async def hold_mission_position(ctx: Context) -> dict:
     """Safe alternative - stays in GUIDED mode."""
@@ -184,7 +182,7 @@ async def hold_mission_position(ctx: Context) -> dict:
         current_position.lat,
         current_position.lon,
         current_position.alt,
-        float('nan')  # Don't change yaw
+        float("nan"),  # Don't change yaw
     )
     return {"status": "success", "mode": "GUIDED"}
 ```
@@ -207,7 +205,7 @@ resume_mission()
 
 # NEW (SAFE):
 result = hold_mission_position()  # Saves waypoint info
-waypoint = result['was_at_waypoint']
+waypoint = result["was_at_waypoint"]
 # ... do inspection or manual navigation ...
 set_current_waypoint(waypoint_index=waypoint)
 resume_mission()
