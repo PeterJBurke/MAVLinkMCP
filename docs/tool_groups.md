@@ -108,3 +108,87 @@ differ — a wrong-frame guess is a flight-safety error, not a retry.
 observations, including the accepted-but-inert `set_actuator_control`, are in
 the coverage matrix `firmware_notes` column (source:
 `docs/firmware_notes.csv`). PX4 verification is pending the PX4 SITL.
+
+## camera (v2, 6 tools)
+
+Covers 31/36 MavSDK `camera` methods; the remaining 5 are subscription
+streams that duplicate one-shot getters (marked candidate-N/A, see below).
+
+| Tool | MavSDK methods |
+|---|---|
+| `list_cameras()` | `camera_list` (stream, read once) |
+| `camera_capture(component_id, action, interval_s?, stream_id?)` | `take_photo`, `start/stop_photo_interval`, `start/stop_video`, `start/stop_video_streaming`, `get_video_stream_info`, `capture_info` (stream, read once) |
+| `camera_settings(component_id, action, ...)` | `get/set_mode`, `get_current_settings`, `get_possible_setting_options`, `get/set_setting`, `reset_settings` |
+| `camera_storage(component_id, action, ...)` | `get_storage`, `format_storage`, `list_photos` |
+| `camera_zoom_focus(component_id, control, action, value?)` | `zoom_in_start`, `zoom_out_start`, `zoom_stop`, `zoom_range`, `focus_in_start`, `focus_out_start`, `focus_stop`, `focus_range` |
+| `camera_tracking(component_id, action, coords...)` | `track_point`, `track_rectangle`, `track_stop` |
+
+**The sprawl tradeoff, explicitly (R3):** the camera plugin alone is 36
+methods — mirrored 1:1 it would grow the tool list by 65%, drowning the
+flight-critical tools in camera minutiae in every conversation. We compress
+36 methods into 6 tools along natural sub-domains (discovery / capture /
+settings / storage / optics / tracking) where actions within a tool share the
+`component_id` anchor plus at most two small scalars. The cost is
+action-enum dispatch inside each tool; the benefit is that the whole camera
+domain costs 6 tool slots. Zoom and focus merge into one tool because their 8
+methods are the same 4 verbs applied to two controls.
+
+**Redundant subscription streams** (`current_settings`, `mode`,
+`possible_setting_options`, `storage`, `video_stream_info`) duplicate
+one-shot getters that the tools already expose; for a polling MCP client they
+add nothing, so they are marked candidate-N/A in the matrix (revisit for
+Phase 4 MCP notifications). `camera_list` and `capture_info` have no getter
+equivalents and are implemented as read-once stream reads.
+
+## gimbal (v2, 3 tools)
+
+Covers 8/10 MavSDK `gimbal` methods (+2 redundant streams, candidate-N/A).
+
+| Tool | MavSDK methods |
+|---|---|
+| `list_gimbals()` | `gimbal_list` (stream, read once) |
+| `gimbal_control(gimbal_id, take\|release\|status)` | `take_control`, `release_control`, `get_control_status` |
+| `gimbal_point(gimbal_id, set_angles\|set_rates\|roi_location\|get_attitude, ...)` | `set_angles`, `set_angular_rates`, `set_roi_location`, `get_attitude` |
+
+Ownership (take/release/status) and pointing are distinct intents with
+disjoint parameters — two tools plus discovery. Pointing actions share the
+roll/pitch/yaw triple (angles vs rates) or a lat/lon/alt ROI target. Gimbal
+motion is not vehicle-flight-critical, so no stale-watchdog applies (unlike
+offboard). Verified end-to-end on ArduCopter SITL with a simulated mount
+(`MNT1_TYPE=1`, baked into the test image).
+
+## mission_raw (v2, 4 tools; 2 methods already used by v1)
+
+Covers 15/16 MavSDK `mission_raw` methods (`mission_changed` stream is
+candidate-N/A → Phase 4 notifications).
+
+| Tool | MavSDK methods |
+|---|---|
+| `import_qgc_mission(plan_json\|plan_path, upload)` | `import_qgroundcontrol_mission`, `import_qgroundcontrol_mission_from_string` (+ uploads) |
+| `rally_points(upload\|download, points?)` | `upload_rally_points`, `download_rallypoints` |
+| `raw_geofence_transfer(upload\|download, items?)` | `upload_geofence`, `download_geofence` |
+| `raw_mission_control(start\|pause\|clear\|set_current\|progress\|cancel_*)` | `start_mission`, `pause_mission`, `clear_mission`, `set_current_mission_item`, `mission_progress`, `cancel_mission_upload`, `cancel_mission_download` |
+| *(v1 tools)* | `upload_mission`, `download_mission` |
+
+QGC .plan import is the reproducibility artifact for the paper: a mission
+authored in QGroundControl can be replayed through the LLM interface
+verbatim. The raw control/transfer tools are labeled EXPERT and point at the
+friendly v1 mission tools first — they exist for protocol completeness and
+for verifying what is actually stored on the autopilot (e.g.
+`raw_geofence_transfer("download")` cross-checks `upload_geofence`).
+
+## log_files (v2, 1 tool)
+
+Covers 3/3 MavSDK `log_files` methods.
+
+| Tool | MavSDK methods |
+|---|---|
+| `flight_logs(list\|download\|erase_all, log_id?)` | `get_entries`, `download_log_file`, `erase_all_log_files` |
+
+One intent ("onboard flight logs"), three verbs, near-zero parameters — the
+clearest case for a single grouped tool. Downloads land server-side and the
+path is returned (log binaries do not belong in an LLM context window).
+Notable finding: ArduPilot answers the MAVLink log-download protocol
+correctly (verified with pymavlink), but MavSDK 3.0.1 expects PX4's 0-based
+log ids and reports NO_LOGFILES — effectively PX4-only until fixed upstream
+(recorded in `firmware_notes.csv`).

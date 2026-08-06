@@ -58,6 +58,7 @@ V1_TOOLS = {
 
 # v2 additions (see docs/tool_groups.md)
 V2_TOOLS = {
+    # P0
     "upload_geofence",
     "clear_geofence",
     "offboard_control",
@@ -68,6 +69,21 @@ V2_TOOLS = {
     "offboard_set_attitude",
     "offboard_set_acceleration_ned",
     "offboard_set_actuator_control",
+    # P1
+    "list_cameras",
+    "camera_capture",
+    "camera_settings",
+    "camera_storage",
+    "camera_zoom_focus",
+    "camera_tracking",
+    "list_gimbals",
+    "gimbal_control",
+    "gimbal_point",
+    "import_qgc_mission",
+    "rally_points",
+    "raw_geofence_transfer",
+    "raw_mission_control",
+    "flight_logs",
 }
 
 EXPECTED_TOOLS = V1_TOOLS | V2_TOOLS
@@ -77,7 +93,7 @@ async def test_expected_tool_inventory_registered():
     tools = await mcp.list_tools()
     names = {t.name for t in tools}
     assert names == EXPECTED_TOOLS
-    assert len(tools) == len(EXPECTED_TOOLS) == 55
+    assert len(tools) == len(EXPECTED_TOOLS) == 69
 
 
 async def test_tools_have_descriptions():
