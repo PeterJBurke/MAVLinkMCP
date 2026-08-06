@@ -45,12 +45,14 @@ PACKAGE_DIR = REPO_ROOT / "src" / "droneserver"
 FIRMWARE_NOTES_CSV = REPO_ROOT / "docs" / "firmware_notes.csv"
 
 
-def load_firmware_notes() -> dict[tuple[str, str], str]:
-    """Curated, SITL-observed firmware notes keyed by (plugin, method)."""
+def load_firmware_notes() -> dict[tuple[str, str], dict]:
+    """Curated rows keyed by (plugin, method): SITL-observed firmware notes
+    plus an optional status_override (e.g. candidate-N/A for subscription
+    streams that duplicate one-shot getters)."""
     if not FIRMWARE_NOTES_CSV.exists():
         return {}
     with FIRMWARE_NOTES_CSV.open() as fh:
-        return {(row["plugin"], row["method"]): row["firmware_notes"] for row in csv.DictReader(fh)}
+        return {(row["plugin"], row["method"]): row for row in csv.DictReader(fh)}
 
 
 DOCS_DIR = REPO_ROOT / "docs"
@@ -181,8 +183,11 @@ def main() -> None:
             tools = sorted(tool_usage.get(key, ()))
             infra = sorted(infra_usage.get(key, ()))
             implemented_in = ", ".join(tools + [f"[infra: {f}]" for f in infra])
+            curated = firmware_notes.get(key, {})
             if tools or infra:
                 status = "implemented"
+            elif curated.get("status_override"):
+                status = curated["status_override"]
             elif is_server_side:
                 status = "candidate-N/A"
             else:
@@ -199,7 +204,7 @@ def main() -> None:
                     "status": status,
                     "priority": PLUGIN_PRIORITY.get(pname, ""),
                     # observed-only; blank where untested (never guessed)
-                    "firmware_notes": firmware_notes.get(key, ""),
+                    "firmware_notes": curated.get("firmware_notes", ""),
                 }
             )
 
@@ -219,8 +224,10 @@ def main() -> None:
     total = len(rows)
     implemented = sum(1 for r in rows if r["status"] == "implemented")
     missing = sum(1 for r in rows if r["status"] == "missing")
-    na = sum(1 for r in rows if r["status"] == "candidate-N/A")
-    client_total = total - na
+    na_server = sum(1 for r in rows if r["status"] == "candidate-N/A" and r["plugin"].endswith("_server"))
+    na_curated = sum(1 for r in rows if r["status"] == "candidate-N/A" and not r["plugin"].endswith("_server"))
+    # Stable denominator: everything except drone-side *_server plugins.
+    client_total = total - na_server
 
     lines = [
         "# MavSDK Coverage Summary",
@@ -234,9 +241,11 @@ def main() -> None:
         f"- MavSDK plugins exposed on `System`: **{len(plugins)}**",
         f"- Total plugin methods: **{total}**",
         f"  - client-side (excluding `*_server` plugins): **{client_total}**",
-        f"  - `*_server` plugin methods (candidate-N/A, drone-side API): **{na}**",
+        f"  - `*_server` plugin methods (candidate-N/A, drone-side API): **{na_server}**",
         f"- Implemented: **{implemented}** methods "
         f"({implemented}/{client_total} = {100 * implemented / client_total:.1f}% of client-side)",
+        f"- Candidate-N/A (client-side, curated with reason - e.g. subscription "
+        f"streams duplicating one-shot getters): **{na_curated}**",
         f"- Missing (client-side): **{missing}**",
         f"- MCP tools registered (`@mcp.tool()` in `src/droneserver/`): **{len(tool_names)}**",
         "",
@@ -280,7 +289,10 @@ def main() -> None:
     SUMMARY_PATH.write_text("\n".join(lines))
 
     print(f"mavsdk {mavsdk_version}: {len(plugins)} plugins, {total} methods")
-    print(f"implemented {implemented} / client-side {client_total} (missing {missing}, candidate-N/A {na})")
+    print(
+        f"implemented {implemented} / client-side {client_total} "
+        f"(missing {missing}, curated-N/A {na_curated}, server-side-N/A {na_server})"
+    )
     print(f"v1 tools: {len(tool_names)} (no direct MavSDK call: {tools_without_mavsdk})")
     print(f"wrote {CSV_PATH}\nwrote {SUMMARY_PATH}")
 

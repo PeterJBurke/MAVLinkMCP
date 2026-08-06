@@ -38,42 +38,42 @@ calibration,Calibration,calibrate_gyro,stream (async generator),(),Perform gyro 
 calibration,Calibration,calibrate_level_horizon,stream (async generator),(),Perform board level horizon calibration.,,missing,P2,
 calibration,Calibration,calibrate_magnetometer,stream (async generator),(),Perform magnetometer calibration.,,missing,P2,
 calibration,Calibration,cancel,async call,(),Cancel ongoing calibration process.,,missing,P2,
-camera,Camera,camera_list,stream (async generator),(),Subscribe to list of cameras.,,missing,P1,
-camera,Camera,capture_info,stream (async generator),(),Subscribe to capture info updates.,,missing,P1,
-camera,Camera,current_settings,stream (async generator),(),Get the list of current camera settings.,,missing,P1,
-camera,Camera,focus_in_start,async call,(component_id),Start focusing in.,,missing,P1,
-camera,Camera,focus_out_start,async call,(component_id),Start focusing out.,,missing,P1,
-camera,Camera,focus_range,async call,"(component_id, range)",Focus with range value of full range (value between 0.0 and 100.0).,,missing,P1,
-camera,Camera,focus_stop,async call,(component_id),Stop focus.,,missing,P1,
-camera,Camera,format_storage,async call,"(component_id, storage_id)",Format storage (e.g. SD card) in camera.,,missing,P1,
-camera,Camera,get_current_settings,async call,(component_id),Get current settings.,,missing,P1,
-camera,Camera,get_mode,async call,(component_id),Get camera mode.,,missing,P1,
-camera,Camera,get_possible_setting_options,async call,(component_id),Get possible setting options.,,missing,P1,
-camera,Camera,get_setting,async call,"(component_id, setting)",Get a setting.,,missing,P1,
-camera,Camera,get_storage,async call,(component_id),Get camera's storage status.,,missing,P1,
-camera,Camera,get_video_stream_info,async call,(component_id),Get video stream info.,,missing,P1,
-camera,Camera,list_photos,async call,"(component_id, photos_range)",List photos available on the camera.,,missing,P1,
-camera,Camera,mode,stream (async generator),(),Subscribe to camera mode updates.,,missing,P1,
-camera,Camera,possible_setting_options,stream (async generator),(),Get the list of settings that can be changed.,,missing,P1,
-camera,Camera,reset_settings,async call,(component_id),Reset all settings in camera.,,missing,P1,
-camera,Camera,set_mode,async call,"(component_id, mode)",Set camera mode.,,missing,P1,
-camera,Camera,set_setting,async call,"(component_id, setting)",Set a setting to some value.,,missing,P1,
-camera,Camera,start_photo_interval,async call,"(component_id, interval_s)",Start photo timelapse with a given interval.,,missing,P1,
-camera,Camera,start_video,async call,(component_id),Start a video recording.,,missing,P1,
-camera,Camera,start_video_streaming,async call,"(component_id, stream_id)",Start video streaming.,,missing,P1,
-camera,Camera,stop_photo_interval,async call,(component_id),Stop a running photo timelapse.,,missing,P1,
-camera,Camera,stop_video,async call,(component_id),Stop a running video recording.,,missing,P1,
-camera,Camera,stop_video_streaming,async call,"(component_id, stream_id)",Stop current video streaming.,,missing,P1,
-camera,Camera,storage,stream (async generator),(),Subscribe to camera's storage status updates.,,missing,P1,
-camera,Camera,take_photo,async call,(component_id),Take one photo.,,missing,P1,
-camera,Camera,track_point,async call,"(component_id, point_x, point_y, radius)",Track point.,,missing,P1,
-camera,Camera,track_rectangle,async call,"(component_id, top_left_x, top_left_y, bottom_right_x, bottom_right_y)",Track rectangle.,,missing,P1,
-camera,Camera,track_stop,async call,(component_id),Stop tracking.,,missing,P1,
-camera,Camera,video_stream_info,stream (async generator),(),Subscribe to video stream info updates.,,missing,P1,
-camera,Camera,zoom_in_start,async call,(component_id),Start zooming in.,,missing,P1,
-camera,Camera,zoom_out_start,async call,(component_id),Start zooming out.,,missing,P1,
-camera,Camera,zoom_range,async call,"(component_id, range)",Zoom to value as proportion of full camera range (percentage between 0.0 and 100.0).,,missing,P1,
-camera,Camera,zoom_stop,async call,(component_id),Stop zooming.,,missing,P1,
+camera,Camera,camera_list,stream (async generator),(),Subscribe to list of cameras.,list_cameras,implemented,P1,ArduCopter 4.5.7 SITL: works at protocol level - returns empty list (plain SITL has no camera backend). Untestable-in-SITL beyond discovery; needs PX4+gazebo or a camera component.
+camera,Camera,capture_info,stream (async generator),(),Subscribe to capture info updates.,camera_capture,implemented,P1,
+camera,Camera,current_settings,stream (async generator),(),Get the list of current camera settings.,,candidate-N/A,P1,Subscription stream duplicating get_current_settings; redundant for a polling MCP server. Revisit for Phase 4 MCP notifications.
+camera,Camera,focus_in_start,async call,(component_id),Start focusing in.,camera_zoom_focus,implemented,P1,
+camera,Camera,focus_out_start,async call,(component_id),Start focusing out.,camera_zoom_focus,implemented,P1,
+camera,Camera,focus_range,async call,"(component_id, range)",Focus with range value of full range (value between 0.0 and 100.0).,camera_zoom_focus,implemented,P1,
+camera,Camera,focus_stop,async call,(component_id),Stop focus.,camera_zoom_focus,implemented,P1,
+camera,Camera,format_storage,async call,"(component_id, storage_id)",Format storage (e.g. SD card) in camera.,camera_storage,implemented,P1,
+camera,Camera,get_current_settings,async call,(component_id),Get current settings.,camera_settings,implemented,P1,
+camera,Camera,get_mode,async call,(component_id),Get camera mode.,camera_settings,implemented,P1,ArduCopter 4.5.7 SITL: returns UNKNOWN (no camera backend). Untestable beyond that.
+camera,Camera,get_possible_setting_options,async call,(component_id),Get possible setting options.,camera_settings,implemented,P1,
+camera,Camera,get_setting,async call,"(component_id, setting)",Get a setting.,camera_settings,implemented,P1,
+camera,Camera,get_storage,async call,(component_id),Get camera's storage status.,camera_storage,implemented,P1,ArduCopter 4.5.7 SITL: untestable - no camera backend; observed CameraError UNAVAILABLE.
+camera,Camera,get_video_stream_info,async call,(component_id),Get video stream info.,camera_capture,implemented,P1,
+camera,Camera,list_photos,async call,"(component_id, photos_range)",List photos available on the camera.,camera_storage,implemented,P1,
+camera,Camera,mode,stream (async generator),(),Subscribe to camera mode updates.,,candidate-N/A,P1,Subscription stream duplicating get_mode; redundant for a polling MCP server. Revisit for Phase 4 MCP notifications.
+camera,Camera,possible_setting_options,stream (async generator),(),Get the list of settings that can be changed.,,candidate-N/A,P1,Subscription stream duplicating get_possible_setting_options; redundant for a polling MCP server. Revisit for Phase 4 MCP notifications.
+camera,Camera,reset_settings,async call,(component_id),Reset all settings in camera.,camera_settings,implemented,P1,
+camera,Camera,set_mode,async call,"(component_id, mode)",Set camera mode.,camera_settings,implemented,P1,
+camera,Camera,set_setting,async call,"(component_id, setting)",Set a setting to some value.,camera_settings,implemented,P1,
+camera,Camera,start_photo_interval,async call,"(component_id, interval_s)",Start photo timelapse with a given interval.,camera_capture,implemented,P1,
+camera,Camera,start_video,async call,(component_id),Start a video recording.,camera_capture,implemented,P1,ArduCopter 4.5.7 SITL: untestable - no camera backend; observed CameraError TIMEOUT.
+camera,Camera,start_video_streaming,async call,"(component_id, stream_id)",Start video streaming.,camera_capture,implemented,P1,
+camera,Camera,stop_photo_interval,async call,(component_id),Stop a running photo timelapse.,camera_capture,implemented,P1,
+camera,Camera,stop_video,async call,(component_id),Stop a running video recording.,camera_capture,implemented,P1,
+camera,Camera,stop_video_streaming,async call,"(component_id, stream_id)",Stop current video streaming.,camera_capture,implemented,P1,
+camera,Camera,storage,stream (async generator),(),Subscribe to camera's storage status updates.,,candidate-N/A,P1,Subscription stream duplicating get_storage; redundant for a polling MCP server. Revisit for Phase 4 MCP notifications.
+camera,Camera,take_photo,async call,(component_id),Take one photo.,camera_capture,implemented,P1,ArduCopter 4.5.7 SITL: untestable - no camera backend; observed CameraError TIMEOUT. Not evidence of firmware unsupport.
+camera,Camera,track_point,async call,"(component_id, point_x, point_y, radius)",Track point.,camera_tracking,implemented,P1,
+camera,Camera,track_rectangle,async call,"(component_id, top_left_x, top_left_y, bottom_right_x, bottom_right_y)",Track rectangle.,camera_tracking,implemented,P1,
+camera,Camera,track_stop,async call,(component_id),Stop tracking.,camera_tracking,implemented,P1,
+camera,Camera,video_stream_info,stream (async generator),(),Subscribe to video stream info updates.,,candidate-N/A,P1,Subscription stream duplicating get_video_stream_info; redundant for a polling MCP server. Revisit for Phase 4 MCP notifications.
+camera,Camera,zoom_in_start,async call,(component_id),Start zooming in.,camera_zoom_focus,implemented,P1,
+camera,Camera,zoom_out_start,async call,(component_id),Start zooming out.,camera_zoom_focus,implemented,P1,
+camera,Camera,zoom_range,async call,"(component_id, range)",Zoom to value as proportion of full camera range (percentage between 0.0 and 100.0).,camera_zoom_focus,implemented,P1,
+camera,Camera,zoom_stop,async call,(component_id),Stop zooming.,camera_zoom_focus,implemented,P1,
 camera_server,CameraServer,capture_status,stream (async generator),(),Subscribe to camera capture status requests. Each request received should response to using RespondCaptureStatus,,candidate-N/A,,
 camera_server,CameraServer,format_storage,stream (async generator),(),Subscribe to format storage requests. Each request received should response to using RespondFormatStorage,,candidate-N/A,,
 camera_server,CameraServer,reset_settings,stream (async generator),(),Subscribe to reset settings requests. Each request received should response to using RespondResetSettings,,candidate-N/A,,
@@ -138,16 +138,16 @@ ftp,Ftp,set_target_compid,async call,(compid),Set target component ID. By defaul
 ftp,Ftp,upload,stream (async generator),"(local_file_path, remote_dir)",Uploads local file to remote directory.,,missing,P2,
 geofence,Geofence,clear_geofence,async call,(),Clear all geofences saved on the vehicle.,clear_geofence,implemented,P0,ArduCopter 4.5.7 SITL: works. PX4: untested (SITL pending).
 geofence,Geofence,upload_geofence,async call,(geofence_data),Upload geofences.,upload_geofence,implemented,P0,ArduCopter 4.5.7 SITL: works - polygon and circle (inclusion) uploads accepted via fence mission protocol; enforcement additionally requires FENCE_ENABLE=1. PX4: untested (SITL pending).
-gimbal,Gimbal,attitude,stream (async generator),(),Subscribe to attitude updates.,,missing,P1,
-gimbal,Gimbal,control_status,stream (async generator),(),Subscribe to control status updates.,,missing,P1,
-gimbal,Gimbal,get_attitude,async call,(gimbal_id),Get attitude for specific gimbal.,,missing,P1,
-gimbal,Gimbal,get_control_status,async call,(gimbal_id),Get control status for specific gimbal.,,missing,P1,
-gimbal,Gimbal,gimbal_list,stream (async generator),(),Subscribe to list of gimbals.,,missing,P1,
-gimbal,Gimbal,release_control,async call,(gimbal_id),Release control.,,missing,P1,
-gimbal,Gimbal,set_angles,async call,"(gimbal_id, roll_deg, pitch_deg, yaw_deg, gimbal_mode, send_mode)","Set gimbal roll, pitch and yaw angles.",,missing,P1,
-gimbal,Gimbal,set_angular_rates,async call,"(gimbal_id, roll_rate_deg_s, pitch_rate_deg_s, yaw_rate_deg_s, gimbal_mode, send_mode)",Set gimbal angular rates.,,missing,P1,
-gimbal,Gimbal,set_roi_location,async call,"(gimbal_id, latitude_deg, longitude_deg, altitude_m)",Set gimbal region of interest (ROI).,,missing,P1,
-gimbal,Gimbal,take_control,async call,"(gimbal_id, control_mode)",Take control.,,missing,P1,
+gimbal,Gimbal,attitude,stream (async generator),(),Subscribe to attitude updates.,,candidate-N/A,P1,Subscription stream duplicating get_attitude; redundant for a polling MCP server. Revisit for Phase 4 MCP notifications.
+gimbal,Gimbal,control_status,stream (async generator),(),Subscribe to control status updates.,,candidate-N/A,P1,Subscription stream duplicating get_control_status; redundant for a polling MCP server. Revisit for Phase 4 MCP notifications.
+gimbal,Gimbal,get_attitude,async call,(gimbal_id),Get attitude for specific gimbal.,gimbal_point,implemented,P1,ArduCopter 4.5.7 SITL (simulated mount): works - matches commanded angles. Invalid gimbal_id yields INVALID_ARGUMENT.
+gimbal,Gimbal,get_control_status,async call,(gimbal_id),Get control status for specific gimbal.,gimbal_control,implemented,P1,ArduCopter 4.5.7 SITL (simulated mount): works - reports PRIMARY controller sysid/compid.
+gimbal,Gimbal,gimbal_list,stream (async generator),(),Subscribe to list of gimbals.,list_gimbals,implemented,P1,ArduCopter 4.5.7 SITL (MNT1_TYPE=1 simulated mount): works - gimbal discovered with id=1.
+gimbal,Gimbal,release_control,async call,(gimbal_id),Release control.,gimbal_control,implemented,P1,ArduCopter 4.5.7 SITL (simulated mount): works.
+gimbal,Gimbal,set_angles,async call,"(gimbal_id, roll_deg, pitch_deg, yaw_deg, gimbal_mode, send_mode)","Set gimbal roll, pitch and yaw angles.",gimbal_point,implemented,P1,"ArduCopter 4.5.7 SITL (simulated mount): works - commanded pitch -45 deg, gimbal attitude confirmed -45.0 deg."
+gimbal,Gimbal,set_angular_rates,async call,"(gimbal_id, roll_rate_deg_s, pitch_rate_deg_s, yaw_rate_deg_s, gimbal_mode, send_mode)",Set gimbal angular rates.,gimbal_point,implemented,P1,ArduCopter 4.5.7 SITL (simulated mount): accepted; rate tracking not quantitatively verified.
+gimbal,Gimbal,set_roi_location,async call,"(gimbal_id, latitude_deg, longitude_deg, altitude_m)",Set gimbal region of interest (ROI).,gimbal_point,implemented,P1,ArduCopter 4.5.7 SITL (simulated mount): accepted; pointing behavior not quantitatively verified.
+gimbal,Gimbal,take_control,async call,"(gimbal_id, control_mode)",Take control.,gimbal_control,implemented,P1,ArduCopter 4.5.7 SITL (simulated mount): works. Without a configured mount: GimbalError ERROR.
 gripper,Gripper,grab,async call,(instance),Gripper grab cargo.,,missing,,
 gripper,Gripper,release,async call,(instance),Gripper release cargo.,,missing,,
 info,Info,flight_information,stream (async generator),(),Subscribe to 'flight information' updates.,,missing,,
@@ -156,9 +156,9 @@ info,Info,get_identification,async call,(),Get the identification of the system.
 info,Info,get_product,async call,(),Get product information of the system.,,missing,,
 info,Info,get_speed_factor,async call,(),Get the speed factor of a simulation (with lockstep a simulation can run faster or slower than realtime).,,missing,,
 info,Info,get_version,async call,(),Get the version information of the system.,,missing,,
-log_files,LogFiles,download_log_file,stream (async generator),"(entry, path)",Download log file.,,missing,P1,
-log_files,LogFiles,erase_all_log_files,async call,(),Erase all log files.,,missing,P1,
-log_files,LogFiles,get_entries,async call,(),Get List of log files.,,missing,P1,
+log_files,LogFiles,download_log_file,stream (async generator),"(entry, path)",Download log file.,flight_logs,implemented,P1,"ArduCopter 4.5.7 SITL: untestable via MavSDK (get_entries fails, see above). PX4: untested (SITL pending)."
+log_files,LogFiles,erase_all_log_files,async call,(),Erase all log files.,flight_logs,implemented,P1,ArduCopter 4.5.7 SITL: call accepted; erase effect not independently verified.
+log_files,LogFiles,get_entries,async call,(),Get List of log files.,flight_logs,implemented,P1,"ArduCopter 4.5.7 SITL: MavSDK reports NO_LOGFILES although the autopilot answers LOG_REQUEST_LIST correctly (verified via pymavlink: num_logs=1, 1-based ids). MavSDK log_files expects PX4 0-based ids -> effectively PX4-only until fixed upstream."
 manual_control,ManualControl,set_manual_control_input,async call,"(x, y, z, r)",Set manual control input,,missing,P2,
 manual_control,ManualControl,start_altitude_control,async call,(),Start altitude control,,missing,P2,
 manual_control,ManualControl,start_position_control,async call,(),Start position control using e.g. joystick input.,,missing,P2,
@@ -176,22 +176,22 @@ mission,Mission,set_return_to_launch_after_mission,async call,(enable),Set wheth
 mission,Mission,start_mission,async call,(),Start the mission.,"initiate_mission, resume_mission",implemented,,
 mission,Mission,upload_mission,async call,(mission_plan),Upload a list of mission items to the system.,,missing,,
 mission,Mission,upload_mission_with_progress,stream (async generator),(mission_plan),Upload a list of mission items to the system and report upload progress.,,missing,,
-mission_raw,MissionRaw,cancel_mission_download,async call,(),Cancel an ongoing mission download.,,missing,P1,
-mission_raw,MissionRaw,cancel_mission_upload,async call,(),Cancel an ongoing mission upload.,,missing,P1,
-mission_raw,MissionRaw,clear_mission,async call,(),Clear the mission saved on the vehicle.,,missing,P1,
-mission_raw,MissionRaw,download_geofence,async call,(),Download a list of raw geofence items from the system (asynchronous).,,missing,P1,
-mission_raw,MissionRaw,download_mission,async call,(),Download a list of raw mission items from the system (asynchronous).,download_mission,implemented,P1,
-mission_raw,MissionRaw,download_rallypoints,async call,(),Download a list of raw rallypoint items from the system (asynchronous).,,missing,P1,
-mission_raw,MissionRaw,import_qgroundcontrol_mission,async call,(qgc_plan_path),"Import a QGroundControl missions in JSON .plan format, from a file.",,missing,P1,
-mission_raw,MissionRaw,import_qgroundcontrol_mission_from_string,async call,(qgc_plan),"Import a QGroundControl missions in JSON .plan format, from a string.",,missing,P1,
-mission_raw,MissionRaw,mission_changed,stream (async generator),(),*,,missing,P1,
-mission_raw,MissionRaw,mission_progress,stream (async generator),(),Subscribe to mission progress updates.,,missing,P1,
-mission_raw,MissionRaw,pause_mission,async call,(),Pause the mission.,,missing,P1,
-mission_raw,MissionRaw,set_current_mission_item,async call,(index),Sets the raw mission item index to go to.,,missing,P1,
-mission_raw,MissionRaw,start_mission,async call,(),Start the mission.,,missing,P1,
-mission_raw,MissionRaw,upload_geofence,async call,(mission_items),Upload a list of geofence items to the system.,,missing,P1,
-mission_raw,MissionRaw,upload_mission,async call,(mission_items),Upload a list of raw mission items to the system.,"initiate_mission, upload_mission",implemented,P1,
-mission_raw,MissionRaw,upload_rally_points,async call,(mission_items),Upload a list of rally point items to the system.,,missing,P1,
+mission_raw,MissionRaw,cancel_mission_download,async call,(),Cancel an ongoing mission download.,raw_mission_control,implemented,P1,ArduCopter 4.5.7 SITL: errors when no transfer is in progress (expected); mid-transfer cancel not separately verified.
+mission_raw,MissionRaw,cancel_mission_upload,async call,(),Cancel an ongoing mission upload.,raw_mission_control,implemented,P1,ArduCopter 4.5.7 SITL: errors when no transfer is in progress (expected); mid-transfer cancel not separately verified.
+mission_raw,MissionRaw,clear_mission,async call,(),Clear the mission saved on the vehicle.,raw_mission_control,implemented,P1,ArduCopter 4.5.7 SITL: works.
+mission_raw,MissionRaw,download_geofence,async call,(),Download a list of raw geofence items from the system (asynchronous).,raw_geofence_transfer,implemented,P1,ArduCopter 4.5.7 SITL: works - returns fence items uploaded via the geofence plugin (cross-checked).
+mission_raw,MissionRaw,download_mission,async call,(),Download a list of raw mission items from the system (asynchronous).,download_mission,implemented,P1,ArduCopter 4.5.7 SITL: works - round-trips uploaded items.
+mission_raw,MissionRaw,download_rallypoints,async call,(),Download a list of raw rallypoint items from the system (asynchronous).,rally_points,implemented,P1,ArduCopter 4.5.7 SITL: works - round-trips uploaded rally points.
+mission_raw,MissionRaw,import_qgroundcontrol_mission,async call,(qgc_plan_path),"Import a QGroundControl missions in JSON .plan format, from a file.",import_qgc_mission,implemented,P1,"Parsing is client-side in mavsdk_server (same code path as from_string, verified); file variant exercised via unit-level path handling."
+mission_raw,MissionRaw,import_qgroundcontrol_mission_from_string,async call,(qgc_plan),"Import a QGroundControl missions in JSON .plan format, from a string.",import_qgc_mission,implemented,P1,ArduCopter 4.5.7 SITL: works - QGC .plan JSON parsed (client-side) and uploadable.
+mission_raw,MissionRaw,mission_changed,stream (async generator),(),*,,candidate-N/A,P1,Notification stream; nothing to poll. Candidate for Phase 4 MCP notifications.
+mission_raw,MissionRaw,mission_progress,stream (async generator),(),Subscribe to mission progress updates.,raw_mission_control,implemented,P1,"ArduCopter 4.5.7 SITL: works with caveats - emissions are event-driven (waypoint transitions), and a fresh subscription during the takeoff leg can report MISSION_CURRENT-derived total=1 instead of the uploaded item count (persistent pre-start subscription reported total=5 correctly; vehicle MISSION_COUNT verified 5 via pymavlink). Treat total as advisory on ArduPilot; tool exposes timeout_s."
+mission_raw,MissionRaw,pause_mission,async call,(),Pause the mission.,raw_mission_control,implemented,P1,ArduCopter 4.5.7 SITL: works in flight (vehicle -> Loiter/HOLD). On ground/disarmed: no ack (timeout).
+mission_raw,MissionRaw,set_current_mission_item,async call,(index),Sets the raw mission item index to go to.,raw_mission_control,implemented,P1,"ArduCopter 4.5.7 SITL: works once a mission is uploaded (indexes 0 and 2 verified on the ground). CAVEAT: mavsdk validates the index against its cached mission total, which can collapse to 1 mid-flight on ArduPilot (see mission_progress note) - higher indexes may then be rejected with INVALID_ARGUMENT."
+mission_raw,MissionRaw,start_mission,async call,(),Start the mission.,raw_mission_control,implemented,P1,ArduCopter 4.5.7 SITL: works (one transient UNKNOWN ack observed immediately after arming; retry succeeds).
+mission_raw,MissionRaw,upload_geofence,async call,(mission_items),Upload a list of geofence items to the system.,"import_qgc_mission, raw_geofence_transfer",implemented,P1,ArduCopter 4.5.7 SITL: accepted (raw fence items via mission protocol).
+mission_raw,MissionRaw,upload_mission,async call,(mission_items),Upload a list of raw mission items to the system.,"import_qgc_mission, initiate_mission, upload_mission",implemented,P1,ArduCopter 4.5.7 SITL: works (v1 + QGC-imported items).
+mission_raw,MissionRaw,upload_rally_points,async call,(mission_items),Upload a list of rally point items to the system.,"import_qgc_mission, rally_points",implemented,P1,"ArduCopter 4.5.7 SITL: works - GOTCHA: MavSDK requires first item current=1, else CURRENT_INVALID. Handled by the tool."
 mission_raw_server,MissionRawServer,clear_all,stream (async generator),(),Subscribe when a MISSION_CLEAR_ALL is received,,candidate-N/A,,
 mission_raw_server,MissionRawServer,current_item_changed,stream (async generator),(),Subscribe to when a new current item is set,,candidate-N/A,,
 mission_raw_server,MissionRawServer,incoming_mission,stream (async generator),(),Subscribe to when a new mission is uploaded (asynchronous).,,candidate-N/A,,

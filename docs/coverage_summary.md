@@ -9,11 +9,12 @@ Full matrix: [`coverage_matrix.csv`](coverage_matrix.csv).
 - Total plugin methods: **330**
   - client-side (excluding `*_server` plugins): **238**
   - `*_server` plugin methods (candidate-N/A, drone-side API): **92**
-- Implemented: **56** methods (56/238 = 23.5% of client-side)
-- Missing (client-side): **182**
-- MCP tools registered (`@mcp.tool()` in `src/droneserver/`): **55**
+- Implemented: **111** methods (111/238 = 46.6% of client-side)
+- Candidate-N/A (client-side, curated with reason - e.g. subscription streams duplicating one-shot getters): **8**
+- Missing (client-side): **119**
+- MCP tools registered (`@mcp.tool()` in `src/droneserver/`): **69**
 
-Paper Table 1 claimed ~40 of ~155 methods; introspection of the v1 code found 41 of 238 client-side. The v2 branch is now at 56 of 238 (330 methods including server-side plugins).
+Paper Table 1 claimed ~40 of ~155 methods; introspection of the v1 code found 41 of 238 client-side. The v2 branch is now at 111 of 238 (330 methods including server-side plugins).
 
 ## Per-plugin counts
 
@@ -22,7 +23,7 @@ Paper Table 1 claimed ~40 of ~155 methods; introspection of the v1 code found 41
 | action | in use | 21 | 9 | 12 | 0 |
 | action_server | P3 | 12 | 0 | 0 | 12 |
 | calibration | P2 | 6 | 0 | 6 | 0 |
-| camera | P1 | 36 | 0 | 36 | 0 |
+| camera | in use | 36 | 31 | 0 | 5 |
 | camera_server | P3 | 39 | 0 | 0 | 39 |
 | component_information | P3 | 2 | 0 | 2 | 0 |
 | component_information_server | P3 | 2 | 0 | 0 | 2 |
@@ -31,13 +32,13 @@ Paper Table 1 claimed ~40 of ~155 methods; introspection of the v1 code found 41
 | follow_me | P2 | 7 | 0 | 7 | 0 |
 | ftp | P2 | 9 | 0 | 9 | 0 |
 | geofence | in use | 2 | 2 | 0 | 0 |
-| gimbal | P1 | 10 | 0 | 10 | 0 |
+| gimbal | in use | 10 | 8 | 0 | 2 |
 | gripper | P3 | 2 | 0 | 2 | 0 |
 | info | P3 | 6 | 0 | 6 | 0 |
-| log_files | P1 | 3 | 0 | 3 | 0 |
+| log_files | in use | 3 | 3 | 0 | 0 |
 | manual_control | P2 | 3 | 0 | 3 | 0 |
 | mission | in use | 14 | 6 | 8 | 0 |
-| mission_raw | in use | 16 | 2 | 14 | 0 |
+| mission_raw | in use | 16 | 15 | 0 | 1 |
 | mission_raw_server | P3 | 4 | 0 | 0 | 4 |
 | mocap | P3 | 3 | 0 | 3 | 0 |
 | offboard | in use | 13 | 13 | 0 | 0 |
@@ -55,7 +56,7 @@ Paper Table 1 claimed ~40 of ~155 methods; introspection of the v1 code found 41
 
 ## MCP tools
 
-55 tools: `arm_drone`, `check_arrival`, `clear_geofence`, `clear_mission`, `disarm_drone`, `download_mission`, `get_armed`, `get_attitude`, `get_battery`, `get_flight_mode`, `get_gps_info`, `get_heading`, `get_health`, `get_health_all_ok`, `get_home_position`, `get_imu`, `get_in_air`, `get_landed_state`, `get_odometry`, `get_parameter`, `get_position`, `get_rc_status`, `get_speed`, `go_to_location`, `hold_mission_position`, `hold_position`, `initiate_mission`, `is_mission_finished`, `kill_motors`, `land`, `list_parameters`, `monitor_flight`, `move_to_relative`, `offboard_control`, `offboard_set_acceleration_ned`, `offboard_set_actuator_control`, `offboard_set_attitude`, `offboard_set_position_global`, `offboard_set_position_ned`, `offboard_set_velocity_body`, `offboard_set_velocity_ned`, `pause_mission`, `print_mission_progress`, `print_status_text`, `reposition`, `resume_mission`, `return_to_launch`, `set_current_waypoint`, `set_flight_mode`, `set_max_speed`, `set_parameter`, `set_yaw`, `takeoff`, `upload_geofence`, `upload_mission`
+69 tools: `arm_drone`, `camera_capture`, `camera_settings`, `camera_storage`, `camera_tracking`, `camera_zoom_focus`, `check_arrival`, `clear_geofence`, `clear_mission`, `disarm_drone`, `download_mission`, `flight_logs`, `get_armed`, `get_attitude`, `get_battery`, `get_flight_mode`, `get_gps_info`, `get_heading`, `get_health`, `get_health_all_ok`, `get_home_position`, `get_imu`, `get_in_air`, `get_landed_state`, `get_odometry`, `get_parameter`, `get_position`, `get_rc_status`, `get_speed`, `gimbal_control`, `gimbal_point`, `go_to_location`, `hold_mission_position`, `hold_position`, `import_qgc_mission`, `initiate_mission`, `is_mission_finished`, `kill_motors`, `land`, `list_cameras`, `list_gimbals`, `list_parameters`, `monitor_flight`, `move_to_relative`, `offboard_control`, `offboard_set_acceleration_ned`, `offboard_set_actuator_control`, `offboard_set_attitude`, `offboard_set_position_global`, `offboard_set_position_ned`, `offboard_set_velocity_body`, `offboard_set_velocity_ned`, `pause_mission`, `print_mission_progress`, `print_status_text`, `rally_points`, `raw_geofence_transfer`, `raw_mission_control`, `reposition`, `resume_mission`, `return_to_launch`, `set_current_waypoint`, `set_flight_mode`, `set_max_speed`, `set_parameter`, `set_yaw`, `takeoff`, `upload_geofence`, `upload_mission`
 
 Tools with no direct MavSDK call (1; e.g. deprecated stubs that only return an error message): `pause_mission`
 
