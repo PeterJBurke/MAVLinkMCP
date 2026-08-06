@@ -52,5 +52,5 @@ echo "Press Ctrl+C to stop the server..."
 sleep 2
 
 # Run the MCP server with uv
-uv run src/server/droneserver.py
+uv run python -m droneserver.server --transport stdio
 

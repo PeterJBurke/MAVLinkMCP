@@ -9,12 +9,32 @@ authors = [
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"
+keywords = ["mavlink", "mcp", "drone", "uav", "llm", "mavsdk", "model-context-protocol"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering",
+    "Topic :: System :: Hardware",
+]
 dependencies = [
     "mavsdk>=2.0.0",
     "mcp-agent>=0.1.0",
     "mcp-server>=0.1.0",
+    "pydantic-settings>=2.0.0",
     "python-dotenv>=1.0.0",
+    "requests>=2.31.0",
 ]
+
+[project.scripts]
+droneserver = "droneserver.server:main"
 
 [project.urls]
 Homepage = "https://github.com/PeterJBurke/droneserver"
@@ -27,9 +47,12 @@ build-backend = "hatchling.build"
 
 [dependency-groups]
 dev = [
+    "mypy>=1.10.0",
+    "pre-commit>=3.7.0",
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
     "pytest-cov>=4.1.0",
+    "ruff>=0.6.0",
 ]
 
 [tool.pytest.ini_options]
@@ -40,4 +63,44 @@ python_functions = ["test_*"]
 addopts = "-v --tb=short"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src"]
+packages = ["src/droneserver"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+src = ["src", "tests", "scripts"]
+
+[tool.ruff.lint]
+select = [
+    "E4", # pycodestyle imports
+    "E7", # pycodestyle statements
+    "E9", # pycodestyle runtime errors
+    "F",  # pyflakes
+    "I",  # isort
+    "W",  # pycodestyle warnings
+]
+
+[tool.ruff.lint.per-file-ignores]
+# v1 tool bodies are kept byte-identical in this refactor. Bare excepts (E722)
+# also catch asyncio.CancelledError, so "fixing" them to `except Exception:`
+# would change cancellation behavior - deferred to the Phase 2/3 rewrite.
+"src/droneserver/tools/*" = ["E722", "F841"]
+
+[tool.mypy]
+# Permissive baseline; per-module strictness will be ratcheted up module by
+# module as the v2 refactor proceeds (Plan 01 Phase 6).
+files = ["src/droneserver"]
+python_version = "3.10"
+ignore_missing_imports = true
+check_untyped_defs = false
+warn_unused_configs = true
+
+[[tool.mypy.overrides]]
+# v1 tool bodies (kept byte-identical in the Phase 6 refactor) have latent
+# issues mypy correctly flags: `async for` handlers that can fall off the end
+# without returning, and int variables reassigned to float. Fixing these
+# changes behavior/signatures, so it is deferred to the Phase 2 tool rewrite.
+# (20 findings as of the refactor: 18x missing-return in `async for` handlers,
+# 2x int-reassigned-to-float. Revisit per tool during Phase 2.)
+module = "droneserver.tools.*"
+ignore_errors = true
