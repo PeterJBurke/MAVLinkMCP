@@ -16,9 +16,20 @@ Integration tests are marked `@pytest.mark.sitl` and **excluded from the
 default `pytest` run and from CI** (SITL-in-CI is a later phase):
 
 ```bash
-uv run pytest -m sitl tests/integration     # run the SITL suite
-uv run pytest                               # unit tests only (sitl excluded)
+# the routine SITL sweep (~13 min) - excludes the long demonstration
+uv run pytest -m "sitl and not longmission" tests/integration
+
+# unit tests only (sitl and longmission both excluded by default addopts)
+uv run pytest
+
+# the >10-minute demonstration mission on its own (~40 min, writes
+# docs/long_mission_demo.md)
+uv run pytest -m longmission tests/integration/test_long_mission_demo.py
 ```
+
+> **Note:** the demonstration is marked BOTH `sitl` and `longmission`, so a
+> bare `-m sitl` will pull it in and add ~40 minutes. Use
+> `-m "sitl and not longmission"` for routine sweeps.
 
 First run builds the docker image (`droneserver-sitl-arducopter:4.5.7`);
 subsequent runs reuse it. Expect roughly 30-90 s for the SITL to become

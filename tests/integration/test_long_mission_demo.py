@@ -5,9 +5,12 @@ criticism: the LLM client submits a long mission, **disconnects entirely**,
 reconnects mid-mission, polls, and the mission completes - because the server,
 not the model, is flying it.
 
-Marked ``longmission`` so the default and CI sweeps skip it::
+Marked ``longmission`` (and ``sitl``) so the default and CI runs skip it::
 
-    uv run pytest -m "sitl and longmission" tests/integration/test_long_mission_demo.py -s
+    uv run pytest -m longmission tests/integration/test_long_mission_demo.py
+
+NOTE: a bare ``-m sitl`` DOES select this module and adds ~40 minutes to the
+sweep; use ``-m "sitl and not longmission"`` for the routine SITL sweep.
 
 It writes docs/long_mission_demo.md (timeline table + audit summary).
 """

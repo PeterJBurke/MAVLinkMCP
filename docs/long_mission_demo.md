@@ -10,11 +10,11 @@ mid-flight and a brand-new client reattached later to the same mission.
 
 ## Result
 
-- Mission id: `m_65892ea64659`
-- **Flight duration: 37.8 minutes** (2267 s)
+- Mission id: `m_ac80864afb25`
+- **Flight duration: 37.7 minutes** (2262 s)
 - **Client fully disconnected for: 4.0 minutes** (240 s)
 - Final phase: **completed**
-- Waypoints flown: 19/19
+- Waypoints flown: 0/19
 - Auto-actions fired: none
 - Mission events recorded: 19 (also in the audit log: 19)
 
@@ -23,17 +23,17 @@ mid-flight and a brand-new client reattached later to the same mission.
 | t (s) | stage | phase | progress | item | alt (m) | mode | note |
 |---|---|---|---|---|---|---|---|
 | 2.3 | cruise speed set | None | None% | None/None | None | None | WPNAV_SPEED=300 cm/s (confirmed token round-trip) |
-| 2.4 | submitted (session 1) | submitted | None% | None/None | None | None | 16 distinct survey waypoints; call returned immediately |
-| 27.7 | running (session 1) | running | 0.0% | 0/19 | 40.2 | None | client is about to disconnect |
+| 2.3 | submitted (session 1) | submitted | None% | None/None | None | None | 16 distinct survey waypoints; call returned immediately |
+| 27.7 | running (session 1) | running | 0.0% | 0/19 | 40.1 | None | client is about to disconnect |
 | 267.7 | reconnected (session 2) | running | 10.5% | 2/19 | 40.0 | MISSION | no client for 240s |
 | 267.8 | progress | running | 10.5% | 2/19 | 40.0 | MISSION |  |
-| 388.5 | progress | running | 21.1% | 4/19 | 40.0 | MISSION |  |
+| 388.4 | progress | running | 21.1% | 4/19 | 40.0 | MISSION |  |
 | 740.3 | progress | running | 36.8% | 7/19 | 45.0 | MISSION |  |
 | 1072.1 | progress | running | 52.6% | 10/19 | 45.0 | MISSION |  |
 | 1424.0 | progress | running | 68.4% | 13/19 | 40.0 | MISSION |  |
-| 1775.9 | progress | running | 84.2% | 16/19 | 45.0 | MISSION |  |
-| 2288.7 | progress | running | 100.0% | 19/19 | 0.0 | MISSION |  |
-| 2298.8 | finished | completed | 100.0% | 19/19 | 0.0 | MISSION | phase=completed |
+| 1886.6 | progress | running | 89.5% | 17/19 | 45.0 | MISSION |  |
+| 2288.8 | progress | completed | 0.0% | 0/19 | 0.1 | MISSION |  |
+| 2288.8 | finished | completed | 0.0% | 0/19 | 0.1 | MISSION | phase=completed |
 
 ## Event kinds recorded
 
@@ -49,25 +49,25 @@ mid-flight and a brand-new client reattached later to the same mission.
 
 | ts | event | detail |
 |---|---|---|
-| 2026-08-07T04:21:52.478507+00:00 | `mission.info` | mission submitted with 16 waypoint(s) |
-| 2026-08-07T04:21:52.482320+00:00 | `mission.phase_change` | submitted -> validating |
-| 2026-08-07T04:21:52.485191+00:00 | `mission.phase_change` | validating -> uploading |
-| 2026-08-07T04:21:52.579527+00:00 | `mission.info` | uploaded 19 mission items |
-| 2026-08-07T04:21:52.581984+00:00 | `mission.phase_change` | uploading -> arming |
-| 2026-08-07T04:21:52.608263+00:00 | `mission.info` | armed |
-| 2026-08-07T04:21:52.627411+00:00 | `mission.info` | climbing to 40 m before starting the mission |
-| 2026-08-07T04:22:14.717204+00:00 | `mission.info` | reached 39.9 m |
-| 2026-08-07T04:22:14.734352+00:00 | `mission.phase_change` | arming -> running |
-| 2026-08-07T04:22:19.721222+00:00 | `mission.waypoint` | reached item 2/19 |
-| 2026-08-07T04:22:19.723587+00:00 | `mission.mode` | flight mode -> MISSION |
-| 2026-08-07T04:28:13.250387+00:00 | `mission.waypoint` | reached item 4/19 |
-| 2026-08-07T04:34:05.425130+00:00 | `mission.waypoint` | reached item 7/19 |
-| 2026-08-07T04:39:34.980712+00:00 | `mission.waypoint` | reached item 10/19 |
-| 2026-08-07T04:45:27.441998+00:00 | `mission.waypoint` | reached item 13/19 |
-| 2026-08-07T04:51:19.920404+00:00 | `mission.waypoint` | reached item 16/19 |
-| 2026-08-07T04:53:20.344276+00:00 | `mission.battery` | battery at 50% |
-| 2026-08-07T04:59:55.317233+00:00 | `mission.waypoint` | reached item 19/19 |
-| 2026-08-07T05:00:01.375711+00:00 | `mission.phase_change` | running -> completed (landed and disarmed) |
+| 2026-08-07T05:05:12.105593+00:00 | `mission.info` | mission submitted with 16 waypoint(s) |
+| 2026-08-07T05:05:12.109143+00:00 | `mission.phase_change` | submitted -> validating |
+| 2026-08-07T05:05:12.112041+00:00 | `mission.phase_change` | validating -> uploading |
+| 2026-08-07T05:05:12.210514+00:00 | `mission.info` | uploaded 19 mission items |
+| 2026-08-07T05:05:12.213050+00:00 | `mission.phase_change` | uploading -> arming |
+| 2026-08-07T05:05:12.227741+00:00 | `mission.info` | armed |
+| 2026-08-07T05:05:12.252692+00:00 | `mission.info` | climbing to 40 m before starting the mission |
+| 2026-08-07T05:05:34.593087+00:00 | `mission.info` | reached 40.0 m |
+| 2026-08-07T05:05:34.598572+00:00 | `mission.phase_change` | arming -> running |
+| 2026-08-07T05:05:39.346648+00:00 | `mission.waypoint` | reached item 2/19 |
+| 2026-08-07T05:05:39.349205+00:00 | `mission.mode` | flight mode -> MISSION |
+| 2026-08-07T05:11:32.934265+00:00 | `mission.waypoint` | reached item 4/19 |
+| 2026-08-07T05:17:25.314542+00:00 | `mission.waypoint` | reached item 7/19 |
+| 2026-08-07T05:22:54.840492+00:00 | `mission.waypoint` | reached item 10/19 |
+| 2026-08-07T05:28:47.383383+00:00 | `mission.waypoint` | reached item 13/19 |
+| 2026-08-07T05:36:29.756045+00:00 | `mission.waypoint` | reached item 17/19 |
+| 2026-08-07T05:36:35.972242+00:00 | `mission.battery` | battery at 50% |
+| 2026-08-07T05:43:16.500958+00:00 | `mission.waypoint` | reached item 0/19 |
+| 2026-08-07T05:43:16.504228+00:00 | `mission.phase_change` | running -> completed (landed and disarmed) |
 
 ## Why this answers the criticism
 
