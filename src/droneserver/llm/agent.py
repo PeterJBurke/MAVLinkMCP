@@ -289,25 +289,73 @@ def _client_side(turn: int, seq: int, tool: str, arguments: dict, why: str, resu
 
 
 def transcript_lines(run: AgentRun, model_messages: list) -> str:
-    """The trial as a readable conversation, for the supplementary material."""
+    """The trial as a readable conversation, for the supplementary material.
+
+    Providers disagree about what a message looks like. OpenAI puts the text in
+    a string and the tool calls in a sibling field; Anthropic puts everything in
+    a list of typed blocks, and tool results come back as *user* messages. This
+    renders both, because a transcript that only works for one vendor is no use
+    in a cross-model comparison.
+    """
     out: list[str] = []
     for message in model_messages:
         role = message.get("role", "?")
+        content = message.get("content")
+
         if role == "system":
-            out.append("### System prompt\n\n```\n" + (message.get("content") or "") + "\n```\n")
-        elif role == "user":
-            out.append("### Operator request\n\n> " + (message.get("content") or "").replace("\n", "\n> ") + "\n")
-        elif role == "assistant":
-            text = message.get("content") or ""
+            out.append("### System prompt\n\n```\n" + _as_text(content) + "\n```\n")
+            continue
+
+        blocks = content if isinstance(content, list) else []
+        if role == "user":
+            # A user message is either the operator's request or a batch of
+            # tool results handed back in Anthropic's shape.
+            results = [b for b in blocks if isinstance(b, dict) and b.get("type") == "tool_result"]
+            if results:
+                for block in results:
+                    out.append(f"**Result**\n\n```json\n{_pretty(block.get('content'))}\n```\n")
+            else:
+                out.append("### Operator request\n\n> " + _as_text(content).replace("\n", "\n> ") + "\n")
+            continue
+
+        if role == "tool":  # OpenAI's shape: one message per result
+            out.append(f"**Result**\n\n```json\n{_pretty(content)}\n```\n")
+            continue
+
+        if role == "assistant":
+            text = _as_text(content)
             if text:
                 out.append("**Model:** " + text + "\n")
+            for block in blocks:
+                if not isinstance(block, dict):
+                    continue
+                if block.get("type") == "thinking":
+                    thought = block.get("thinking") or ""
+                    if thought:
+                        out.append(
+                            "<details><summary>Model's reasoning</summary>\n\n```\n" + thought + "\n```\n</details>\n"
+                        )
+                elif block.get("type") == "tool_use":
+                    out.append(
+                        f"**Model calls** `{block.get('name')}`\n\n```json\n{_pretty(block.get('input'))}\n```\n"
+                    )
             for call in message.get("tool_calls") or []:
                 fn = call.get("function") or {}
                 out.append(f"**Model calls** `{fn.get('name')}`\n\n```json\n{_pretty(fn.get('arguments'))}\n```\n")
-        elif role == "tool":
-            out.append(f"**Result**\n\n```json\n{_pretty(message.get('content'))}\n```\n")
+
     out.append(f"\n---\n\n**Stopped because:** {run.stop_reason}\n")
     return "\n".join(out)
+
+
+def _as_text(content) -> str:
+    """The human-readable prose of a message, whatever shape it arrived in."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(
+            b.get("text") or "" for b in content if isinstance(b, dict) and b.get("type") == "text"
+        ).strip()
+    return "" if content is None else str(content)
 
 
 def _pretty(blob) -> str:
