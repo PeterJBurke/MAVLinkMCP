@@ -52,16 +52,36 @@ def _validate_imported_mission(mission_items) -> dict | None:
     if not fence.active:
         return None
 
-    waypoints = [
-        {
-            "latitude_deg": item.x / 1e7,
-            "longitude_deg": item.y / 1e7,
-            "altitude_m": item.z,
-        }
-        for item in mission_items
-        # skip non-positional items (RTL, jumps) and the home placeholder
-        if item.command in (16, 21, 22, 82) and (item.x or item.y)
-    ]
+    # Altitude frames again: a QGC plan mixes them. seq 0 is the HOME
+    # placeholder (its AMSL altitude is not a commanded target), frames 0/5 are
+    # AMSL, frames 3/6 are relative to home, 10/11 are terrain-relative.
+    # Comparing an AMSL value against a relative ceiling rejects every valid
+    # plan - which is exactly what the first version of this check did.
+    AMSL_FRAMES = (0, 5)
+    RELATIVE_FRAMES = (3, 6, 10, 11)
+    POSITIONAL_COMMANDS = (16, 21, 22, 82)
+    home_amsl = LAYER.state_tracker.state.home_altitude_m
+
+    waypoints = []
+    for item in mission_items:
+        if item.seq == 0:  # HOME placeholder, not a commanded target
+            continue
+        if item.command not in POSITIONAL_COMMANDS or not (item.x or item.y):
+            continue
+        altitude = None
+        if item.frame in RELATIVE_FRAMES:
+            altitude = item.z
+        elif item.frame in AMSL_FRAMES and home_amsl is not None:
+            altitude = item.z - float(home_amsl)
+        # else: AMSL with no known home - horizontal position is still checked
+        waypoints.append(
+            {
+                "latitude_deg": item.x / 1e7,
+                "longitude_deg": item.y / 1e7,
+                "altitude_m": altitude,
+            }
+        )
+
     violations = check_mission(fence, waypoints)
     if not violations:
         return None
