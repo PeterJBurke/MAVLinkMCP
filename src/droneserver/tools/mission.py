@@ -8,6 +8,7 @@ from mcp.server.fastmcp import Context
 from droneserver.app import mcp
 from droneserver.mavlink.connection import ensure_connection
 from droneserver.telemetry.flight_log import LogColors, log_mavlink_cmd, log_tool_call, logger
+from droneserver.tools._common import first_stream_item
 
 
 @mcp.tool()
@@ -28,9 +29,18 @@ async def print_mission_progress(ctx: Context) -> dict:
         return {"status": "failed", "error": "Drone connection timeout. Please wait and try again."}
 
     drone = connector.drone
-    async for mission_progress in drone.mission.mission_progress():
-        logger.info(f"Mission progress: {mission_progress.current}/{mission_progress.total}")
-        return {"status": "success", "current": mission_progress.current, "total": mission_progress.total}
+    try:
+        mission_progress = await first_stream_item(drone.mission.mission_progress(), 10.0)
+    except TimeoutError:
+        return {
+            "status": "failed",
+            "error": "No mission progress received within 10s "
+            "(progress is emitted on waypoint transitions; there may be no active mission)",
+        }
+    except Exception as e:
+        return {"status": "failed", "error": f"Mission progress read failed: {e}"}
+    logger.info(f"Mission progress: {mission_progress.current}/{mission_progress.total}")
+    return {"status": "success", "current": mission_progress.current, "total": mission_progress.total}
 
 
 @mcp.tool()
@@ -125,52 +135,83 @@ async def initiate_mission(ctx: Context, mission_points: list, return_to_launch:
     }
 
 
-# TODO(v2): remove this deprecated stub in the v2 breaking-change pass
-# (Phase 2); see LOITER_MODE_CRASH_REPORT.md for why it was neutered.
 @mcp.tool()
-async def pause_mission(ctx: Context) -> dict:
+async def pause_mission(ctx: Context, mode: str = "guided_hold") -> dict:
     """
-    ⛔ DEPRECATED - DO NOT USE ⛔
+    Pause the running mission. v2 replaces the v1 deprecated stub with a real,
+    SAFE implementation.
 
-    This tool has been deprecated due to CRITICAL SAFETY ISSUES:
-    - Entering LOITER mode causes ALTITUDE DESCENT
-    - LOITER does NOT hold current altitude
-    - This has caused CRASHES in testing
+    mode="guided_hold" (DEFAULT, RECOMMENDED): switches to GUIDED and holds
+    the current position/altitude - the fix for the documented v1 crash
+    (LOITER descends without RC throttle input; see
+    LOITER_MODE_CRASH_REPORT.md). Same behavior as hold_mission_position.
 
-    ✅ USE hold_mission_position() INSTEAD ✅
+    mode="native_hold": firmware-native pause (MavSDK mission pause ->
+    Hold/Loiter). ⚠️ On ArduPilot, LOITER altitude depends on RC throttle;
+    on a real drone WITHOUT an RC transmitter at mid-throttle this can
+    descend. Only use with RC present or on PX4.
 
-    The hold_mission_position() tool:
-    - Stays in GUIDED mode (safe)
-    - Maintains current altitude (no descent)
-    - Holds position reliably
-
-    This tool will be removed in a future version.
+    To continue the mission afterwards use resume_mission (optionally
+    set_current_waypoint first).
 
     Args:
-        ctx (Context): The context of the request.
+        mode (str): "guided_hold" (default, safe) or "native_hold".
 
     Returns:
-        dict: Error message directing to safe alternative.
+        dict: status + position/waypoint info.
     """
-    logger.error(f"{LogColors.ERROR}⛔ pause_mission() called - THIS TOOL IS DEPRECATED AND UNSAFE!{LogColors.RESET}")
-    logger.error(
-        f"{LogColors.ERROR}⚠️  CRITICAL: pause_mission enters LOITER mode which requires RC throttle input{LogColors.RESET}"
-    )
-    logger.error(
-        f"{LogColors.ERROR}⚠️  Without RC throttle at 50%, altitude is unpredictable - this has caused crashes!{LogColors.RESET}"
-    )
-    logger.error(f"{LogColors.ERROR}⚠️  Use hold_mission_position() instead - it stays in GUIDED mode{LogColors.RESET}")
+    log_tool_call("pause_mission", mode=mode)
+    mode = str(mode).lower()
+    if mode not in ("guided_hold", "native_hold"):
+        return {"status": "failed", "error": f'mode must be "guided_hold" or "native_hold", got {mode!r}'}
 
+    connector = ctx.request_context.lifespan_context
+    if not await ensure_connection(connector):
+        return {"status": "failed", "error": "Drone connection timeout. Please wait and try again."}
+    drone = connector.drone
+
+    if mode == "native_hold":
+        try:
+            log_mavlink_cmd("drone.mission.pause_mission")
+            await drone.mission.pause_mission()
+        except Exception as e:
+            logger.error(f"native mission pause failed: {e}")
+            return {"status": "failed", "error": f"Mission pause failed: {e}"}
+        return {
+            "status": "success",
+            "message": "Mission paused (firmware Hold/Loiter mode)",
+            "warning": "⚠️ On ArduPilot, LOITER altitude tracks RC throttle - without an RC "
+            "at mid-throttle the drone can descend. Prefer mode=guided_hold without RC.",
+            "note": "Use resume_mission to continue.",
+        }
+
+    # guided_hold: goto current position in GUIDED (altitude-safe, no RC needed)
+    try:
+        current_wp = 0
+        total_wp = 0
+        try:
+            progress = await first_stream_item(drone.mission.mission_progress(), 3.0)
+            current_wp, total_wp = progress.current, progress.total
+        except TimeoutError:
+            pass  # no active mission info - still safe to hold position
+        position = await first_stream_item(drone.telemetry.position(), 10.0)
+        current_lat = position.latitude_deg
+        current_lon = position.longitude_deg
+        current_alt = position.absolute_altitude_m
+        log_mavlink_cmd(f"drone.action.goto_location(lat={current_lat}, lon={current_lon}, alt={current_alt})")
+        logger.info(f"Pausing mission via GUIDED hold - was at waypoint {current_wp}/{total_wp}")
+        await drone.action.goto_location(current_lat, current_lon, current_alt, float("nan"))
+    except Exception as e:
+        logger.error(f"{LogColors.ERROR}❌ TOOL ERROR - Failed to pause mission: {e}{LogColors.RESET}")
+        return {"status": "failed", "error": f"Mission pause failed: {e}"}
     return {
-        "status": "failed",
-        "error": "⛔ pause_mission() is DEPRECATED due to safety issues",
-        "reason": "LOITER mode requires RC throttle input (50% to hold altitude) - not available via MAVLink",
-        "technical_details": "Per ArduPilot docs: 'Altitude can be controlled with the Throttle control stick' - we don't have throttle control via MAVSDK",
-        "crash_report": "Flight testing: unknown throttle position → altitude descent from 25m → GROUND IMPACT",
-        "safe_alternative": "Use hold_mission_position() instead",
-        "why_safe": "hold_mission_position() uses GUIDED mode which doesn't require RC input and maintains altitude autonomously",
-        "how_to_use": "Call hold_mission_position() to pause, then set_current_waypoint() + resume_mission() to continue",
-        "migration_guide": "See LOITER_MODE_CRASH_REPORT.md for full details",
+        "status": "success",
+        "message": f"Mission paused - holding position in GUIDED mode (was at waypoint {current_wp}/{total_wp})",
+        "was_at_waypoint": current_wp,
+        "total_waypoints": total_wp,
+        "position": {"latitude": current_lat, "longitude": current_lon, "altitude": current_alt},
+        "flight_mode": "GUIDED",
+        "note": "Use set_current_waypoint + resume_mission to continue the mission.",
     }
 
 
@@ -290,7 +331,7 @@ async def resume_mission(ctx: Context) -> dict:
             flight_mode = await drone.telemetry.flight_mode().__anext__()
             logger.info(f"Flight mode after resume: {flight_mode}")
             mode_ok = "AUTO" in str(flight_mode) or "MISSION" in str(flight_mode)
-        except:
+        except Exception:
             mode_ok = False
             flight_mode = "UNKNOWN"
 
@@ -515,23 +556,9 @@ async def download_mission(ctx: Context) -> dict:
     drone = connector.drone
     logger.info("Downloading mission from drone")
 
-    # Check mission progress first to verify mission exists
-    try:
-        log_mavlink_cmd("drone.mission.mission_progress")
-        async for progress in drone.mission.mission_progress():
-            logger.info(
-                f"{LogColors.STATUS}Mission has {progress.total} waypoints, currently at {progress.current}{LogColors.RESET}"
-            )
-            if progress.total == 0:
-                return {
-                    "status": "failed",
-                    "error": "No mission on drone (mission count is 0)",
-                    "hint": "Upload a mission first using upload_mission",
-                }
-            break
-    except Exception as e:
-        logger.warning(f"Could not check mission progress: {e}")
-
+    # v2 fix: v1 pre-checked drone.mission.mission_progress() here, which HANGS
+    # forever when the mission was uploaded via the raw path (the stream never
+    # emits). The raw download below reports "no mission" errors on its own.
     # Try to download mission with proper retry logic
     max_retries = 5  # Increased retries
     retry_delay = 0.3  # Shorter, more frequent retries
@@ -604,6 +631,13 @@ async def download_mission(ctx: Context) -> dict:
                     "hint": "Ensure a mission has been uploaded to the drone",
                     "attempts": attempt + 1,
                 }
+
+    # All retries exhausted with UNSUPPORTED (retry path continued past the loop)
+    return {
+        "status": "failed",
+        "error": f"Mission download UNSUPPORTED after {max_retries} attempts",
+        "hint": "Wait a moment after upload and retry, or use is_mission_finished() to monitor.",
+    }
 
 
 @mcp.tool()
@@ -704,7 +738,7 @@ async def is_mission_finished(ctx: Context) -> dict:
         # Get current flight mode
         try:
             flight_mode = await drone.telemetry.flight_mode().__anext__()
-        except:
+        except Exception:
             flight_mode = "UNKNOWN"
 
         status_text = "FINISHED" if finished else "IN PROGRESS"
@@ -722,3 +756,76 @@ async def is_mission_finished(ctx: Context) -> dict:
     except Exception as e:
         logger.error(f"Check mission finished failed: {e}{LogColors.RESET}")
         return {"status": "failed", "error": f"Mission status check failed: {str(e)}"}
+
+
+# ============================================================================
+# v2: remaining mission-plugin coverage
+# ============================================================================
+
+
+@mcp.tool()
+async def rtl_after_mission(ctx: Context, action: str, enabled: bool = True) -> dict:
+    """Get or set whether the drone returns to launch automatically after the
+    last mission item.
+
+    Args:
+        action (str): "get" or "set".
+        enabled (bool): for "set": True = RTL after mission (default).
+
+    Returns:
+        dict: status (+ enabled for "get").
+    """
+    log_tool_call("rtl_after_mission", action=action, enabled=enabled)
+    action = str(action).lower()
+    if action not in ("get", "set"):
+        return {"status": "failed", "error": f'action must be "get" or "set", got {action!r}'}
+
+    connector = ctx.request_context.lifespan_context
+    if not await ensure_connection(connector):
+        return {"status": "failed", "error": "Drone connection timeout. Please wait and try again."}
+    drone = connector.drone
+    try:
+        if action == "get":
+            log_mavlink_cmd("drone.mission.get_return_to_launch_after_mission")
+            value = await drone.mission.get_return_to_launch_after_mission()
+            return {"status": "success", "enabled": value}
+        log_mavlink_cmd("drone.mission.set_return_to_launch_after_mission", enabled=enabled)
+        await drone.mission.set_return_to_launch_after_mission(bool(enabled))
+        return {"status": "success", "message": f"RTL-after-mission set to {bool(enabled)}"}
+    except Exception as e:
+        logger.error(f"rtl_after_mission({action}) failed: {e}")
+        return {"status": "failed", "error": f"rtl_after_mission {action} failed: {e}"}
+
+
+@mcp.tool()
+async def cancel_mission_transfer(ctx: Context, direction: str) -> dict:
+    """Cancel an in-progress mission upload or download (mission plugin).
+
+    Only meaningful while a transfer is running; errors otherwise.
+
+    Args:
+        direction (str): "upload" or "download".
+
+    Returns:
+        dict: status.
+    """
+    log_tool_call("cancel_mission_transfer", direction=direction)
+    direction = str(direction).lower()
+    if direction not in ("upload", "download"):
+        return {"status": "failed", "error": f'direction must be "upload" or "download", got {direction!r}'}
+
+    connector = ctx.request_context.lifespan_context
+    if not await ensure_connection(connector):
+        return {"status": "failed", "error": "Drone connection timeout. Please wait and try again."}
+    drone = connector.drone
+    try:
+        if direction == "upload":
+            log_mavlink_cmd("drone.mission.cancel_mission_upload")
+            await drone.mission.cancel_mission_upload()
+        else:
+            log_mavlink_cmd("drone.mission.cancel_mission_download")
+            await drone.mission.cancel_mission_download()
+    except Exception as e:
+        logger.error(f"cancel_mission_transfer({direction}) failed: {e}")
+        return {"status": "failed", "error": f"cancel {direction} failed: {e}"}
+    return {"status": "success", "message": f"mission {direction} cancelled"}

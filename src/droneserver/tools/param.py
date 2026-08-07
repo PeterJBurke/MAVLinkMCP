@@ -17,8 +17,10 @@ async def get_parameter(ctx: Context, name: str, param_type: str = "auto") -> di
     Args:
         ctx (Context): The context of the request.
         name (str): Parameter name (e.g., "RTL_ALT", "WPNAV_SPEED", "BATT_CAPACITY").
-        param_type (str): Type of parameter - "int", "float", or "auto" (default: auto).
-                          If "auto", will try float first, then int.
+        param_type (str): Type of parameter - "int", "float", "custom" (string
+                          parameters via the PARAM_EXT protocol; PX4 only -
+                          ArduPilot does not implement it), or "auto"
+                          (default: try float first, then int).
 
     Returns:
         dict: Parameter value and type, or error if parameter not found.
@@ -44,12 +46,15 @@ async def get_parameter(ctx: Context, name: str, param_type: str = "auto") -> di
         elif param_type == "float":
             value = await drone.param.get_param_float(name)
             return {"status": "success", "name": name, "value": value, "type": "float"}
+        elif param_type == "custom":
+            value = await drone.param.get_param_custom(name)
+            return {"status": "success", "name": name, "value": value, "type": "custom"}
         else:  # auto-detect
             # Try float first (most common)
             try:
                 value = await drone.param.get_param_float(name)
                 return {"status": "success", "name": name, "value": value, "type": "float"}
-            except:
+            except Exception:
                 # If float fails, try int
                 value = await drone.param.get_param_int(name)
                 return {"status": "success", "name": name, "value": value, "type": "int"}
@@ -63,7 +68,9 @@ async def get_parameter(ctx: Context, name: str, param_type: str = "auto") -> di
 
 
 @mcp.tool()
-async def set_parameter(ctx: Context, name: str, value: float, param_type: str = "auto") -> dict:
+async def set_parameter(
+    ctx: Context, name: str, value: float = 0.0, param_type: str = "auto", custom_value: str = ""
+) -> dict:
     """
     Set the value of a drone parameter by name.
     ⚠️ WARNING: Changing parameters can affect flight behavior. Only modify if you know what you're doing!
@@ -72,9 +79,11 @@ async def set_parameter(ctx: Context, name: str, value: float, param_type: str =
     Args:
         ctx (Context): The context of the request.
         name (str): Parameter name (e.g., "RTL_ALT", "WPNAV_SPEED").
-        value (float): New parameter value.
-        param_type (str): Type of parameter - "int", "float", or "auto" (default: auto).
-                          If "auto", will detect based on value (int if no decimal).
+        value (float): New parameter value (ignored for param_type="custom").
+        param_type (str): Type of parameter - "int", "float", "custom"
+                          (string parameters via PARAM_EXT; PX4 only), or
+                          "auto" (default: int if no decimal).
+        custom_value (str): the string value for param_type="custom".
 
     Returns:
         dict: Confirmation of parameter change with old and new values.
@@ -99,6 +108,19 @@ async def set_parameter(ctx: Context, name: str, value: float, param_type: str =
     logger.warning(f"⚠️ Setting parameter: {name} = {value} (type: {param_type})")
 
     try:
+        if param_type == "custom":
+            if not custom_value:
+                return {"status": "failed", "error": 'param_type="custom" requires custom_value'}
+            log_mavlink_cmd("drone.param.set_param_custom", name=name, value=custom_value)
+            await drone.param.set_param_custom(name, custom_value)
+            return {
+                "status": "success",
+                "name": name,
+                "new_value": custom_value,
+                "type": "custom",
+                "message": f"Parameter '{name}' set to {custom_value!r}",
+            }
+
         # Get old value first
         try:
             if param_type == "int" or (param_type == "auto" and value == int(value)):
@@ -107,7 +129,7 @@ async def set_parameter(ctx: Context, name: str, value: float, param_type: str =
             else:
                 old_value = await drone.param.get_param_float(name)
                 param_type_final = "float"
-        except:
+        except Exception:
             old_value = None
             # Assume float if we can't get old value
             param_type_final = "float" if param_type == "auto" else param_type
@@ -218,3 +240,37 @@ async def list_parameters(ctx: Context, filter_prefix: str = "") -> dict:
     except Exception as e:
         logger.error(f"{LogColors.ERROR}❌ TOOL ERROR - Failed to list parameters: {e}{LogColors.RESET}")
         return {"status": "failed", "error": f"Failed to retrieve parameters: {str(e)}"}
+
+
+@mcp.tool()
+async def param_select_component(ctx: Context, component_id: int, protocol_version: str = "v1") -> dict:
+    """EXPERT: choose which MAVLink component subsequent parameter operations
+    talk to (default is the autopilot). Use e.g. for camera or gimbal
+    components that expose their own parameter sets.
+
+    Args:
+        component_id (int): MAVLink component id (1 = autopilot, 100+ = cameras, ...).
+        protocol_version (str): "v1" (standard PARAM) or "ext" (PARAM_EXT).
+
+    Returns:
+        dict: status.
+    """
+    from mavsdk.param import ProtocolVersion
+
+    logger.info(f"Selecting param component {component_id} ({protocol_version})")
+    versions = {"v1": ProtocolVersion.V1, "ext": ProtocolVersion.EXT}
+    version = versions.get(str(protocol_version).lower())
+    if version is None:
+        return {"status": "failed", "error": f'protocol_version must be "v1" or "ext", got {protocol_version!r}'}
+
+    connector = ctx.request_context.lifespan_context
+    if not await ensure_connection(connector):
+        return {"status": "failed", "error": "Drone connection timeout. Please wait and try again."}
+    drone = connector.drone
+    try:
+        log_mavlink_cmd("drone.param.select_component", component_id=component_id)
+        await drone.param.select_component(int(component_id), version)
+    except Exception as e:
+        logger.error(f"select_component failed: {e}")
+        return {"status": "failed", "error": f"select_component failed: {e}"}
+    return {"status": "success", "message": f"parameter operations now target component {component_id}"}

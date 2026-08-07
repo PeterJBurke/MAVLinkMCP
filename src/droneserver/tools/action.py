@@ -20,9 +20,15 @@ from droneserver.telemetry.flight_log import (
 
 # ARM
 @mcp.tool()
-async def arm_drone(ctx: Context) -> dict:
-    """Arm the drone. Waits for drone connection if not yet ready."""
-    log_tool_call("arm_drone")
+async def arm_drone(ctx: Context, force: bool = False) -> dict:
+    """Arm the drone. Waits for drone connection if not yet ready.
+
+    Args:
+        force (bool): if True, force-arm WITHOUT prearm safety checks
+            (DANGEROUS - bypasses sensor/EKF checks; use only when you
+            understand why the checks fail). Default False.
+    """
+    log_tool_call("arm_drone", force=force)
     connector = ctx.request_context.lifespan_context
 
     # Wait for connection
@@ -30,8 +36,16 @@ async def arm_drone(ctx: Context) -> dict:
         return {"status": "failed", "error": "Drone connection timeout. Please wait and try again."}
 
     drone = connector.drone
-    log_mavlink_cmd("drone.action.arm")
-    await drone.action.arm()
+    try:
+        if force:
+            log_mavlink_cmd("drone.action.arm_force")
+            await drone.action.arm_force()
+            return {"status": "success", "message": "Drone FORCE-armed (prearm checks bypassed)"}
+        log_mavlink_cmd("drone.action.arm")
+        await drone.action.arm()
+    except Exception as e:
+        logger.error(f"arm failed: {e}")
+        return {"status": "failed", "error": f"Arming failed: {e}"}
     return {"status": "success", "message": "Drone armed"}
 
 
@@ -76,9 +90,6 @@ async def move_to_relative(ctx: Context, north_m: float, east_m: float, down_m: 
         target_alt = current_alt - down_m
 
         # Convert NED offsets (meters) to lat/lon offsets (degrees)
-        # Earth radius in meters (approximate)
-        EARTH_RADIUS = 6371000.0
-
         # Latitude: 1 degree = ~111,320 meters (constant)
         # north_m positive = increase latitude
         lat_offset_deg = north_m / 111320.0
@@ -167,7 +178,7 @@ async def takeoff(ctx: Context, takeoff_altitude: float = 3.0, wait_for_altitude
     altitude_threshold = 0.5  # Consider arrived when within 0.5m of target
     max_wait_time = 60  # Maximum wait time in seconds
     check_interval = 1.0  # Check every second
-    elapsed_time = 0
+    elapsed_time = 0.0
 
     while elapsed_time < max_wait_time:
         try:
@@ -198,8 +209,8 @@ async def takeoff(ctx: Context, takeoff_altitude: float = 3.0, wait_for_altitude
         async for position in drone.telemetry.position():
             current_alt = position.relative_altitude_m
             break
-    except:
-        current_alt = 0
+    except Exception:
+        current_alt = 0.0
 
     logger.warning(f"Takeoff timeout after {max_wait_time}s - current altitude: {current_alt:.1f}m")
     return {
@@ -388,7 +399,7 @@ async def set_flight_mode(ctx: Context, mode: str) -> dict:
         try:
             new_mode = await drone.telemetry.flight_mode().__anext__()
             actual_mode = str(new_mode)
-        except:
+        except Exception:
             actual_mode = "UNKNOWN"
 
         logger.info(f"{LogColors.SUCCESS}✅ Flight mode set to {result_mode} (actual: {actual_mode}){LogColors.RESET}")
@@ -631,7 +642,7 @@ async def go_to_location(
             async for velocity in drone.telemetry.velocity_ned():
                 ground_speed = math.sqrt(velocity.north_m_s**2 + velocity.east_m_s**2)
                 break
-        except:
+        except Exception:
             ground_speed = 10.0  # Default assumption
 
         # Estimate flight time (assuming ~10-15 m/s cruise speed for copter)
@@ -884,7 +895,7 @@ async def monitor_flight(ctx: Context, arrival_threshold_m: float = 20.0, auto_l
         logger.info(f"Monitoring flight for {wait_seconds}s...")
 
         check_interval = 1.0  # Check every second for arrival detection
-        elapsed_in_monitor = 0
+        elapsed_in_monitor = 0.0
 
         while elapsed_in_monitor < wait_seconds:
             # Get current position
@@ -909,8 +920,8 @@ async def monitor_flight(ctx: Context, arrival_threshold_m: float = 20.0, auto_l
                 async for velocity in drone.telemetry.velocity_ned():
                     ground_speed = math.sqrt(velocity.north_m_s**2 + velocity.east_m_s**2)
                     break
-            except:
-                ground_speed = 0
+            except Exception:
+                ground_speed = 0.0
 
             # Calculate ETA
             if ground_speed > 0.5:
@@ -1024,8 +1035,6 @@ async def monitor_flight(ctx: Context, arrival_threshold_m: float = 20.0, auto_l
             elapsed_in_monitor += check_interval
 
         # Monitoring period ended, still in progress
-        total_elapsed = asyncio.get_event_loop().time() - start_time
-
         # Format ETA nicely
         if eta_seconds:
             if eta_seconds > 60:
@@ -1080,17 +1089,31 @@ async def set_max_speed(ctx: Context, speed_m_s: float) -> dict:
     drone = connector.drone
     logger.info(f"Setting maximum speed to {speed_m_s} m/s")
 
+    # v2 fix: v1 called drone.action.set_maximum_speed(), which does not exist
+    # in MavSDK 3.x - the tool always errored. Now: try the current-speed
+    # command (DO_CHANGE_SPEED - applies while flying in guided/auto), and
+    # fall back to the ArduPilot WPNAV_SPEED parameter (cm/s) on the ground.
     try:
-        log_mavlink_cmd("drone.action.set_maximum_speed", speed_m_s=speed_m_s)
-        await drone.action.set_maximum_speed(speed_m_s)
+        log_mavlink_cmd("drone.action.set_current_speed", speed_m_s=speed_m_s)
+        await drone.action.set_current_speed(float(speed_m_s))
         return {
             "status": "success",
-            "message": f"Maximum speed set to {speed_m_s} m/s",
-            "speed_kmh": round(speed_m_s * 3.6, 1),  # Also provide in km/h
+            "message": f"Current target speed set to {speed_m_s} m/s (DO_CHANGE_SPEED)",
+            "speed_kmh": round(speed_m_s * 3.6, 1),
         }
-    except Exception as e:
-        logger.error(f"{LogColors.ERROR}❌ TOOL ERROR - Failed to set max speed: {e}{LogColors.RESET}")
-        return {"status": "failed", "error": f"Set max speed failed: {str(e)}"}
+    except Exception as speed_error:
+        try:
+            log_mavlink_cmd("drone.param.set_param_float", name="WPNAV_SPEED", value=speed_m_s * 100)
+            await drone.param.set_param_float("WPNAV_SPEED", float(speed_m_s) * 100.0)
+            return {
+                "status": "success",
+                "message": f"Waypoint speed limit set to {speed_m_s} m/s via WPNAV_SPEED "
+                f"(DO_CHANGE_SPEED was rejected: {speed_error})",
+                "speed_kmh": round(speed_m_s * 3.6, 1),
+            }
+        except Exception as e:
+            logger.error(f"{LogColors.ERROR}❌ TOOL ERROR - Failed to set max speed: {e}{LogColors.RESET}")
+            return {"status": "failed", "error": f"Set max speed failed: {e} (speed command: {speed_error})"}
 
 
 # ============================================================================
@@ -1181,6 +1204,7 @@ async def set_yaw(ctx: Context, yaw_deg: float, yaw_rate_deg_s: float = 30.0) ->
                 "cardinal_direction": cardinal,
                 "yaw_rate_deg_s": yaw_rate_deg_s,
             }
+        return {"status": "failed", "error": "No position telemetry received"}
     except Exception as e:
         logger.error(f"Set yaw failed: {e}{LogColors.RESET}")
         return {"status": "failed", "error": f"Yaw control failed: {str(e)}"}
@@ -1259,3 +1283,250 @@ async def reposition(ctx: Context, latitude_deg: float, longitude_deg: float, al
     except Exception as e:
         logger.error(f"Reposition failed: {e}{LogColors.RESET}")
         return {"status": "failed", "error": f"Reposition failed: {str(e)}"}
+
+
+# ============================================================================
+# v2: remaining action-plugin coverage
+# ============================================================================
+
+
+@mcp.tool()
+async def do_orbit(
+    ctx: Context,
+    radius_m: float,
+    velocity_m_s: float,
+    latitude_deg: float,
+    longitude_deg: float,
+    absolute_altitude_m: float,
+    yaw_behavior: str = "front_to_center",
+) -> dict:
+    """Command the drone to orbit around a point (MAV_CMD_DO_ORBIT).
+
+    FIRMWARE NOTE: ArduCopter rejects this with UNSUPPORTED (observed on
+    4.5.7 SITL) - it has no DO_ORBIT handler. PX4 supports it. For an
+    ArduPilot-compatible orbit, use offboard_set_velocity_body with a yaw
+    rate instead.
+
+    Args:
+        radius_m (float): orbit radius in meters (>0).
+        velocity_m_s (float): tangential speed (m/s, max 20).
+        latitude_deg, longitude_deg (float): center of the orbit.
+        absolute_altitude_m (float): orbit altitude AMSL.
+        yaw_behavior (str): "front_to_center", "hold_initial", "uncontrolled",
+            "front_tangent", or "rc_controlled".
+
+    Returns:
+        dict: status.
+    """
+    from mavsdk.action import OrbitYawBehavior
+
+    log_tool_call(
+        "do_orbit",
+        radius_m=radius_m,
+        velocity_m_s=velocity_m_s,
+        latitude_deg=latitude_deg,
+        longitude_deg=longitude_deg,
+        absolute_altitude_m=absolute_altitude_m,
+        yaw_behavior=yaw_behavior,
+    )
+    behaviors = {
+        "front_to_center": OrbitYawBehavior.HOLD_FRONT_TO_CIRCLE_CENTER,
+        "hold_initial": OrbitYawBehavior.HOLD_INITIAL_HEADING,
+        "uncontrolled": OrbitYawBehavior.UNCONTROLLED,
+        "front_tangent": OrbitYawBehavior.HOLD_FRONT_TANGENT_TO_CIRCLE,
+        "rc_controlled": OrbitYawBehavior.RC_CONTROLLED,
+    }
+    behavior = behaviors.get(str(yaw_behavior).lower())
+    if behavior is None:
+        return {"status": "failed", "error": f"yaw_behavior must be one of {sorted(behaviors)}, got {yaw_behavior!r}"}
+    if not 1.0 <= float(radius_m) <= 10_000.0:
+        return {"status": "failed", "error": f"radius_m must be between 1 and 10000, got {radius_m}"}
+    if not 0.1 <= abs(float(velocity_m_s)) <= 20.0:
+        return {"status": "failed", "error": f"velocity_m_s magnitude must be between 0.1 and 20, got {velocity_m_s}"}
+    if not (-90 <= float(latitude_deg) <= 90 and -180 <= float(longitude_deg) <= 180):
+        return {"status": "failed", "error": f"latitude/longitude out of range ({latitude_deg}, {longitude_deg})"}
+
+    connector = ctx.request_context.lifespan_context
+    if not await ensure_connection(connector):
+        return {"status": "failed", "error": "Drone connection timeout. Please wait and try again."}
+    drone = connector.drone
+    try:
+        log_mavlink_cmd("drone.action.do_orbit", radius_m=radius_m)
+        await drone.action.do_orbit(
+            float(radius_m),
+            float(velocity_m_s),
+            behavior,
+            float(latitude_deg),
+            float(longitude_deg),
+            float(absolute_altitude_m),
+        )
+    except Exception as e:
+        logger.error(f"do_orbit failed: {e}")
+        return {
+            "status": "failed",
+            "error": f"do_orbit failed: {e} (ArduPilot does not support DO_ORBIT - see tool description)",
+        }
+    return {"status": "success", "message": f"Orbiting ({radius_m} m radius at {velocity_m_s} m/s)"}
+
+
+@mcp.tool()
+async def vehicle_power(ctx: Context, action: str, confirm: bool = False) -> dict:
+    """CRITICAL: reboot, shut down, or TERMINATE the autopilot.
+
+    - "reboot": restart the autopilot (drops the link briefly; verified
+      working on ArduPilot SITL).
+    - "shutdown": power down the autopilot (UNSUPPORTED on ArduPilot -
+      observed).
+    - "terminate": FLIGHT TERMINATION - motors stop IMMEDIATELY, the drone
+      falls. Ultimate emergency stop only.
+
+    All actions require confirm=True (refused otherwise). Never use on an
+    armed/flying vehicle except terminate in a genuine emergency.
+
+    Args:
+        action (str): "reboot", "shutdown", or "terminate".
+        confirm (bool): must be True to execute.
+
+    Returns:
+        dict: status.
+    """
+    log_tool_call("vehicle_power", action=action, confirm=confirm)
+    action = str(action).lower()
+    if action not in ("reboot", "shutdown", "terminate"):
+        return {"status": "failed", "error": f'action must be "reboot", "shutdown" or "terminate", got {action!r}'}
+    if not confirm:
+        return {
+            "status": "failed",
+            "error": f"{action} refused: pass confirm=true to execute this critical action",
+        }
+
+    connector = ctx.request_context.lifespan_context
+    if not await ensure_connection(connector):
+        return {"status": "failed", "error": "Drone connection timeout. Please wait and try again."}
+    drone = connector.drone
+    try:
+        log_mavlink_cmd(f"drone.action.{action}")
+        if action == "reboot":
+            await drone.action.reboot()
+        elif action == "shutdown":
+            await drone.action.shutdown()
+        else:
+            await drone.action.terminate()
+    except Exception as e:
+        logger.error(f"vehicle_power({action}) failed: {e}")
+        return {"status": "failed", "error": f"{action} failed: {e}"}
+    return {"status": "success", "message": f"{action} command sent"}
+
+
+@mcp.tool()
+async def set_actuator(ctx: Context, index: int, value: float) -> dict:
+    """EXPERT: directly set an actuator/servo output (MAV_CMD_DO_SET_ACTUATOR).
+
+    Args:
+        index (int): actuator output index (1-16).
+        value (float): normalized output in [-1, 1].
+
+    Returns:
+        dict: status.
+    """
+    log_tool_call("set_actuator", index=index, value=value)
+    if not 1 <= int(index) <= 16:
+        return {"status": "failed", "error": f"index must be between 1 and 16, got {index}"}
+    if not -1.0 <= float(value) <= 1.0:
+        return {"status": "failed", "error": f"value must be within [-1, 1], got {value}"}
+
+    connector = ctx.request_context.lifespan_context
+    if not await ensure_connection(connector):
+        return {"status": "failed", "error": "Drone connection timeout. Please wait and try again."}
+    drone = connector.drone
+    try:
+        log_mavlink_cmd("drone.action.set_actuator", index=index, value=value)
+        await drone.action.set_actuator(int(index), float(value))
+    except Exception as e:
+        logger.error(f"set_actuator failed: {e}")
+        return {"status": "failed", "error": f"set_actuator failed: {e}"}
+    return {"status": "success", "message": f"actuator {index} set to {value}"}
+
+
+@mcp.tool()
+async def flight_altitudes(ctx: Context, action: str, altitude_m: float = 0.0) -> dict:
+    """Get/set the default takeoff altitude and the return-to-launch altitude.
+
+    FIRMWARE NOTE: the RTL altitude actions use the PX4 parameter
+    (RTL_RETURN_ALT) - on ArduPilot they fail with PARAMETER_ERROR
+    (observed); use set_parameter("RTL_ALT", centimeters) there instead.
+
+    Args:
+        action (str): "get_takeoff", "set_takeoff", "get_rtl", or "set_rtl".
+        altitude_m (float): altitude in meters for the set actions (1-500).
+
+    Returns:
+        dict: status (+ altitude_m for the get actions).
+    """
+    log_tool_call("flight_altitudes", action=action, altitude_m=altitude_m)
+    action = str(action).lower()
+    if action not in ("get_takeoff", "set_takeoff", "get_rtl", "set_rtl"):
+        return {
+            "status": "failed",
+            "error": f'action must be "get_takeoff", "set_takeoff", "get_rtl" or "set_rtl", got {action!r}',
+        }
+    if action.startswith("set_") and not 1.0 <= float(altitude_m) <= 500.0:
+        return {"status": "failed", "error": f"altitude_m must be between 1 and 500, got {altitude_m}"}
+
+    connector = ctx.request_context.lifespan_context
+    if not await ensure_connection(connector):
+        return {"status": "failed", "error": "Drone connection timeout. Please wait and try again."}
+    drone = connector.drone
+    try:
+        log_mavlink_cmd(f"drone.action.{action}_altitude")
+        if action == "get_takeoff":
+            alt = await drone.action.get_takeoff_altitude()
+            return {"status": "success", "altitude_m": alt}
+        if action == "set_takeoff":
+            await drone.action.set_takeoff_altitude(float(altitude_m))
+            return {"status": "success", "message": f"default takeoff altitude set to {altitude_m} m"}
+        if action == "get_rtl":
+            alt = await drone.action.get_return_to_launch_altitude()
+            return {"status": "success", "altitude_m": alt}
+        await drone.action.set_return_to_launch_altitude(float(altitude_m))
+        return {"status": "success", "message": f"RTL altitude set to {altitude_m} m"}
+    except Exception as e:
+        logger.error(f"flight_altitudes({action}) failed: {e}")
+        return {
+            "status": "failed",
+            "error": f"{action} failed: {e} (on ArduPilot use set_parameter('RTL_ALT', cm) for RTL altitude)",
+        }
+
+
+@mcp.tool()
+async def vtol_transition(ctx: Context, to: str) -> dict:
+    """Transition a VTOL vehicle between fixedwing and multicopter flight.
+
+    FIRMWARE NOTE: pure multicopters reject this with UNSUPPORTED (observed
+    on ArduCopter SITL) - it only applies to VTOL airframes.
+
+    Args:
+        to (str): "fixedwing" or "multicopter".
+
+    Returns:
+        dict: status.
+    """
+    log_tool_call("vtol_transition", to=to)
+    to = str(to).lower()
+    if to not in ("fixedwing", "multicopter"):
+        return {"status": "failed", "error": f'to must be "fixedwing" or "multicopter", got {to!r}'}
+
+    connector = ctx.request_context.lifespan_context
+    if not await ensure_connection(connector):
+        return {"status": "failed", "error": "Drone connection timeout. Please wait and try again."}
+    drone = connector.drone
+    try:
+        log_mavlink_cmd(f"drone.action.transition_to_{to}")
+        if to == "fixedwing":
+            await drone.action.transition_to_fixedwing()
+        else:
+            await drone.action.transition_to_multicopter()
+    except Exception as e:
+        logger.error(f"vtol_transition({to}) failed: {e}")
+        return {"status": "failed", "error": f"transition to {to} failed: {e} (VTOL airframes only)"}
+    return {"status": "success", "message": f"transition to {to} commanded"}
