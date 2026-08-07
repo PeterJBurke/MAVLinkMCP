@@ -132,7 +132,10 @@ async def get_or_create_global_connector() -> MAVLinkConnector:
             logger.warning("Invalid protocol '%s', defaulting to udp", protocol)
             protocol = "udp"
 
-        drone = System()
+        # One mavsdk_server per droneserver instance. Sharing the default port
+        # makes a second instance attach to the first instance's aircraft.
+        logger.info("  MAVSDK_SERVER_PORT: %s", settings.mavsdk_server_port)
+        drone = System(port=settings.mavsdk_server_port)
         connection_ready = asyncio.Event()
 
         # Create the global connector

@@ -200,6 +200,12 @@ def droneserver_url(sitl, tmp_path_factory):
         MAVLINK_ADDRESS=sitl["address"],
         MAVLINK_PORT=str(sitl["port"]),
         MAVLINK_PROTOCOL="tcp",
+        # A unique mavsdk_server port per server. MavSDK defaults every
+        # instance to 50051, so any OTHER droneserver on this machine (a
+        # staging service, say) would capture these tests and fly them against
+        # its own aircraft. Measured: that is exactly what happened, and 32
+        # tests "failed" while talking to a simulator 8000 km away.
+        MAVSDK_SERVER_PORT=str(_free_port()),
         FLIGHT_LOG_DIR=str(workdir / "flight_logs"),
         # The functional suites run many critical-tool round-trips back to
         # back, which would legitimately trip the default critical budget
@@ -311,6 +317,7 @@ def safe_server(sitl, tmp_path_factory):
         MAVLINK_ADDRESS=sitl["address"],
         MAVLINK_PORT=str(sitl["port"]),
         MAVLINK_PROTOCOL="tcp",
+        MAVSDK_SERVER_PORT=str(_free_port()),
         FLIGHT_LOG_DIR=str(workdir / "flight_logs"),
         SAFETY_AUDIT_LOG_PATH=str(audit_path),
         **SAFETY_ENV,

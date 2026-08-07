@@ -100,6 +100,7 @@ def long_mission_server(sitl, tmp_path_factory):
         MAVLINK_ADDRESS=sitl["address"],
         MAVLINK_PORT=str(sitl["port"]),
         MAVLINK_PROTOCOL="tcp",
+        MAVSDK_SERVER_PORT=str(_free_port()),
         FLIGHT_LOG_DIR=str(workdir / "flight_logs"),
         SAFETY_AUDIT_LOG_PATH=str(audit),
     )

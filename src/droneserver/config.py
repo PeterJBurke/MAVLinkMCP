@@ -10,6 +10,7 @@ matching v1 behavior). The former hardcoded values are now defaults:
 - ``MCP_PORT``          (default ``8080``)
 - ``MCP_MOUNT_PATH``    (default ``/mcp``)
 - ``MAVLINK_VERBOSE``   (default off; ``1`` shows HTTP/framework logs)
+- ``MAVSDK_SERVER_PORT`` (default ``50051``; must be unique per instance)
 - ``FLIGHT_LOG_DIR``    (default ``<repo root>/flight_logs``)
 """
 
@@ -35,6 +36,13 @@ class Settings(BaseSettings):
     mavlink_port: str = "14540"
     mavlink_protocol: str = "udp"
     mavlink_verbose: bool = False
+    #: gRPC port that MavSDK's helper process (``mavsdk_server``) binds.
+    #: MUST be unique per droneserver instance on a machine: MavSDK defaults
+    #: every instance to 50051, so a second server silently attaches to the
+    #: FIRST one's helper - and therefore to the first one's aircraft. Measured:
+    #: a staging server flying a remote simulator captured the whole local test
+    #: suite, which then flew the wrong drone.
+    mavsdk_server_port: int = 50051
 
     # MCP HTTP/SSE endpoint
     mcp_host: str = "0.0.0.0"  # noqa: S104 - tailnet-only exposure is enforced at deploy time
