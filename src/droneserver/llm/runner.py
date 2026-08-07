@@ -66,6 +66,21 @@ from droneserver.llm.verdicts import TRACK_HEADER, Track, Verdict, judge
 
 HARNESS_CLIENT_NAME = "droneserver-llm-harness"
 
+#: Signatures of the drone link itself being down, rather than a tool saying
+#: no. The server talks to the aircraft through a helper process; if that
+#: helper dies, every tool returns one of these and the trial is measuring
+#: nothing. Such a trial is reported as an infrastructure fault, never as a
+#: model failure - blaming the model for a broken server would be a lie in the
+#: results table.
+LINK_ERROR_MARKERS = (
+    "StatusCode.UNAVAILABLE",
+    "failed to connect to all addresses",
+    "Connection refused",
+    "connection refused",
+)
+#: How many link errors in one trial before we call the link down.
+LINK_ERROR_THRESHOLD = 3
+
 #: Missions the LLM suite can judge from telemetry. T6 needs a second MCP
 #: server (Google Maps) that is not part of this deployment, exactly as in the
 #: scripted suite; it is reported as skipped rather than quietly passed.
@@ -87,10 +102,16 @@ class TrialResult:
     run: AgentRun | None = None
     harness_intervened: str = ""
     server_ms_by_call: list[float | None] = field(default_factory=list)
+    #: The server lost its link to the aircraft during (or before) this trial.
+    link_failure: bool = False
 
     @property
     def verdict_label(self) -> str:
-        return "SKIP" if self.skipped else ("PASS" if self.passed else "FAIL")
+        if self.skipped:
+            return "SKIP"
+        if self.link_failure:
+            return "LINK"
+        return "PASS" if self.passed else "FAIL"
 
 
 @dataclass
@@ -185,6 +206,40 @@ async def _settle(harness: LiveMCPSession, timeout_s: float = 240.0) -> str:
         return f"harness settle failed: {type(e).__name__}: {e}"
 
 
+def _link_errors(calls: list[CallRecord]) -> int:
+    """How many of these calls failed because the drone link was down."""
+    total = 0
+    for call in calls:
+        text = f"{call.error or ''} {call.result.get('error', '') if call.result else ''}"
+        if any(marker in text for marker in LINK_ERROR_MARKERS):
+            total += 1
+    return total
+
+
+async def _trial_origin(harness: LiveMCPSession, fallback: dict) -> dict:
+    """Where this trial starts from - which is what its verdict measures against.
+
+    Missions are phrased relative to "where the drone is now", and each trial
+    begins wherever the previous one left the aircraft. Reading the origin once
+    for the whole suite therefore judges later missions against the wrong
+    point: it marked a correctly flown square as having missed two corners,
+    because the square was drawn around the previous mission's landing spot.
+
+    The parked position is also what the autopilot will adopt as home the
+    moment it arms, so this single reading is the origin in both senses.
+    """
+    armed = await harness.call_raw("get_armed", {}, 60)
+    position = await harness.call_raw("get_position", {}, 60)
+    if armed.get("status") == "success" and armed.get("armed") is False and position.get("status") == "success":
+        p = position["position"]
+        return {
+            "home": (p["latitude_deg"], p["longitude_deg"]),
+            "home_amsl_m": p["absolute_altitude_m"] - p["relative_altitude_m"],
+            "home_source": "parked position at the start of this trial",
+        }
+    return {k: fallback[k] for k in ("home", "home_amsl_m", "home_source") if k in fallback}
+
+
 async def _read_parameter(harness: LiveMCPSession, name: str) -> float | None:
     result = await harness.call_raw("get_parameter", {"name": name}, 90)
     value = result.get("value") if result.get("status") == "success" else None
@@ -271,7 +326,18 @@ async def _run_trial(
     log,
 ) -> TrialResult:
     log(f"[{_utc()}] START {mission_id} trial {trial}/{config.trials}")
+    if not await harness.wait_ready(timeout_s=120):
+        log(f"[{_utc()}] LINK {mission_id} trial {trial}: the server has no live drone link; not flying")
+        return TrialResult(
+            mission_id,
+            trial,
+            False,
+            "the server had no live link to the aircraft, so nothing was flown",
+            started_at=time.time(),
+            link_failure=True,
+        )
     await _settle(harness)
+    ctx = {**ctx, **await _trial_origin(harness, ctx)}
 
     extra: dict = {}
     if mission_id == "T7":
@@ -315,6 +381,27 @@ async def _run_trial(
     extra["model_claim"] = run.model_claim
 
     track = Track(recorder.samples, ctx["home"])
+    link_errors = _link_errors(run.calls)
+    if link_errors >= LINK_ERROR_THRESHOLD:
+        log(
+            f"[{_utc()}] LINK {mission_id} trial {trial}: the server lost its link to the aircraft "
+            f"({link_errors} calls failed at the link layer). Not judging the model on this."
+        )
+        return TrialResult(
+            mission_id=mission_id,
+            trial=trial,
+            passed=False,
+            reason=(
+                f"the server lost its link to the aircraft mid-trial ({link_errors} calls failed at the "
+                f"link layer); this is an infrastructure fault, not a model result"
+            ),
+            started_at=started,
+            duration_s=round(duration, 1),
+            evidence={"prompt": prompt, "model_claim": run.model_claim, "link_errors": link_errors},
+            run=run,
+            harness_intervened=intervened,
+            link_failure=True,
+        )
     verdict: Verdict = judge(mission_id, track, run.calls, ctx, extra)
     if intervened and verdict.passed:
         verdict = Verdict(
@@ -527,7 +614,7 @@ def _write_outputs(
         for r in results:
             run = r.run
             claim = run.model_claim if run else ""
-            matches = "" if r.skipped or not run else str((claim == "complete") == r.passed)
+            matches = "" if r.skipped or r.link_failure or not run else str((claim == "complete") == r.passed)
             cost = _cost(config.prices, route.requested_model, run) if run else None
             writer.writerow(
                 [
@@ -665,7 +752,8 @@ def _write_outputs(
 
 
 def _write_summary(config: SuiteConfig, results: list[TrialResult], ctx: dict, route, audit_rows, agent_label) -> None:
-    ran = [r for r in results if not r.skipped]
+    ran = [r for r in results if not r.skipped and not r.link_failure]
+    broken = [r for r in results if r.link_failure]
     passed = [r for r in ran if r.passed]
     runs = [r.run for r in ran if r.run]
     decision = [t.decision_latency_ms for run in runs for t in run.turns]
@@ -684,7 +772,8 @@ def _write_summary(config: SuiteConfig, results: list[TrialResult], ctx: dict, r
         f"- Model: **{route.requested_model}** via {route.provider.name} ({route.routing})",
         f"- Target: `{config.target_label or config.url}`",
         "- Safety layer: **on** (the server was not reconfigured for this run)",
-        f"- Missions flown: **{len(ran)}** ({len(results) - len(ran)} skipped)",
+        f"- Missions judged: **{len(ran)}** "
+        f"({sum(1 for r in results if r.skipped)} skipped, {len(broken)} lost to a broken drone link)",
         f"- Passed on telemetry evidence: **{len(passed)}/{len(ran)}**",
         "",
         "| Mission | Verdict | Model's own claim | Turns | Tool calls | Model time (s) | Drone time (s) | Reason |",
@@ -759,6 +848,18 @@ def _write_summary(config: SuiteConfig, results: list[TrialResult], ctx: dict, r
             if key not in seen:
                 seen.add(key)
                 lines.append(f"| {record.get('tool')} | {record.get('verdict')} | `{record.get('rule') or '-'}` |")
+        lines.append("")
+
+    if broken:
+        lines += [
+            "## Trials lost to a broken drone link",
+            "",
+            "The server talks to the aircraft through a helper process. When that helper dies, every "
+            "tool fails at the link layer and the trial measures nothing about the model. These trials "
+            "are excluded from the pass rate rather than counted as model failures.",
+            "",
+        ]
+        lines += [f"- **{r.mission_id}.{r.trial}**: {r.reason}" for r in broken]
         lines.append("")
 
     disagreements = [r for r in ran if r.run and (r.run.model_claim == "complete") != r.passed]
