@@ -35,7 +35,7 @@ blocks everything would be useless).
 | I1 | review regression | move_to_relative 50 km north (previously unguarded) | rejected by bounds/fence/precondition | `rejected` | `bounds.max_offset` | PASS |
 | I2 | review regression | offboard NED setpoint 100 km north | rejected (horizontal component now fenced) | `rejected` | `bounds.max_offset` | PASS |
 | I3 | review regression | gimbal_point set_angles with a polygon fence configured | NOT rejected by the geofence (angles are not positions) | `failed` | `-` | PASS |
-| I4 | review regression | QGC .plan with a waypoint 55 km outside the fence | import rejected before upload; fence writes escalate | `rejected` | `geofence.altitude_ceiling.imported_plan` | PASS |
+| I4 | review regression | QGC .plan with a waypoint 55 km outside the fence | import rejected before upload; fence writes escalate | `rejected` | `geofence.polygon.imported_plan` | PASS |
 | I5 | review regression | calibrate on the ground (in-air gate must not misfire) | not blocked by the ground-only rule while on the ground | `failed` | `-` | PASS |
 | I6 | review regression | audit record timing fields (latency + durable write) | latency_ms and audit_write_ms both present and non-negative | `checked` | `-` | PASS |
 | E1 | state precondition | go_to_location while the drone is on the ground | rejected (precondition.navigation_requires_airborne) | `rejected` | `precondition.navigation_requires_airborne` | PASS |
