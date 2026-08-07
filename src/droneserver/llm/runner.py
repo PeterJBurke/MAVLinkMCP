@@ -1,0 +1,752 @@
+"""Running the LLM-in-the-loop suite, and writing down what happened.
+
+**Who this is for:** anyone reproducing the paper's primary experiment, or
+reading the files it leaves behind.
+
+**What one trial looks like, in order.**
+
+1. A *harness* connection to the drone server checks the aircraft is on the
+   ground and disarmed, and reads its home position. The harness needs home to
+   judge the flight later; the model is told nothing and must ask for itself.
+2. The *flight recorder* starts - a separate connection that logs position,
+   altitude and armed state about once a second until the trial ends.
+3. An *agent* connection fetches the server's real tool list.
+4. The model is given the system prompt and the operator's request in plain
+   English, and flies. Nothing in this file tells it which tools to use.
+5. The recorder stops. If the aircraft is still up, the harness lands it - and
+   stamps the result as having needed an intervention, because that changes
+   what the trial proves.
+6. The verdict is computed from the recorded track and the server's audit
+   trail, never from the model's closing statement, which is stored beside it
+   for comparison.
+
+**What it writes.** One directory per run:
+
+===================================  =======================================
+``missions.csv``                     one row per trial: verdict, turns, both
+                                     latencies, tokens, what the model claimed
+``turns.csv``                        one row per model turn: decision latency
+                                     and token counts
+``tool_calls.csv``                   one row per tool call: arguments, status,
+                                     refusal rule, client and server latency
+``telemetry/<mission>_t<n>.csv``     the flight recorder's track - the ground
+                                     truth behind every verdict
+``transcripts/<mission>_t<n>.md``    the conversation, readable
+``transcripts/<mission>_t<n>.jsonl`` the same, machine-readable
+``audit_slice.csv``                  the server's own log for the run window
+``summary.md``                       the human-readable report
+===================================  =======================================
+
+**Three clocks are reported and never added together carelessly.** *Decision
+latency* is time inside the model. *Command latency* is the round trip to the
+drone server, measured here. *Server latency* is what the server itself
+recorded for the same call: the safety checks plus the tool. The gap between
+the last two is the network; the first is a different cost entirely, and the
+paper's argument depends on not confusing them.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import csv
+import json
+import statistics
+import time
+from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+
+from droneserver.benchmark.missions import DEFAULT_CONTEXT
+from droneserver.llm.agent import AgentRun, Limits, run_agent, transcript_lines
+from droneserver.llm.mcp_session import AGENT_CLIENT_NAME, CallRecord, LiveMCPSession, TelemetryRecorder
+from droneserver.llm.prompts import SYSTEM_PROMPT, mission_prompts
+from droneserver.llm.providers import ToolSpec, open_session, resolve_model
+from droneserver.llm.verdicts import TRACK_HEADER, Track, Verdict, judge
+
+HARNESS_CLIENT_NAME = "droneserver-llm-harness"
+
+#: Missions the LLM suite can judge from telemetry. T6 needs a second MCP
+#: server (Google Maps) that is not part of this deployment, exactly as in the
+#: scripted suite; it is reported as skipped rather than quietly passed.
+LLM_SUITE = ["T1", "T2", "T3", "T4", "T5", "T7", "T8", "T9", "T10"]
+SLOW_MISSIONS = {"T10"}
+SKIPPED = {"T6": "needs an external Google-Maps MCP server; not configured for this deployment"}
+
+
+@dataclass
+class TrialResult:
+    mission_id: str
+    trial: int
+    passed: bool
+    reason: str
+    skipped: bool = False
+    started_at: float = 0.0
+    duration_s: float = 0.0
+    evidence: dict = field(default_factory=dict)
+    run: AgentRun | None = None
+    harness_intervened: str = ""
+    server_ms_by_call: list[float | None] = field(default_factory=list)
+
+    @property
+    def verdict_label(self) -> str:
+        return "SKIP" if self.skipped else ("PASS" if self.passed else "FAIL")
+
+
+@dataclass
+class SuiteConfig:
+    url: str
+    api_key: str
+    model_spec: str
+    missions: list[str]
+    trials: int = 1
+    out_dir: Path = Path("llm_runs")
+    audit_log: Path | None = None
+    target_label: str = ""
+    include_slow: bool = False
+    telemetry_interval_s: float = 1.5
+    limits: Limits = field(default_factory=Limits)
+    model_options: dict = field(default_factory=dict)
+    prices: dict = field(default_factory=dict)
+    context_overrides: dict = field(default_factory=dict)
+
+
+# ------------------------------------------------------------------- helpers
+
+
+def _utc(ts: float | None = None) -> str:
+    return datetime.fromtimestamp(ts if ts is not None else time.time(), timezone.utc).isoformat()
+
+
+async def _read_home(harness: LiveMCPSession, attempts: int = 10) -> dict:
+    """Home position and ground elevation, or refuse to run.
+
+    Every verdict measures distance from home, and several tools take an
+    altitude above *sea level*. Guessing either turns a reasonable-looking
+    check into a wrong one, so a missing home reading stops the suite rather
+    than defaulting to zero. (That default caused a real defect here once; see
+    docs/staging_validation.md.)
+    """
+    for _ in range(attempts):
+        info = await harness.call_raw("get_home_position", {}, 90)
+        if info.get("status") == "success":
+            home = info["home"]
+            return {
+                "home": (home["latitude_deg"], home["longitude_deg"]),
+                "home_amsl_m": home["absolute_altitude_m"],
+            }
+        await asyncio.sleep(3)
+    raise RuntimeError(
+        "could not read the drone's home position; refusing to run, because every distance the "
+        "verdicts compute would be measured from a guess"
+    )
+
+
+async def _settle(harness: LiveMCPSession, timeout_s: float = 240.0) -> str:
+    """Leave the aircraft on the ground and disarmed. Returns what it had to do."""
+    try:
+        armed = await harness.call_raw("get_armed", {}, 60)
+        if armed.get("status") != "success" or not armed.get("armed"):
+            return ""
+        await harness.call_raw("land", {"force": True}, 90)
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            state = await harness.call_raw("get_armed", {}, 60)
+            if state.get("status") == "success" and state.get("armed") is False:
+                return "harness landed and disarmed the aircraft"
+            await asyncio.sleep(5)
+        return "harness commanded a landing but the aircraft did not disarm"
+    except Exception as e:
+        return f"harness settle failed: {type(e).__name__}: {e}"
+
+
+async def _read_parameter(harness: LiveMCPSession, name: str) -> float | None:
+    result = await harness.call_raw("get_parameter", {"name": name}, 90)
+    value = result.get("value") if result.get("status") == "success" else None
+    try:
+        return float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+# ------------------------------------------------------------------ the suite
+
+
+async def run_llm_suite(config: SuiteConfig, log=print) -> list[TrialResult]:
+    route = resolve_model(config.model_spec)
+    agent_version = f"{route.provider.name}:{route.requested_model}"
+    ctx = {
+        **DEFAULT_CONTEXT,
+        "geofence_radius_m": 1000.0,
+        "max_altitude_m": 120.0,
+        **config.context_overrides,
+    }
+    prompts = mission_prompts(ctx)
+    config.out_dir.mkdir(parents=True, exist_ok=True)
+    (config.out_dir / "transcripts").mkdir(exist_ok=True)
+    (config.out_dir / "telemetry").mkdir(exist_ok=True)
+
+    results: list[TrialResult] = []
+    window_start = time.time()
+
+    harness = LiveMCPSession(config.url, config.api_key, HARNESS_CLIENT_NAME, "2")
+    await harness.__aenter__()
+    try:
+        log(f"[{_utc()}] connecting to {config.url} ...")
+        if not await harness.wait_ready():
+            raise RuntimeError("the server never reported a live drone link")
+        ctx.update(await _read_home(harness))
+        log(f"[{_utc()}] home: {ctx['home'][0]:.6f},{ctx['home'][1]:.6f} at {ctx['home_amsl_m']:.1f} m above sea level")
+        log(f"[{_utc()}] model: {route.label} ({route.routing}) via {route.provider.base_url}")
+
+        for mission_id in config.missions:
+            if mission_id in SKIPPED:
+                results.append(TrialResult(mission_id, 1, True, SKIPPED[mission_id], skipped=True))
+                continue
+            if mission_id in SLOW_MISSIONS and not config.include_slow:
+                results.append(TrialResult(mission_id, 1, True, "skipped (slow; pass --include-slow)", skipped=True))
+                continue
+            for trial in range(1, config.trials + 1):
+                result = await _run_trial(
+                    config, harness, ctx, prompts[mission_id], mission_id, trial, agent_version, log
+                )
+                results.append(result)
+                log(
+                    f"[{_utc()}] {result.verdict_label} {mission_id} trial {trial}/{config.trials} "
+                    f"in {result.duration_s:.0f}s - {result.reason}"
+                )
+    finally:
+        with contextlib.suppress(Exception):
+            await _settle(harness)
+        await harness.aclose()
+
+    _write_outputs(config, results, ctx, route, window_start, agent_version)
+    return results
+
+
+async def _run_trial(
+    config: SuiteConfig,
+    harness: LiveMCPSession,
+    ctx: dict,
+    prompt: str,
+    mission_id: str,
+    trial: int,
+    agent_version: str,
+    log,
+) -> TrialResult:
+    log(f"[{_utc()}] START {mission_id} trial {trial}/{config.trials}")
+    await _settle(harness)
+
+    extra: dict = {}
+    if mission_id == "T7":
+        extra["param_before"] = await _read_parameter(harness, ctx["param_name"])
+
+    recorder = TelemetryRecorder(config.url, config.api_key, config.telemetry_interval_s)
+    await recorder.start()
+
+    agent_mcp = LiveMCPSession(config.url, config.api_key, AGENT_CLIENT_NAME, agent_version)
+    model = None
+    started = time.time()
+    clock = time.perf_counter()
+    try:
+        await agent_mcp.__aenter__()
+        tools: list[ToolSpec] = await agent_mcp.list_tools()
+        model = open_session(config.model_spec, **config.model_options)
+        run = await run_agent(
+            model=model,
+            mcp=agent_mcp,
+            tools=tools,
+            system_prompt=SYSTEM_PROMPT,
+            user_prompt=prompt,
+            limits=config.limits,
+            on_event=lambda kind, item: _log_event(log, kind, item),
+        )
+        messages = list(model.messages)
+    finally:
+        if model is not None:
+            with contextlib.suppress(Exception):
+                await model.aclose()
+        await agent_mcp.aclose()
+        with contextlib.suppress(Exception):
+            await recorder.sample_once()
+        await recorder.stop()
+
+    duration = time.perf_counter() - clock
+    intervened = await _settle(harness)
+    if mission_id == "T7":
+        extra["param_after"] = await _read_parameter(harness, ctx["param_name"])
+        extra["param_observed_values"] = _parameter_values_seen(run.calls)
+    extra["model_claim"] = run.model_claim
+
+    track = Track(recorder.samples, ctx["home"])
+    verdict: Verdict = judge(mission_id, track, run.calls, ctx, extra)
+    if intervened and verdict.passed:
+        verdict = Verdict(
+            False,
+            f"{verdict.reason} - but the harness had to intervene: {intervened}",
+            verdict.evidence,
+        )
+
+    result = TrialResult(
+        mission_id=mission_id,
+        trial=trial,
+        passed=verdict.passed,
+        reason=verdict.reason,
+        started_at=started,
+        duration_s=round(duration, 1),
+        evidence=verdict.evidence | {"prompt": prompt, "model_claim": run.model_claim},
+        run=run,
+        harness_intervened=intervened,
+    )
+    _write_trial_files(config, result, track, messages)
+    return result
+
+
+def _log_event(log, kind: str, item) -> None:
+    if kind == "call":
+        marker = {"success": "ok", "rejected": "REFUSED", "confirmation_required": "CONFIRM?"}.get(
+            item.status, item.status
+        )
+        log(f"    call {item.tool}({_short(item.arguments)}) -> {marker} ({item.wall_ms:.0f} ms)")
+    elif kind == "turn" and not item.tool_calls:
+        log(f"    turn {item.index}: model replied without tool calls ({item.decision_latency_ms:.0f} ms)")
+
+
+def _short(arguments: dict, limit: int = 90) -> str:
+    text = ", ".join(f"{k}={v!r}" for k, v in arguments.items())
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _parameter_values_seen(calls: list[CallRecord]) -> list[float]:
+    """Every parameter value the aircraft reported back during the trial."""
+    values: list[float] = []
+    for call in calls:
+        if call.tool == "get_parameter" and call.status == "success":
+            with contextlib.suppress(TypeError, ValueError):
+                values.append(float(call.result.get("value")))
+    return values
+
+
+# --------------------------------------------------------------- file writing
+
+
+def _write_trial_files(config: SuiteConfig, result: TrialResult, track: Track, messages: list) -> None:
+    stem = f"{result.mission_id}_t{result.trial}"
+    with (config.out_dir / "telemetry" / f"{stem}.csv").open("w", newline="") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(TRACK_HEADER)
+        writer.writerows(track.as_rows())
+
+    run = result.run
+    header = [
+        f"# {result.mission_id} trial {result.trial} - {config.model_spec}",
+        "",
+        f"- Verdict from telemetry: **{result.verdict_label}** - {result.reason}",
+        f"- The model's own closing verdict: **{run.model_claim if run else 'n/a'}**",
+        f"- Turns: {len(run.turns) if run else 0}; tool calls: {len(run.calls) if run else 0}",
+        f"- Model decision time: {run.decision_ms / 1000:.1f} s; command round trips: {run.command_ms / 1000:.1f} s"
+        if run
+        else "",
+        f"- Harness intervention: {result.harness_intervened or 'none'}",
+        "",
+    ]
+    body = transcript_lines(run, messages) if run else ""
+    (config.out_dir / "transcripts" / f"{stem}.md").write_text("\n".join(header) + "\n" + body, encoding="utf-8")
+
+    with (config.out_dir / "transcripts" / f"{stem}.jsonl").open("w", encoding="utf-8") as fh:
+        fh.write(
+            json.dumps(
+                {
+                    "record": "trial",
+                    "mission": result.mission_id,
+                    "trial": result.trial,
+                    "model": config.model_spec,
+                    "verdict": result.verdict_label,
+                    "reason": result.reason,
+                    "evidence": result.evidence,
+                },
+                default=str,
+            )
+            + "\n"
+        )
+        for message in messages:
+            fh.write(json.dumps({"record": "message", **message}, default=str) + "\n")
+        if run:
+            for turn in run.turns:
+                fh.write(json.dumps({"record": "turn", **asdict(turn)}, default=str) + "\n")
+            for call in run.calls:
+                fh.write(json.dumps({"record": "call", **asdict(call)}, default=str) + "\n")
+
+
+def _read_audit(audit_log: Path | None, window_start: float) -> list[dict]:
+    if not audit_log or not audit_log.exists():
+        return []
+    rows = []
+    for line in audit_log.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+            ts = datetime.fromisoformat(record["ts"]).timestamp()
+        except Exception:
+            continue
+        if ts >= window_start:
+            record["_ts"] = ts
+            rows.append(record)
+    return rows
+
+
+def _join_audit(results: list[TrialResult], audit_rows: list[dict], agent_label: str) -> None:
+    """Attach the server's own latency to each call the model made.
+
+    Matching is by client label, tool name and time: the agent announces itself
+    to the server under a name no other connection uses, so the recorder's
+    polling and the harness's own checks never contaminate the join. Within
+    that, calls are sequential, so nearest-timestamp is unambiguous.
+    """
+    mine = sorted((r for r in audit_rows if r.get("model") == agent_label), key=lambda r: r["_ts"])
+    used: set[int] = set()
+    for result in results:
+        latencies: list[float | None] = []
+        for call in result.run.calls if result.run else []:
+            best_index, best_gap = None, 5.0
+            for index, row in enumerate(mine):
+                if index in used or row.get("tool") != call.tool:
+                    continue
+                gap = abs(row["_ts"] - call.started_at)
+                if gap < best_gap:
+                    best_index, best_gap = index, gap
+            if best_index is None:
+                latencies.append(None)
+            else:
+                used.add(best_index)
+                value = mine[best_index].get("latency_ms")
+                latencies.append(float(value) if isinstance(value, (int, float)) else None)
+        result.server_ms_by_call = latencies
+
+
+def _cost(prices: dict, model: str, run: AgentRun) -> float | None:
+    """Dollars, but only when a price has been supplied for this model.
+
+    Prices are configuration, not knowledge: they change, and inventing one
+    would put a made-up number in a paper. With no price file, token counts are
+    still reported and the cost column is left empty.
+    """
+    price = prices.get(model)
+    if not price:
+        return None
+    fresh_input = max(run.input_tokens - run.cached_input_tokens, 0)
+    cached_rate = price.get("cached_input", price.get("input", 0.0))
+    return (
+        fresh_input * price.get("input", 0.0)
+        + run.cached_input_tokens * cached_rate
+        + run.output_tokens * price.get("output", 0.0)
+    ) / 1_000_000
+
+
+def _write_outputs(
+    config: SuiteConfig, results: list[TrialResult], ctx: dict, route, window_start: float, agent_version: str
+) -> None:
+    audit_rows = _read_audit(config.audit_log, window_start)
+    agent_label = f"{AGENT_CLIENT_NAME}/{agent_version}"
+    _join_audit(results, audit_rows, agent_label)
+
+    with (config.out_dir / "missions.csv").open("w", newline="") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(
+            [
+                "mission_id",
+                "trial",
+                "verdict",
+                "reason",
+                "model",
+                "provider",
+                "routing",
+                "turns",
+                "tool_calls",
+                "refusals",
+                "confirmations_demanded",
+                "decision_latency_s",
+                "command_latency_s",
+                "provider_wait_s",
+                "duration_s",
+                "input_tokens",
+                "cached_input_tokens",
+                "output_tokens",
+                "reasoning_tokens",
+                "cost_usd",
+                "model_claim",
+                "claim_matches_telemetry",
+                "stop_reason",
+                "harness_intervened",
+                "started_utc",
+                "evidence",
+            ]
+        )
+        for r in results:
+            run = r.run
+            claim = run.model_claim if run else ""
+            matches = "" if r.skipped or not run else str((claim == "complete") == r.passed)
+            cost = _cost(config.prices, route.requested_model, run) if run else None
+            writer.writerow(
+                [
+                    r.mission_id,
+                    r.trial,
+                    r.verdict_label,
+                    r.reason,
+                    route.requested_model,
+                    route.provider.name,
+                    route.routing,
+                    len(run.turns) if run else 0,
+                    len(run.calls) if run else 0,
+                    run.rejections if run else 0,
+                    run.confirmations_demanded if run else 0,
+                    f"{run.decision_ms / 1000:.2f}" if run else "",
+                    f"{run.command_ms / 1000:.2f}" if run else "",
+                    f"{run.provider_wait_ms / 1000:.2f}" if run else "",
+                    r.duration_s,
+                    run.input_tokens if run else "",
+                    run.cached_input_tokens if run else "",
+                    run.output_tokens if run else "",
+                    run.reasoning_tokens if run else "",
+                    f"{cost:.4f}" if cost is not None else "",
+                    claim,
+                    matches,
+                    run.stop_reason if run else "",
+                    r.harness_intervened,
+                    _utc(r.started_at) if r.started_at else "",
+                    json.dumps(r.evidence, default=str),
+                ]
+            )
+
+    with (config.out_dir / "turns.csv").open("w", newline="") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(
+            [
+                "mission_id",
+                "trial",
+                "turn",
+                "decision_latency_ms",
+                "provider_wait_ms",
+                "attempts",
+                "input_tokens",
+                "cached_input_tokens",
+                "output_tokens",
+                "reasoning_tokens",
+                "tool_calls",
+                "finish_reason",
+                "text_chars",
+            ]
+        )
+        for r in results:
+            for turn in r.run.turns if r.run else []:
+                writer.writerow(
+                    [
+                        r.mission_id,
+                        r.trial,
+                        turn.index,
+                        round(turn.decision_latency_ms, 1),
+                        round(turn.provider_wait_ms, 1),
+                        turn.attempts,
+                        turn.input_tokens,
+                        turn.cached_input_tokens,
+                        turn.output_tokens,
+                        turn.reasoning_tokens,
+                        " ".join(turn.tool_calls),
+                        turn.finish_reason,
+                        len(turn.text),
+                    ]
+                )
+
+    with (config.out_dir / "tool_calls.csv").open("w", newline="") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(
+            [
+                "mission_id",
+                "trial",
+                "turn",
+                "seq",
+                "tool",
+                "arguments",
+                "status",
+                "rule",
+                "client_wall_ms",
+                "server_audit_ms",
+                "confirmation_required",
+                "client_side_rejection",
+                "error",
+                "started_utc",
+            ]
+        )
+        for r in results:
+            for index, call in enumerate(r.run.calls if r.run else []):
+                server_ms = r.server_ms_by_call[index] if index < len(r.server_ms_by_call) else None
+                writer.writerow(
+                    [
+                        r.mission_id,
+                        r.trial,
+                        call.turn,
+                        call.seq,
+                        call.tool,
+                        json.dumps(call.arguments, default=str),
+                        call.status,
+                        call.rule or "",
+                        round(call.wall_ms, 2),
+                        "" if server_ms is None else round(server_ms, 2),
+                        int(call.confirmation_required),
+                        call.client_side_rejection or "",
+                        (call.error or "")[:300],
+                        _utc(call.started_at),
+                    ]
+                )
+
+    if audit_rows:
+        fields = [
+            "ts",
+            "model",
+            "tool",
+            "tier",
+            "verdict",
+            "rule",
+            "latency_ms",
+            "safety_ms",
+            "audit_write_ms",
+            "client_id",
+            "outcome_status",
+        ]
+        with (config.out_dir / "audit_slice.csv").open("w", newline="") as fh:
+            writer = csv.writer(fh)
+            writer.writerow(fields)
+            for record in audit_rows:
+                writer.writerow([record.get(f, "") for f in fields])
+
+    _write_summary(config, results, ctx, route, audit_rows, agent_label)
+
+
+def _write_summary(config: SuiteConfig, results: list[TrialResult], ctx: dict, route, audit_rows, agent_label) -> None:
+    ran = [r for r in results if not r.skipped]
+    passed = [r for r in ran if r.passed]
+    runs = [r.run for r in ran if r.run]
+    decision = [t.decision_latency_ms for run in runs for t in run.turns]
+    command = [c.wall_ms for run in runs for c in run.calls if c.status != "client_rejected"]
+    server = [ms for r in ran for ms in r.server_ms_by_call if ms is not None]
+    total_cost = sum(c for c in (_cost(config.prices, route.requested_model, run) for run in runs) if c is not None)
+
+    lines = [
+        "# LLM-in-the-loop mission suite",
+        "",
+        "Every mission below was flown by a language model choosing its own tool calls from a "
+        "natural-language request. Verdicts come from the flight recorder, not from the model's "
+        "account of itself.",
+        "",
+        f"- Run at: {_utc()}",
+        f"- Model: **{route.requested_model}** via {route.provider.name} ({route.routing})",
+        f"- Target: `{config.target_label or config.url}`",
+        "- Safety layer: **on** (the server was not reconfigured for this run)",
+        f"- Missions flown: **{len(ran)}** ({len(results) - len(ran)} skipped)",
+        f"- Passed on telemetry evidence: **{len(passed)}/{len(ran)}**",
+        "",
+        "| Mission | Verdict | Model's own claim | Turns | Tool calls | Model time (s) | Drone time (s) | Reason |",
+        "|---|---|---|---|---|---|---|---|",
+    ]
+    for r in results:
+        run = r.run
+        verdict = "**FAIL**" if r.verdict_label == "FAIL" else r.verdict_label
+        if run is None:
+            lines.append(f"| {r.mission_id}.{r.trial} | {verdict} | - | - | - | - | - | {r.reason} |")
+            continue
+        lines.append(
+            f"| {r.mission_id}.{r.trial} | {verdict} | {run.model_claim} | {len(run.turns)} "
+            f"| {len(run.calls)} | {run.decision_ms / 1000:.0f} | {run.command_ms / 1000:.0f} | {r.reason} |"
+        )
+
+    lines += [
+        "",
+        "## Where the time went",
+        "",
+        "Three independent clocks, never added together without saying so. *Decision* is time "
+        "inside the model. *Command* is the round trip from this harness to the drone server and "
+        "back. *Server* is what the server itself recorded for the same call - its safety checks "
+        "plus the tool. Command minus server is the network.",
+        "",
+        "| Clock | Samples | Mean (ms) | Median (ms) | p95 (ms) | Max (ms) |",
+        "|---|---|---|---|---|---|",
+        _latency_row("model decision (per turn)", decision),
+        _latency_row("command round trip (per call)", command),
+    ]
+    if server:
+        lines.append(_latency_row("server-side safety + tool", server))
+    lines += [
+        "",
+        f"Model thinking accounted for **{_share(decision, command)}** of the measured waiting.",
+        "",
+        "## Tokens and cost",
+        "",
+        "| Metric | Total |",
+        "|---|---|",
+        f"| Input tokens | {sum(run.input_tokens for run in runs):,} |",
+        f"| ... of which served from cache | {sum(run.cached_input_tokens for run in runs):,} |",
+        f"| Output tokens | {sum(run.output_tokens for run in runs):,} |",
+        f"| ... of which reasoning | {sum(run.reasoning_tokens for run in runs):,} |",
+    ]
+    lines.append(
+        f"| Cost (USD) | {total_cost:.2f} |"
+        if config.prices.get(route.requested_model)
+        else "| Cost (USD) | not computed - no price supplied for this model (see --prices) |"
+    )
+
+    interventions = [
+        r
+        for r in audit_rows
+        if r.get("model") == agent_label and r.get("verdict") in ("rejected", "confirmation_required")
+    ]
+    lines += [
+        "",
+        "## What the guardrails did to the model",
+        "",
+        f"- Commands the safety layer refused: **{sum(run.rejections for run in runs)}**",
+        f"- Confirmation handshakes it demanded: **{sum(run.confirmations_demanded for run in runs)}**",
+        f"- Calls the harness could not even send (unknown tool or malformed arguments): "
+        f"**{sum(1 for run in runs for c in run.calls if c.status == 'client_rejected')}**",
+        "",
+    ]
+    if interventions:
+        lines += ["| Tool | Verdict | Rule |", "|---|---|---|"]
+        seen = set()
+        for record in interventions:
+            key = (record.get("tool"), record.get("verdict"), record.get("rule"))
+            if key not in seen:
+                seen.add(key)
+                lines.append(f"| {record.get('tool')} | {record.get('verdict')} | `{record.get('rule') or '-'}` |")
+        lines.append("")
+
+    disagreements = [r for r in ran if r.run and (r.run.model_claim == "complete") != r.passed]
+    lines += [
+        "## Did the model know how it did?",
+        "",
+        f"The model's closing claim disagreed with the telemetry on **{len(disagreements)} of {len(ran)}** trials.",
+        "",
+    ]
+    for r in disagreements:
+        lines.append(
+            f"- **{r.mission_id}.{r.trial}**: model said *{r.run.model_claim}*, telemetry says {r.verdict_label} - {r.reason}"
+        )
+    lines.append("")
+
+    (config.out_dir / "summary.md").write_text("\n".join(lines), encoding="utf-8")
+
+
+def _latency_row(label: str, values: list[float]) -> str:
+    if not values:
+        return f"| {label} | 0 | - | - | - | - |"
+    ordered = sorted(values)
+    p95 = ordered[min(int(len(ordered) * 0.95), len(ordered) - 1)]
+    return (
+        f"| {label} | {len(values)} | {statistics.mean(values):.1f} | "
+        f"{statistics.median(values):.1f} | {p95:.1f} | {max(values):.1f} |"
+    )
+
+
+def _share(decision: list[float], command: list[float]) -> str:
+    total = sum(decision) + sum(command)
+    return f"{100 * sum(decision) / total:.0f}%" if total else "n/a"

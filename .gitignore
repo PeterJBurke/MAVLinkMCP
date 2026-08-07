@@ -183,3 +183,6 @@ cython_debug/
 .pypirc
 
 fastagent.secrets.yaml
+
+# LLM-in-the-loop run artifacts (published ones are copied into docs/)
+llm_runs/
