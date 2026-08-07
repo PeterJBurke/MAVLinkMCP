@@ -338,13 +338,20 @@ docs/adversarial_results.md          generated adversarial results table
 ```bash
 # unit (no drone): every rule, tier, token, key, audit behaviour
 uv run pytest tests/test_safety_geofence.py tests/test_safety_validation.py \
-              tests/test_safety_tiers_auth_tokens.py tests/test_offboard_watchdog.py
+              tests/test_safety_tiers_auth_tokens.py tests/test_offboard_watchdog.py \
+              tests/test_safety_review_fixes.py tests/test_safety_coverage_invariant.py
+
+# the coverage invariant on its own - run this after adding ANY tool
+uv run pytest tests/test_safety_coverage_invariant.py
 
 # adversarial suite through the real MCP path in SITL (writes docs/adversarial_results.md)
 uv run pytest -m sitl tests/integration/test_adversarial_sitl.py
 
 # full flight under an active geofence with a deliberate violation
 uv run pytest -m sitl tests/integration/test_safety_flight_sitl.py
+
+# the routine SITL sweep (the long-mission demo is excluded deliberately)
+uv run pytest -m "sitl and not longmission" tests/integration
 ```
 
 ## 10a. Phase 4 addition — the mission runner (additive, no safety code changed)
