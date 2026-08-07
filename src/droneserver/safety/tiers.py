@@ -108,6 +108,9 @@ TOOL_TIERS: dict[str, Tier] = {
     "set_telemetry_rate": N,
     "param_select_component": N,
     "autopilot_files": N,  # FTP writes; shell is separate and CRITICAL
+    # Phase 4 managed missions
+    "start_managed_mission": N,
+    "control_managed_mission": N,
     # ---------------- read-only ----------------
     "get_position": R,
     "get_battery": R,
@@ -137,6 +140,7 @@ TOOL_TIERS: dict[str, Tier] = {
     "list_gimbals": R,
     "system_info": R,
     "read_transponder": R,
+    "get_mission_status": R,
 }
 
 #: Human-readable consequence shown in the confirmation prompt. Keyed by tool;

@@ -113,6 +113,10 @@ V2_TOOLS = {
     "autopilot_shell",
     # Phase 3 safety layer
     "emergency_stop",
+    # Phase 4 managed missions
+    "start_managed_mission",
+    "get_mission_status",
+    "control_managed_mission",
 }
 
 EXPECTED_TOOLS = V1_TOOLS | V2_TOOLS
@@ -122,7 +126,7 @@ async def test_expected_tool_inventory_registered():
     tools = await mcp.list_tools()
     names = {t.name for t in tools}
     assert names == EXPECTED_TOOLS
-    assert len(tools) == len(EXPECTED_TOOLS) == 95
+    assert len(tools) == len(EXPECTED_TOOLS) == 98
 
 
 async def test_tools_have_descriptions():

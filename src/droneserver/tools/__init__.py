@@ -21,6 +21,7 @@ Grouping (see docs/tool_groups.md for the per-group rationale):
                    tune, mocap, RTK
 - ``filesystem``:  MAVLink FTP + (tier-critical) autopilot shell
 - ``emergency``:   emergency_stop (tier EMERGENCY, see docs/estop.md)
+- ``managed_mission``: server-executed long missions (Phase 4)
 """
 
 from droneserver.tools import (
@@ -31,6 +32,7 @@ from droneserver.tools import (
     geofence,
     gimbal,
     logs,
+    managed_mission,
     mission,
     mission_raw,
     offboard,
@@ -49,6 +51,7 @@ __all__ = [
     "geofence",
     "gimbal",
     "logs",
+    "managed_mission",
     "mission",
     "mission_raw",
     "offboard",
