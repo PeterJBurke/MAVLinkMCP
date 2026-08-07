@@ -30,8 +30,11 @@ ENV SITL_SPEEDUP="1"
 # serial0 -> tcp 5760 (for the droneserver / MavSDK). Passed explicitly WITHOUT
 # the default ":wait" suffix so the simulation boots and the EKF converges even
 # before any client connects.
-# serial1 -> tcp 5762 (for the test harness readiness probe). ArduPilot
+# serial2 -> tcp 5762 (for the test harness readiness probe). ArduPilot
 # serial-over-TCP accepts a single client per port, hence two ports.
+# NOTE: the readiness probe uses SERIAL2, not SERIAL1 - the simulated ADS-B
+# transceiver (ADSB_TYPE=1) claims SERIAL1, which would otherwise steal the
+# probe's port.
 EXPOSE 5760 5762
 
-ENTRYPOINT ["/bin/sh", "-c", "exec /usr/local/bin/arducopter --model + --defaults /sitl/copter.parm,/sitl/sitl.parm -I0 --home ${SITL_HOME} --speedup ${SITL_SPEEDUP} --serial0 tcp:0 --serial1 tcp:2"]
+ENTRYPOINT ["/bin/sh", "-c", "exec /usr/local/bin/arducopter --model + --defaults /sitl/copter.parm,/sitl/sitl.parm -I0 --home ${SITL_HOME} --speedup ${SITL_SPEEDUP} --serial0 tcp:0 --serial2 tcp:2"]

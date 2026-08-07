@@ -17,6 +17,20 @@ SR0_RC_CHAN 2
 MNT1_TYPE 1
 MNT1_PITCH_MIN -90
 MNT1_PITCH_MAX 25
+# Simulated peripherals so the corresponding plugins are testable:
+# downward SITL rangefinder (telemetry.distance_sensor) and an ADS-B receiver
+# with 5 simulated aircraft nearby (transponder). NOTE: gripper/winch are
+# deliberately NOT enabled - WINCH_TYPE makes ArduPilot report the winch
+# "unhealthy" and blocks arming (breaks every flight test), and neither yields
+# a working command in SITL anyway (they need a real servo/PWM backend). Their
+# coverage is verified at the code path level (docs/coverage_overrides.csv) and
+# documented untestable-in-SITL (docs/firmware_notes.csv).
+RNGFND1_TYPE 100
+RNGFND1_MIN_CM 10
+RNGFND1_MAX_CM 4000
+RNGFND1_ORIENT 25
+ADSB_TYPE 1
+SIM_ADSB_COUNT 5
 SR1_EXT_STAT 2
 SR1_POSITION 4
 SR1_EXTRA1 4

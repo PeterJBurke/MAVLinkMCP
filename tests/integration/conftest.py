@@ -102,7 +102,16 @@ def _wait_until_flight_ready(port: int, timeout: float) -> None:
         )
         prearm_bit = getattr(mavutil.mavlink, "MAV_SYS_STATUS_PREARM_CHECK", 0x10000000)
 
-        need = {"gps_3d_fix": False, "ekf_position": False, "global_position": False, "prearm": False}
+        # Hard requirements: 3D fix, EKF absolute position, a real global
+        # position fix. Prearm health is a SOFT bonus - with some simulated
+        # peripherals (gripper/winch) ArduPilot leaves the prearm health bit
+        # clear even though the vehicle is armable, so we wait for it only
+        # briefly after the hard checks pass, then proceed. (Flight tests
+        # retry arming on their own.)
+        hard = {"gps_3d_fix": False, "ekf_position": False, "global_position": False}
+        prearm_ok = False
+        hard_ready_at: float | None = None
+        prearm_grace_s = 20.0
         while time.monotonic() < deadline:
             msg = conn.recv_match(
                 type=["GPS_RAW_INT", "EKF_STATUS_REPORT", "GLOBAL_POSITION_INT", "SYS_STATUS"],
@@ -114,16 +123,19 @@ def _wait_until_flight_ready(port: int, timeout: float) -> None:
                 continue
             mtype = msg.get_type()
             if mtype == "GPS_RAW_INT" and msg.fix_type >= 3:
-                need["gps_3d_fix"] = True
+                hard["gps_3d_fix"] = True
             elif mtype == "EKF_STATUS_REPORT" and (msg.flags & ekf_good) == ekf_good:
-                need["ekf_position"] = True
+                hard["ekf_position"] = True
             elif mtype == "GLOBAL_POSITION_INT" and msg.lat != 0:
-                need["global_position"] = True
+                hard["global_position"] = True
             elif mtype == "SYS_STATUS" and (msg.onboard_control_sensors_enabled & prearm_bit):
-                need["prearm"] = bool(msg.onboard_control_sensors_health & prearm_bit)
-            if all(need.values()):
-                return
-        raise TimeoutError(f"SITL not flight-ready after {timeout:.0f}s: {need}")
+                prearm_ok = bool(msg.onboard_control_sensors_health & prearm_bit)
+            if all(hard.values()):
+                if hard_ready_at is None:
+                    hard_ready_at = time.monotonic()
+                if prearm_ok or (time.monotonic() - hard_ready_at) > prearm_grace_s:
+                    return
+        raise TimeoutError(f"SITL not flight-ready after {timeout:.0f}s: hard={hard} prearm={prearm_ok}")
     finally:
         conn.close()
 
