@@ -132,18 +132,27 @@ def test_second_mission_refused_while_one_is_active(drone_tools):
     cleanup(drone_tools)
 
 
-def test_geofence_rejects_mission_before_upload(control_tools):
+def test_geofence_rejects_mission_before_upload(drone_tools):
     """The managed path validates the whole mission against the SERVER fence
-    before anything is uploaded (safe_server has a tight fence configured)."""
-    cleanup(control_tools)
-    submitted = control_tools.call(
+    before anything is uploaded.
+
+    Uses the module's existing server rather than the safety-configured one:
+    ArduPilot's serial-over-TCP accepts a single client per port, so a second
+    server in this module cannot attach to the same simulator. (That used to
+    "work" only because both servers shared one mavsdk_server helper - i.e.
+    they were unknowingly flying through the same connection.) The default
+    fence has a 1 km radius, and the bad waypoint below is ~55 km out, so the
+    rejection is just as decisive.
+    """
+    cleanup(drone_tools)
+    submitted = drone_tools.call(
         "start_managed_mission",
         waypoints=[wp(dlat=0.0008), {"latitude_deg": LAT + 0.5, "longitude_deg": LON, "altitude_m": 25}],
         takeoff_altitude_m=20.0,
         timeout=60,
     )
     assert submitted["status"] == "success", submitted  # accepted, then validated
-    failed = wait_for_phase(control_tools, {"failed"}, timeout_s=120)
+    failed = wait_for_phase(drone_tools, {"failed"}, timeout_s=120)
     assert "geofence" in (failed["mission"]["error"] or "")
     assert failed["mission"]["current_item"] == 0  # nothing was flown
-    cleanup(control_tools)
+    cleanup(drone_tools)

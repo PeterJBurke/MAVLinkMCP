@@ -214,7 +214,27 @@ class MissionRunner:
 
         # ---- validate (server-side fence, before anything is uploaded) ----
         self.set_phase(Phase.VALIDATING, s)
+        # Make sure home is known BEFORE building the fence. A radius fence
+        # with no home silently permits every waypoint - the same gap the tool
+        # path fixed as geofence.home_unknown, which was still open here, in
+        # the component that flies without anyone watching.
+        try:
+            from droneserver.safety.middleware import LAYER
+
+            await LAYER.state_tracker.refresh(drone, 0.0)
+        except Exception:
+            logger.exception("mission: could not refresh state before fence validation")
+
         fence = self._fence()
+        if fence.max_radius_m > 0 and fence.home is None:
+            record.error = (
+                "a radius geofence is configured but the drone's home position is not known, "
+                "so the mission cannot be checked against it"
+            )
+            self.emit("error", record.error, s, rule="geofence.home_unknown")
+            self.set_phase(Phase.FAILED, s, reason="geofence.home_unknown")
+            return
+
         violations = check_mission(fence, waypoints)
         if violations:
             idx, first = violations[0]
