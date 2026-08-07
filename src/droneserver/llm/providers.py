@@ -321,7 +321,7 @@ class OpenAICompatibleSession(ModelSession):
         temperature: float | None = None,
         reasoning_effort: str | None = None,
         max_output_tokens: int | None = None,
-        timeout_s: float = 300.0,
+        timeout_s: float = 240.0,
         parallel_tool_calls: bool | None = True,
         tool_choice: str | None = "auto",
         endpoint_only: list[str] | None = None,
@@ -341,8 +341,18 @@ class OpenAICompatibleSession(ModelSession):
         self._messages: list[dict] = []
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         headers.update(route.provider.extra_headers)
+        # A whole-request deadline, separate from httpx's timeouts. httpx's read
+        # timeout measures the gap between bytes, and it resets every time one
+        # arrives - so a provider that dribbles data can hold a request open
+        # indefinitely without ever tripping it. One turn did exactly that and
+        # hung a run for eight minutes with an aircraft airborne. asyncio's
+        # wait_for is measured from the start of the request and cannot be
+        # reset by the far end.
+        self._deadline_s = timeout_s
         self._http = httpx.AsyncClient(
-            base_url=route.provider.base_url, headers=headers, timeout=httpx.Timeout(timeout_s)
+            base_url=route.provider.base_url,
+            headers=headers,
+            timeout=httpx.Timeout(connect=20.0, read=timeout_s, write=60.0, pool=60.0),
         )
 
     # -- conversation ------------------------------------------------------
@@ -431,9 +441,15 @@ class OpenAICompatibleSession(ModelSession):
         for attempt in range(1, self.MAX_ATTEMPTS + 1):
             clock = time.perf_counter()
             try:
-                response = await self._http.post("/chat/completions", json=body)
-            except httpx.HTTPError as e:
-                last_error = f"{type(e).__name__}: {e}"
+                response = await asyncio.wait_for(
+                    self._http.post("/chat/completions", json=body), timeout=self._deadline_s
+                )
+            except (httpx.HTTPError, asyncio.TimeoutError) as e:
+                last_error = (
+                    f"no reply within {self._deadline_s:.0f}s"
+                    if isinstance(e, asyncio.TimeoutError)
+                    else f"{type(e).__name__}: {e}"
+                )
                 wait_ms += (time.perf_counter() - clock) * 1000
             else:
                 latency_ms = (time.perf_counter() - clock) * 1000
