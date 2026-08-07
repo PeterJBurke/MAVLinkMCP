@@ -8,6 +8,65 @@ Status: implemented and tested in SITL. **Not yet reviewed for real-hardware
 use.** The hard gate is a human review of everything below before any
 real-drone contact.
 
+An **independent read-only reviewer** (a different agent, which did not write
+this layer) audited it and found real defects. They are fixed; see
+[§0 Changes since the independent review](#0-changes-since-the-independent-review)
+for exactly what changed and what is still waiting on your ruling.
+
+---
+
+## 0. Changes since the independent review
+
+### Fixed (blockers)
+
+| # | Defect | Fix |
+|---|---|---|
+| B1 | The guard **failed OPEN**: an exception inside it executed the tool unguarded. Triggered by `SAFETY_API_KEYS` being re-parsed on every call and raising on a malformed spec. | The guard now **fails CLOSED** with rule `guard.internal_error`, and the audit record carries a `guard_error` field. Keys are parsed once per spec and validated at **startup** (`SystemExit` on a bad spec). Settings are cached. |
+| B3 | `move_to_relative` had **no bounds and no geofence** despite moving the drone. | Offset magnitude bounded (`bounds.max_offset`), commanded altitude resolved against live position, and the target resolved to lat/lon and fenced. |
+| S1 | The horizontal component of `offboard_set_position_ned` / `_velocity_*` and follow-me targets were **unfenced**. | `resolve_target()` resolves offsets against live position and projects velocities forward over the stale-setpoint window; all are fenced. Body-frame velocity uses the worst-case direction. |
+| B4 | Escalation predicates read **unknown telemetry as "on the ground"**, so in-air escalations silently did not fire. | `_airborne_or_unknown()` treats unknown as airborne (fail-safe). Applies to `disarm_drone`, `clear_geofence`, and the new fence-write escalations. |
+| B5 | `import_qgc_mission` uploaded an **unvalidated** mission and could rewrite the firmware fence silently. | Every positional item is validated against the server fence **before upload**; a plan carrying fence items now warns explicitly and escalates in flight. |
+| — | No structural guarantee that a *future* tool is guarded. | `tests/test_safety_coverage_invariant.py`: every NORMAL/CRITICAL/EMERGENCY tool must appear in a rule table **or** in an explicit exemption list with a written reason. |
+
+### Fixed (should-fix-before-flight)
+
+| # | Defect | Fix |
+|---|---|---|
+| S2 | A configured polygon **rejected every `gimbal_point` call** (lat/lon default to 0,0 for `set_angles`). | Gimbal is no longer position-fenced at all - a look-at target is not a flight target. |
+| S3 | Fence-**writing** tools were NORMAL and unvalidated. | `upload_geofence`, `raw_geofence_transfer` and an uploading `import_qgc_mission` escalate to CRITICAL in air (or unknown), matching `clear_geofence`. |
+| S4 | `autopilot_files` writes were NORMAL while `autopilot_shell` was CRITICAL. | Destructive file actions (`mkdir`/`rmdir`/`remove`/`rename`/`upload`) escalate to CRITICAL; reads stay NORMAL. |
+| S5 | The `set_parameter` escalation prefix list was **ArduPilot-only**. | Added PX4 families: `COM_`, `NAV_`, `GF_`, `BAT_`, `CBRK_`, `SYS_`, `MPC_`, `MIS_`, `FD_`, `MAN_`. |
+| S6 | `calibrate` had **no in-air gate**. | `precondition.ground_only`, evaluated *before* the unknown-state early return, so unknown state also blocks it. |
+| S7 | Managed-mission `takeoff_altitude_m` was unvalidated. | Added to the altitude bounds table. |
+| S8 | A configured radius fence was **silently inert** until home was read. | `geofence.home_unknown` refuses the command instead of passing it unfenced. |
+| S9 | Fail-closed mode covered navigation only. | Now covers every state-dependent rule (`STATE_DEPENDENT_RULES`). |
+| S11 | A crashed guard was indistinguishable from an allow in the audit log. | Distinct verdict + `rule=guard.internal_error` + `guard_error` field. |
+| S10 | **Paper-critical.** `latency_ms` excluded the per-call `.env` re-read (the dominant fixed cost) and the fsync'd audit write. `SAFETY_ENABLED=0` wrote no audit records at all. | Timer starts at the guard's first statement; settings cached; the durable-write cost is measured and reported as `audit_write_ms`. Disabled mode still audits, with verdict `allowed_safety_disabled`. |
+
+### Left for you to rule on (deliberately unchanged)
+
+1. **B2 - `emergency_stop(mode="kill")` stays token-free and unthrottled.** Test
+   coverage was added (it previously had none): reachability without a token,
+   and rate-limit exemption, both exercised disarmed on the ground. The
+   behaviour is unchanged pending your decision.
+2. **Fail-open vs fail-closed preconditions** when telemetry is unreadable
+   (your decision #1). The *shape* is unchanged - default fail-open. What was
+   fixed is its completeness (S9) and the cases where unknown state must block
+   regardless of the policy (calibration, escalations).
+3. The two questions already in §3 and §10a: which additional tools deserve a
+   token, and whether the mission runner's auto-actions should route through
+   the validation pipeline.
+
+### Where I disagree with the reviewer
+
+Nothing material. One note: the reviewer listed the ROI target of
+`gimbal_point` under "unfenced positions" (S1/S2). Fencing it would be wrong -
+pointing a camera at a spot outside the fence is not a containment breach, and
+the vehicle does not move. It is now explicitly exempt with that reason
+recorded in the coverage-invariant exemption list.
+
+---
+
 ---
 
 ## 1. Architecture in one paragraph
@@ -116,6 +175,7 @@ each failure is a distinct, countable audit event (`confirmation.unknown_or_used
 | `bounds.max_speed` | 20 m/s | magnitude, all velocity args |
 | `bounds.latitude` / `bounds.longitude` | ±90 / ±180 | coordinate sanity |
 | `bounds.mission_size` | 200 items | |
+| `bounds.max_offset` | 2000 m | magnitude of a single relative move (`move_to_relative`, offboard NED) |
 
 > **Altitude frames — read this.** Tools do not agree on a frame:
 > `takeoff_altitude` is relative, `go_to_location.absolute_altitude_m` and
@@ -130,7 +190,10 @@ each failure is a distinct, countable audit event (`confirmation.unknown_or_used
 
 ### Geofence (`geofence.*`)
 Polygon (ray-casting), altitude ceiling, and radius-from-home. Applies to
-single targets **and to whole missions at upload time** — one bad waypoint
+absolute targets, **offsets from the current position** (`move_to_relative`,
+offboard NED - resolved against live position), **velocities** (projected
+forward over the stale-setpoint window), follow-me targets, imported QGC
+plans, **and to whole missions at upload time** — one bad waypoint
 rejects the entire mission and nothing is sent to the drone. Only *altitude*
 is ever clipped; horizontal targets are rejected, never silently moved
 (silently moving a waypoint would fly the vehicle somewhere nobody asked for).
@@ -150,12 +213,19 @@ are validated before upload and offboard setpoints per setpoint.
 | `precondition.navigation_requires_airborne` | goto/offboard while on the ground |
 | `precondition.takeoff_settling` | **the takeoff-then-crash timing fix**: navigation within `takeoff_settle_s` (default 3 s) of the takeoff *command* is refused |
 | `precondition.mission_required` | mission start with no mission uploaded this session |
-| `precondition.state_unknown` | only when `preconditions_fail_closed=true` |
+| `precondition.ground_only` | `calibrate` / `cancel_calibration` while airborne **or** state unknown - blocks regardless of the fail-open policy |
+| `precondition.state_unknown` | only when `preconditions_fail_closed=true`; covers every state-dependent rule |
 
 **Fail-open by default.** If telemetry cannot be read, preconditions do not
 block (a telemetry hiccup must not strand an airborne vehicle mid-command).
 Set `SAFETY_PRECONDITIONS_FAIL_CLOSED=1` to invert this. **Reviewer decision:
 which default do you want for real flights?**
+
+Two rules exist to stop the fence being *silently* skipped rather than
+enforced: `geofence.home_unknown` (a radius fence is configured but home has
+not been read) and `geofence.target_unresolvable` (an offset/velocity command
+with no live position). Both refuse the command - refusing to move is the safe
+direction.
 
 ### Rate limits (`rate_limit.*`)
 Per client, sliding window: 60 calls/60 s normal, 6 calls/60 s critical
@@ -198,9 +268,23 @@ removed or repurposed). Fields: `ts`, `call_id`, `client_id`, `authenticated`,
 `tier`, `args` (redacted/truncated), `verdict`, `rule`, `outcome_status`,
 `outcome_error`, `latency_ms`, `safety_ms`, `guards`.
 
-`latency_ms` is end-to-end per tool call and `safety_ms` is the guard's own
-cost — together these are the paper's latency instrumentation *and* the
-guardrails-on/off overhead measurement.
+**Timing semantics — read before quoting these numbers.** `latency_ms` starts
+at the guard's *first statement* (before settings are loaded) and ends when
+the tool's result is ready, so it includes every check and the tool's own
+work. It excludes only this record's own fsync'd write, which cannot be timed
+before it happens; that cost is measured and reported on the **next** record
+as `audit_write_ms`. Over a run, `mean(latency_ms) + mean(audit_write_ms)` is
+the true end-to-end cost — the one-record lag cancels. `safety_ms` is the
+guard's own share.
+
+This was wrong before the independent review: the timer started *after* a
+`.env` re-read that happened on every call (the dominant fixed cost), and the
+durable write was excluded entirely, so the reported numbers were quietly
+optimistic. Settings are now cached (`reset_safety_settings()` re-reads).
+
+**Guardrails-off runs are still audited.** With `SAFETY_ENABLED=0` every call
+is recorded with verdict `allowed_safety_disabled` and the `guards` flags in
+force, so an experiment cannot silently produce unlabelled data.
 
 Default path `<FLIGHT_LOG_DIR>/audit.jsonl`; override with `SAFETY_AUDIT_LOG_PATH`.
 
@@ -296,6 +380,15 @@ fully audited" the right boundary?
 5. **AMSL altitudes are unchecked until home altitude is known** (§5).
 6. **The server fence does not clip horizontal targets**, by design.
 7. **No signed audit log.** Tamper-evidence (hash chaining) is not implemented.
+7a. **Velocity fencing is a projection, not a prediction.** Velocity setpoints
+   are checked by extrapolating the commanded velocity over the stale-setpoint
+   window in a straight line; it ignores acceleration and, for body-frame
+   velocity, uses the worst-case direction because heading is not resolved.
+   It is deliberately conservative, so it can refuse a command that would in
+   fact have stayed inside the fence.
+7b. **Offset commands assume the offboard origin is the current position.**
+   True for `move_to_relative`; an approximation for
+   `offboard_set_position_ned` if offboard was started somewhere else.
 8. **Client identity comes from a transport header**; on stdio there is none,
    so the unauthenticated policy applies.
 9. **Unconfigured auth grants `control`** (§6) — deliberate, warned, and
