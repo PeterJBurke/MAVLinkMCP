@@ -145,3 +145,4 @@ ftp,are_files_identical,,"ArduCopter 4.5.7 SITL: MAVLink-FTP unsupported. Wired 
 follow_me,get_config,,"ArduCopter 4.5.7 SITL: works (returns defaults). Wired via follow_me action=get_config."
 winch,load_payload,,"ArduCopter 4.5.7 SITL: untestable (no winch backend). Wired via payload_mechanism action=load_payload."
 info,flight_information,candidate-N/A,"Subscription stream duplicating get_flight_information (which is itself INFORMATION_NOT_RECEIVED_YET on ArduPilot). Redundant for a polling MCP server."
+action,kill,,"ArduCopter 4.5.7 SITL: reachable via emergency_stop(mode=kill) / kill_motors. Not exercised in flight for safety; gated behind a confirmation token."

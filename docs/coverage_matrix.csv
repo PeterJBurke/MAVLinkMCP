@@ -7,10 +7,10 @@ action,Action,get_return_to_launch_altitude,async call,(),Get the return to laun
 action,Action,get_takeoff_altitude,async call,(),Get the takeoff altitude (in meters above ground).,flight_altitudes,implemented,,ArduCopter 4.5.7 SITL: works.
 action,Action,goto_location,async call,"(latitude_deg, longitude_deg, absolute_altitude_m, yaw_deg)",Send command to move the vehicle to a specific global position.,"go_to_location, hold_mission_position, hold_position, move_to_relative, pause_mission, reposition, set_flight_mode, set_yaw",implemented,,
 action,Action,hold,async call,(),"Send command to hold position (a.k.a. ""Loiter"").",set_flight_mode,implemented,,
-action,Action,kill,async call,(),Send command to kill the drone.,kill_motors,implemented,,
-action,Action,land,async call,(),Send command to land at the current position.,"land, monitor_flight, set_flight_mode",implemented,,
+action,Action,kill,async call,(),Send command to kill the drone.,"emergency_stop, kill_motors",implemented,,ArduCopter 4.5.7 SITL: reachable via emergency_stop(mode=kill) / kill_motors. Not exercised in flight for safety; gated behind a confirmation token.
+action,Action,land,async call,(),Send command to land at the current position.,"emergency_stop, land, monitor_flight, set_flight_mode",implemented,,
 action,Action,reboot,async call,(),Send command to reboot the drone components.,vehicle_power,implemented,,ArduCopter 4.5.7 SITL: works - autopilot reboots and the link re-establishes.
-action,Action,return_to_launch,async call,(),Send command to return to the launch (takeoff) position and land.,"return_to_launch, set_flight_mode",implemented,,
+action,Action,return_to_launch,async call,(),Send command to return to the launch (takeoff) position and land.,"emergency_stop, return_to_launch, set_flight_mode",implemented,,
 action,Action,set_actuator,async call,"(index, value)",Send command to set the value of an actuator.,set_actuator,implemented,,ArduCopter 4.5.7 SITL: reachable; effect depends on a free servo output. Not independently verified.
 action,Action,set_current_speed,async call,(speed_m_s),Set current speed.,set_max_speed,implemented,,ArduCopter 4.5.7 SITL: works in guided/auto flight; rejected (FAILED) when not in an appropriate mode.
 action,Action,set_return_to_launch_altitude,async call,(relative_altitude_m),Set the return to launch minimum return altitude (in meters).,flight_altitudes,implemented,,ArduCopter 4.5.7 SITL: PARAMETER_ERROR - MavSDK uses the PX4 RTL_RETURN_ALT param. On ArduPilot set RTL_ALT (cm) via set_parameter.
@@ -199,7 +199,7 @@ mission_raw_server,MissionRawServer,set_current_item_complete,async call,(),Set 
 mocap,Mocap,set_attitude_position_mocap,async call,(attitude_position_mocap),Send motion capture attitude and position.,send_mocap,implemented,,ArduCopter 4.5.7 SITL: accepted (send-only).
 mocap,Mocap,set_odometry,async call,(odometry),Send odometry information with an external interface.,send_mocap,implemented,,ArduCopter 4.5.7 SITL: accepted (send-only external odometry via send_mocap kind=odometry).
 mocap,Mocap,set_vision_position_estimate,async call,(vision_position_estimate),Send Global position/attitude estimate from a vision source.,send_mocap,implemented,,ArduCopter 4.5.7 SITL: accepted (send-only; effect on EKF not independently verified).
-offboard,Offboard,is_active,async call,(),Check if offboard control is active.,offboard_control,implemented,P0,ArduCopter 4.5.7 SITL: works - tracks start/stop correctly. PX4: untested (SITL pending).
+offboard,Offboard,is_active,async call,(),Check if offboard control is active.,"emergency_stop, offboard_control",implemented,P0,ArduCopter 4.5.7 SITL: works - tracks start/stop correctly. PX4: untested (SITL pending).
 offboard,Offboard,set_acceleration_ned,async call,(acceleration_ned),Set the acceleration in NED coordinates.,offboard_set_acceleration_ned,implemented,P0,ArduCopter 4.5.7 SITL: accepted (ArduCopter GUIDED supports acceleration targets since 4.3); effect not quantitatively verified. PX4: untested (SITL pending).
 offboard,Offboard,set_actuator_control,async call,(actuator_control),Set direct actuator control values to groups #0 and #1.,offboard_set_actuator_control,implemented,P0,ArduCopter 4.5.7 SITL: RPC accepted but inert - ArduPilot has no SET_ACTUATOR_CONTROL_TARGET handler; treat as PX4-only. PX4: untested (SITL pending).
 offboard,Offboard,set_attitude,async call,(attitude),"Set the attitude in terms of roll, pitch and yaw in degrees with thrust.",offboard_set_attitude,implemented,P0,"ArduCopter 4.5.7 SITL: works - commanded pitch -5 deg, telemetry confirmed -5.0 deg. PX4: untested (SITL pending)."
@@ -211,7 +211,7 @@ offboard,Offboard,set_position_velocity_ned,async call,"(position_ned_yaw, veloc
 offboard,Offboard,set_velocity_body,async call,(velocity_body_yawspeed),Set the velocity in body coordinates and yaw angular rate. Not available for fixed-wing aircraft.,offboard_set_velocity_body,implemented,P0,"ArduCopter 4.5.7 SITL: accepted in flight, motion consistent; not quantitatively verified. PX4: untested (SITL pending)."
 offboard,Offboard,set_velocity_ned,async call,(velocity_ned_yaw),Set the velocity in NED coordinates and yaw. Not available for fixed-wing aircraft.,"offboard_set_velocity_ned, [infra: _make_brake]",implemented,P0,"ArduCopter 4.5.7 SITL: works - commanded 2 m/s north, telemetry confirmed 2.0 m/s. PX4: untested (SITL pending)."
 offboard,Offboard,start,async call,(),Start offboard control.,offboard_control,implemented,P0,ArduCopter 4.5.7 SITL: works - MavSDK maps offboard to GUIDED mode. PX4: untested (SITL pending).
-offboard,Offboard,stop,async call,(),Stop offboard control.,offboard_control,implemented,P0,ArduCopter 4.5.7 SITL: works - vehicle switches to Loiter (reported as HOLD). PX4: untested (SITL pending).
+offboard,Offboard,stop,async call,(),Stop offboard control.,"emergency_stop, offboard_control",implemented,P0,ArduCopter 4.5.7 SITL: works - vehicle switches to Loiter (reported as HOLD). PX4: untested (SITL pending).
 param,Param,get_all_params,async call,(),Get all parameters.,list_parameters,implemented,,
 param,Param,get_param_custom,async call,(name),Get a custom parameter.,get_parameter,implemented,,ArduCopter 4.5.7 SITL: TIMEOUT - PARAM_EXT (custom/string params) is a PX4 feature; ArduPilot does not implement it.
 param,Param,get_param_float,async call,(name),Get a float parameter.,"get_parameter, set_parameter",implemented,,
@@ -254,10 +254,10 @@ telemetry,Telemetry,health,stream (async generator),(),Subscribe to 'health' upd
 telemetry,Telemetry,health_all_ok,stream (async generator),(),Subscribe to 'HealthAllOk' updates.,get_health_all_ok,implemented,,
 telemetry,Telemetry,home,stream (async generator),(),Subscribe to 'home position' updates.,get_home_position,implemented,,
 telemetry,Telemetry,imu,stream (async generator),(),Subscribe to 'IMU' updates (in SI units in NED body frame).,get_imu,implemented,,
-telemetry,Telemetry,in_air,stream (async generator),(),Subscribe to in-air updates.,"get_in_air, monitor_flight",implemented,,
-telemetry,Telemetry,landed_state,stream (async generator),(),Subscribe to landed state updates,"get_landed_state, monitor_flight",implemented,,
+telemetry,Telemetry,in_air,stream (async generator),(),Subscribe to in-air updates.,"get_in_air, monitor_flight, [infra: _read_in_air]",implemented,,
+telemetry,Telemetry,landed_state,stream (async generator),(),Subscribe to landed state updates,"get_landed_state, monitor_flight, [infra: _read_in_air]",implemented,,
 telemetry,Telemetry,odometry,stream (async generator),(),Subscribe to 'odometry' updates.,get_odometry,implemented,,ArduCopter 4.5.7 SITL: not published (get_odometry times out); ArduPilot does not emit ODOMETRY by default. position/velocity/attitude have dedicated working tools.
-telemetry,Telemetry,position,stream (async generator),(),Subscribe to 'position' updates.,"check_arrival, get_position, go_to_location, hold_mission_position, hold_position, land, monitor_flight, move_to_relative, pause_mission, reposition, set_flight_mode, set_yaw, takeoff",implemented,,
+telemetry,Telemetry,position,stream (async generator),(),Subscribe to 'position' updates.,"check_arrival, get_position, go_to_location, hold_mission_position, hold_position, land, monitor_flight, move_to_relative, pause_mission, reposition, set_flight_mode, set_yaw, takeoff, [infra: _read_in_air]",implemented,,
 telemetry,Telemetry,position_velocity_ned,stream (async generator),(),Subscribe to 'position velocity' updates.,get_telemetry_extended (dynamic),implemented,,
 telemetry,Telemetry,raw_gps,stream (async generator),(),Subscribe to 'Raw GPS' updates.,get_telemetry_extended (dynamic),implemented,,ArduCopter 4.5.7 SITL: works.
 telemetry,Telemetry,raw_imu,stream (async generator),(),Subscribe to 'Raw IMU' updates.,get_telemetry_extended (dynamic),implemented,,

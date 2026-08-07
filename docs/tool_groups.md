@@ -274,3 +274,22 @@ coverage generator's AST matcher cannot trace are declared in
 `docs/coverage_overrides.csv` (telemetry extended topics, calibration, winch),
 and the generator validates every entry against the real plugin classes so the
 override file cannot silently over-claim coverage.
+
+## emergency (v2, 1 tool) + the safety layer
+
+`emergency_stop(mode=land|rtl|kill)` is the only tool in tier `EMERGENCY`:
+deliberately **not** confirmation-gated and exempt from rate limiting, because
+a token round-trip during an emergency is itself a hazard. It still requires
+`control` scope and is always audited. The full out-of-band override chain
+(RC takeover → GCS → cut the link → this tool) is in [estop.md](estop.md).
+
+As of Phase 3 every tool in every group above is also **classified into a
+criticality tier** and passes through the validation/geofence/authz/audit
+pipeline before reaching MavSDK. The grouping rationale and the tier table
+interact in one place worth noting here: because tools are *grouped by intent*
+with an `action` parameter, a single tool can span tiers — `flight_logs` is
+`normal` for `list`/`download` but escalates to `critical` for `erase_all`,
+and `camera_storage` escalates for `format`. The tier table handles this with
+argument-aware escalation predicates rather than by splitting the tools, which
+would have undone the grouping economy. See
+[safety_review.md](safety_review.md) §3.
