@@ -1,0 +1,120 @@
+ts,tool,tier,verdict,rule,latency_ms,safety_ms,audit_write_ms,client_id,outcome_status
+2026-08-07T18:09:22.747328+00:00,arm_drone,normal,allowed,,972.137,949.157,1.097,staging,success
+2026-08-07T18:09:36.927934+00:00,takeoff,normal,allowed,,14132.913,924.798,1.127,staging,success
+2026-08-07T18:09:37.179782+00:00,get_position,read_only,allowed,,201.038,0.065,1.224,staging,success
+2026-08-07T18:09:47.731368+00:00,land,normal,allowed,,501.907,498.57,1.009,staging,success
+2026-08-07T18:09:48.590423+00:00,get_armed,read_only,allowed,,811.61,0.06,1.135,staging,success
+2026-08-07T18:09:53.588810+00:00,get_armed,read_only,allowed,,948.635,0.064,0.968,staging,success
+2026-08-07T18:09:58.587875+00:00,get_armed,read_only,allowed,,948.604,0.102,1.16,staging,success
+2026-08-07T18:10:03.591836+00:00,get_armed,read_only,allowed,,954.699,0.066,1.452,staging,success
+2026-08-07T18:10:08.590116+00:00,get_armed,read_only,allowed,,948.643,0.064,0.999,staging,success
+2026-08-07T18:10:13.590005+00:00,get_armed,read_only,allowed,,950.602,0.065,1.049,staging,success
+2026-08-07T18:10:18.592971+00:00,get_armed,read_only,allowed,,953.897,0.065,1.217,staging,success
+2026-08-07T18:10:19.594530+00:00,get_armed,read_only,allowed,,953.52,0.062,1.097,staging,success
+2026-08-07T18:10:20.746807+00:00,arm_drone,normal,allowed,,1091.521,1073.401,1.115,staging,success
+2026-08-07T18:10:35.180173+00:00,takeoff,normal,allowed,,14385.767,932.127,0.916,staging,success
+2026-08-07T18:10:36.196673+00:00,go_to_location,normal,allowed,,966.206,499.224,1.094,staging,success
+2026-08-07T18:10:36.430446+00:00,get_position,read_only,allowed,,186.594,0.063,1.024,staging,success
+2026-08-07T18:10:41.683881+00:00,get_position,read_only,allowed,,204.714,0.066,0.891,staging,success
+2026-08-07T18:10:46.932701+00:00,get_position,read_only,allowed,,199.001,0.064,1.084,staging,success
+2026-08-07T18:10:47.732731+00:00,land,normal,allowed,,751.17,744.574,1.196,staging,success
+2026-08-07T18:10:48.594563+00:00,get_armed,read_only,allowed,,812.906,0.081,0.976,staging,success
+2026-08-07T18:10:53.593482+00:00,get_armed,read_only,allowed,,950.898,0.065,0.935,staging,success
+2026-08-07T18:10:58.596695+00:00,get_armed,read_only,allowed,,954.517,0.065,1.093,staging,success
+2026-08-07T18:11:03.593790+00:00,get_armed,read_only,allowed,,948.229,0.066,1.592,staging,success
+2026-08-07T18:11:08.595282+00:00,get_armed,read_only,allowed,,952.294,0.065,1.047,staging,success
+2026-08-07T18:11:13.598517+00:00,get_armed,read_only,allowed,,941.053,0.064,1.109,staging,success
+2026-08-07T18:11:18.596752+00:00,get_armed,read_only,allowed,,947.411,0.082,1.081,staging,success
+2026-08-07T18:11:19.596572+00:00,get_armed,read_only,allowed,,950.859,0.078,0.942,staging,success
+2026-08-07T18:11:20.749929+00:00,arm_drone,normal,allowed,,1104.363,1086.99,0.985,staging,success
+2026-08-07T18:11:34.936745+00:00,takeoff,normal,allowed,,14137.646,933.851,0.896,staging,success
+2026-08-07T18:11:36.194474+00:00,go_to_location,normal,allowed,,1208.206,746.79,1.111,staging,success
+2026-08-07T18:11:36.435889+00:00,get_position,read_only,allowed,,194.341,0.064,0.997,staging,success
+2026-08-07T18:11:36.954470+00:00,go_to_location,normal,allowed,,470.743,0.086,1.017,staging,success
+2026-08-07T18:11:37.189532+00:00,get_position,read_only,allowed,,187.987,0.064,1.015,staging,success
+2026-08-07T18:11:42.439117+00:00,get_position,read_only,allowed,,200.042,0.064,0.946,staging,success
+2026-08-07T18:11:47.687534+00:00,get_position,read_only,allowed,,197.633,0.081,1.135,staging,success
+2026-08-07T18:11:49.200707+00:00,go_to_location,normal,allowed,,1463.626,996.936,1.042,staging,success
+2026-08-07T18:11:49.435848+00:00,get_position,read_only,allowed,,173.511,0.066,1.242,staging,success
+2026-08-07T18:11:54.691737+00:00,get_position,read_only,allowed,,206.588,0.066,1.167,staging,success
+2026-08-07T18:11:59.938493+00:00,get_position,read_only,allowed,,196.238,0.084,1.129,staging,success
+2026-08-07T18:12:01.205628+00:00,go_to_location,normal,allowed,,1217.959,747.172,1.017,staging,success
+2026-08-07T18:12:01.441212+00:00,get_position,read_only,allowed,,186.272,0.08,1.2,staging,success
+2026-08-07T18:12:06.686933+00:00,get_position,read_only,allowed,,195.288,0.065,1.027,staging,success
+2026-08-07T18:12:11.939395+00:00,get_position,read_only,allowed,,201.027,0.082,1.157,staging,success
+2026-08-07T18:12:12.745083+00:00,land,normal,allowed,,757.921,747.174,0.941,staging,success
+2026-08-07T18:12:13.599542+00:00,get_armed,read_only,allowed,,806.928,0.061,0.995,staging,success
+2026-08-07T18:12:18.603404+00:00,get_armed,read_only,allowed,,954.864,0.065,1.117,staging,success
+2026-08-07T18:12:23.600989+00:00,get_armed,read_only,allowed,,948.568,0.064,1.122,staging,success
+2026-08-07T18:12:28.602327+00:00,get_armed,read_only,allowed,,951.931,0.064,1.2,staging,success
+2026-08-07T18:12:33.601698+00:00,get_armed,read_only,allowed,,937.269,0.065,1.006,staging,success
+2026-08-07T18:12:38.603953+00:00,get_armed,read_only,allowed,,952.797,0.065,1.378,staging,success
+2026-08-07T18:12:43.601426+00:00,get_armed,read_only,allowed,,948.01,0.073,1.228,staging,success
+2026-08-07T18:12:44.601170+00:00,get_armed,read_only,allowed,,952.234,0.062,1.079,staging,success
+2026-08-07T18:12:44.649997+00:00,mission.info,normal,event,,0.0,0.0,0.0,mission_runner,mission submitted with 3 waypoint(s)
+2026-08-07T18:12:44.651569+00:00,start_managed_mission,normal,allowed,,2.614,0.065,1.167,staging,success
+2026-08-07T18:12:44.652660+00:00,mission.phase_change,normal,event,,0.0,0.0,0.0,mission_runner,submitted -> validating
+2026-08-07T18:12:44.653793+00:00,mission.phase_change,normal,event,,0.0,0.0,0.0,mission_runner,validating -> uploading
+2026-08-07T18:12:44.701223+00:00,mission.info,normal,event,,0.0,0.0,0.0,mission_runner,uploaded 6 mission items
+2026-08-07T18:12:44.702772+00:00,mission.phase_change,normal,event,,0.0,0.0,0.0,mission_runner,uploading -> arming
+2026-08-07T18:12:44.705427+00:00,get_mission_status,read_only,allowed,,1.046,0.074,0.825,staging,success
+2026-08-07T18:12:44.726031+00:00,mission.info,normal,event,,0.0,0.0,0.0,mission_runner,armed
+2026-08-07T18:12:44.749315+00:00,mission.info,normal,event,,0.0,0.0,0.0,mission_runner,climbing to 20 m before starting the mission
+2026-08-07T18:12:54.754650+00:00,get_mission_status,read_only,allowed,,0.979,0.066,0.818,staging,success
+2026-08-07T18:12:57.943633+00:00,mission.info,normal,event,,0.0,0.0,0.0,mission_runner,reached 19.3 m
+2026-08-07T18:12:57.960067+00:00,mission.phase_change,normal,event,,0.0,0.0,0.0,mission_runner,arming -> running
+2026-08-07T18:13:01.695250+00:00,mission.waypoint,normal,event,,0.0,0.0,0.0,mission_runner,reached item 2/6
+2026-08-07T18:13:01.696990+00:00,mission.mode,normal,event,,0.0,0.0,0.0,mission_runner,flight mode -> MISSION
+2026-08-07T18:13:04.803991+00:00,get_mission_status,read_only,allowed,,1.123,0.066,1.056,staging,success
+2026-08-07T18:13:14.852628+00:00,get_mission_status,read_only,allowed,,1.139,0.066,1.063,staging,success
+2026-08-07T18:13:19.302686+00:00,mission.waypoint,normal,event,,0.0,0.0,0.0,mission_runner,reached item 4/6
+2026-08-07T18:13:24.903121+00:00,get_mission_status,read_only,allowed,,1.17,0.065,1.365,staging,success
+2026-08-07T18:13:30.343287+00:00,mission.waypoint,normal,event,,0.0,0.0,0.0,mission_runner,reached item 5/6
+2026-08-07T18:13:34.953768+00:00,get_mission_status,read_only,allowed,,1.187,0.084,0.982,staging,success
+2026-08-07T18:13:45.002357+00:00,get_mission_status,read_only,allowed,,1.148,0.065,1.162,staging,success
+2026-08-07T18:13:55.067504+00:00,get_mission_status,read_only,allowed,,1.007,0.08,1.013,staging,success
+2026-08-07T18:14:05.117430+00:00,get_mission_status,read_only,allowed,,1.473,0.065,1.052,staging,success
+2026-08-07T18:14:15.168250+00:00,get_mission_status,read_only,allowed,,1.166,0.079,1.126,staging,success
+2026-08-07T18:14:25.220322+00:00,get_mission_status,read_only,allowed,,1.055,0.085,1.342,staging,success
+2026-08-07T18:14:33.708153+00:00,mission.waypoint,normal,event,,0.0,0.0,0.0,mission_runner,reached item 0/6
+2026-08-07T18:14:33.709835+00:00,mission.phase_change,normal,event,,0.0,0.0,0.0,mission_runner,running -> completed (landed and disarmed)
+2026-08-07T18:14:35.270897+00:00,get_mission_status,read_only,allowed,,1.079,0.089,1.065,staging,success
+2026-08-07T18:14:35.320150+00:00,control_managed_mission,normal,allowed,,0.901,0.092,1.085,staging,success
+2026-08-07T18:14:35.613738+00:00,get_armed,read_only,allowed,,244.827,0.076,0.887,staging,success
+2026-08-07T18:14:36.762752+00:00,arm_drone,normal,allowed,,1099.215,1082.257,1.123,staging,success
+2026-08-07T18:14:50.206886+00:00,takeoff,normal,allowed,,13394.975,938.149,1.04,staging,success
+2026-08-07T18:14:51.221954+00:00,go_to_location,normal,allowed,,964.567,491.693,1.268,staging,success
+2026-08-07T18:14:51.450459+00:00,get_position,read_only,allowed,,180.853,0.062,1.068,staging,success
+2026-08-07T18:14:56.705396+00:00,get_position,read_only,allowed,,205.642,0.066,1.053,staging,success
+2026-08-07T18:15:01.951817+00:00,get_position,read_only,allowed,,182.648,0.065,1.279,staging,success
+2026-08-07T18:15:02.205697+00:00,get_position,read_only,allowed,,204.336,0.072,1.319,staging,success
+2026-08-07T18:15:02.269791+00:00,return_to_launch,normal,allowed,,13.997,0.078,0.972,staging,success
+2026-08-07T18:15:02.618719+00:00,get_armed,read_only,allowed,,301.595,0.073,0.927,staging,success
+2026-08-07T18:15:08.614218+00:00,get_armed,read_only,allowed,,945.75,0.08,1.069,staging,success
+2026-08-07T18:15:14.618426+00:00,get_armed,read_only,allowed,,953.677,0.081,1.018,staging,success
+2026-08-07T18:15:20.620043+00:00,get_armed,read_only,allowed,,952.853,0.065,0.946,staging,success
+2026-08-07T18:15:26.619448+00:00,get_armed,read_only,allowed,,950.691,0.065,0.958,staging,success
+2026-08-07T18:15:32.618389+00:00,get_armed,read_only,allowed,,950.112,0.083,1.002,staging,success
+2026-08-07T18:15:38.618540+00:00,get_armed,read_only,allowed,,950.265,0.085,1.078,staging,success
+2026-08-07T18:15:44.622267+00:00,get_armed,read_only,allowed,,954.321,0.082,1.985,staging,success
+2026-08-07T18:15:50.621546+00:00,get_armed,read_only,allowed,,949.536,0.078,0.976,staging,success
+2026-08-07T18:15:56.620926+00:00,get_armed,read_only,allowed,,936.295,0.065,1.077,staging,success
+2026-08-07T18:16:02.619616+00:00,get_armed,read_only,allowed,,949.38,0.066,1.1,staging,success
+2026-08-07T18:16:08.623144+00:00,get_armed,read_only,allowed,,952.777,0.081,1.16,staging,success
+2026-08-07T18:16:08.711383+00:00,get_position,read_only,allowed,,38.831,0.078,1.325,staging,success
+2026-08-07T18:16:09.623055+00:00,get_armed,read_only,allowed,,863.657,0.058,1.194,staging,success
+2026-08-07T18:16:10.622072+00:00,get_armed,read_only,allowed,,951.331,0.063,1.415,staging,success
+2026-08-07T18:16:10.719633+00:00,get_parameter,read_only,allowed,,50.229,0.067,1.064,staging,success
+2026-08-07T18:16:10.797358+00:00,set_parameter,critical,confirmation_required,,0.163,0.097,0.96,staging,
+2026-08-07T18:16:10.929464+00:00,set_parameter,critical,allowed,,86.888,0.085,0.934,staging,success
+2026-08-07T18:16:11.018488+00:00,get_parameter,read_only,allowed,,39.412,0.074,0.959,staging,success
+2026-08-07T18:16:11.066337+00:00,set_parameter,critical,confirmation_required,,0.183,0.119,0.898,staging,
+2026-08-07T18:16:11.234183+00:00,set_parameter,critical,allowed,,121.167,0.11,0.976,staging,success
+2026-08-07T18:16:11.619401+00:00,get_armed,read_only,allowed,,321.245,0.077,1.174,staging,success
+2026-08-07T18:16:12.759640+00:00,go_to_location,normal,rejected,geofence.radius,1060.138,1060.084,0.955,staging,
+2026-08-07T18:16:13.624342+00:00,get_armed,read_only,allowed,,816.706,0.062,1.074,staging,success
+2026-08-07T18:16:13.672783+00:00,kill_motors,critical,confirmation_required,,0.14,0.102,1.039,staging,
+2026-08-07T18:16:13.720287+00:00,kill_motors,critical,rejected,confirmation.unknown_or_used,0.116,0.074,0.829,staging,
+2026-08-07T18:16:13.767511+00:00,send_status_text,normal,allowed,,1.354,0.055,1.046,staging,success
+2026-08-07T18:16:13.815107+00:00,takeoff,normal,rejected,bounds.max_altitude,0.118,0.077,0.963,staging,
+2026-08-07T18:16:14.621171+00:00,get_armed,read_only,allowed,,758.874,0.086,0.849,staging,success

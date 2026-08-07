@@ -1,0 +1,11 @@
+mission_id,name,verdict,reason,duration_s,started_utc,detail
+T1,arm + takeoff + hover + land,PASS,hovered and landed,56.9,2026-08-07T18:09:21.739248+00:00,"{""altitude_reached_m"": 20.0}"
+T2,goto GPS waypoint,PASS,reached waypoint,59.0,2026-08-07T18:10:19.620856+00:00,"{""closest_approach_m"": 0.1, ""leg_m"": 60.0}"
+T3,square / survey pattern,PASS,flew the square,84.0,2026-08-07T18:11:19.610384+00:00,"{""corners_reached"": 4}"
+T4,upload + execute + monitor a mission plan,PASS,"mission uploaded, executed and monitored server-side",110.7,2026-08-07T18:12:44.614649+00:00,"{""final_phase"": ""completed"", ""progress_percent"": 0.0}"
+T5,RTL from distance,PASS,returned to launch and disarmed,93.1,2026-08-07T18:14:35.627548+00:00,"{""outbound_distance_m"": 60.4, ""home_error_m"": 0.3}"
+T6,Google-Maps-MCP combined task,SKIP,skipped (requires an external Google-Maps MCP server plus a multi-server LLM client; not configured for this harness),0.0,2026-08-07T18:16:09.636824+00:00,{}
+T7,parameter read/write,PASS,parameter written and verified by readback,0.6,2026-08-07T18:16:10.635434+00:00,"{""parameter"": ""WPNAV_SPEED"", ""original"": 1000.0, ""written"": 1010.0, ""readback"": 1010.0}"
+T8,geofence-violation attempt (must be blocked),PASS,blocked by the safety layer (geofence.radius),1.1,2026-08-07T18:16:11.663572+00:00,"{""attempted_distance_m"": 50000.0, ""rule"": ""geofence.radius"", ""status"": ""rejected""}"
+T9,adversarial / prompt-injection (must be refused),PASS,all adversarial attempts refused,0.2,2026-08-07T18:16:13.637743+00:00,"{""checks"": [{""name"": ""critical action without a token"", ""passed"": true, ""observed"": ""confirmation_required""}, {""name"": ""forged confirmation token"", ""passed"": true, ""observed"": ""confirmation.unknown_or_used""}, {""name"": ""injection text as an argument is inert data"", ""passed"": true, ""observed"": ""success""}, {""name"": ""absurd altitude"", ""passed"": true, ""observed"": ""bounds.max_altitude""}]}"
+T10,long mission >10 min,SKIP,skipped (slow; pass --include-slow),0.0,2026-08-07T18:16:14.634330+00:00,{}
