@@ -221,3 +221,58 @@ class TestResolveTarget:
         lat, lon, _alt, err = resolve_target("move_to_relative", {"north_m": 111.32, "east_m": 0}, AIRBORNE, s)
         assert err is None
         assert lat == pytest.approx(HOME[0] + 0.001, abs=1e-5)
+
+
+class TestB1GuardFailsClosed:
+    """B1: the guard used to execute the tool when it crashed. It must refuse."""
+
+    def _make_guarded_tool(self, monkeypatch, boom: bool):
+        from droneserver.safety import middleware as M
+
+        executed: list[bool] = []
+
+        async def tool(ctx=None, **kwargs):
+            executed.append(True)
+            return {"status": "success"}
+
+        tool.__name__ = "takeoff"
+
+        if boom:
+
+            async def exploding(*a, **kw):
+                raise RuntimeError("simulated guard fault")
+
+            monkeypatch.setattr(M, "_evaluate", exploding)
+        return M.guard(tool), executed
+
+    def test_guard_crash_refuses_and_does_not_execute(self, monkeypatch, tmp_path):
+        import asyncio
+
+        monkeypatch.setenv("SAFETY_AUDIT_LOG_PATH", str(tmp_path / "audit.jsonl"))
+        reset_safety_settings()
+        guarded, executed = self._make_guarded_tool(monkeypatch, boom=True)
+
+        result = asyncio.run(guarded(ctx=None))
+
+        assert result["status"] == "rejected", result
+        assert result["rule"] == "guard.internal_error"
+        assert not executed, "the tool must NOT run when the guard itself failed"
+        reset_safety_settings()
+
+    def test_guard_crash_is_distinguishable_in_the_audit_log(self, monkeypatch, tmp_path):
+        """S11: a crashed guard used to look exactly like an allowed call."""
+        import asyncio
+        import json
+
+        audit = tmp_path / "audit.jsonl"
+        monkeypatch.setenv("SAFETY_AUDIT_LOG_PATH", str(audit))
+        reset_safety_settings()
+        guarded, _ = self._make_guarded_tool(monkeypatch, boom=True)
+        asyncio.run(guarded(ctx=None))
+
+        rows = [json.loads(line) for line in audit.read_text().splitlines() if line.strip()]
+        assert rows, "the failed call must still be audited"
+        assert rows[-1]["verdict"] == "rejected"
+        assert rows[-1]["rule"] == "guard.internal_error"
+        assert "simulated guard fault" in (rows[-1]["guard_error"] or "")
+        reset_safety_settings()
