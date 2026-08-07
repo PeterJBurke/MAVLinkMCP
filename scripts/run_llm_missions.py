@@ -84,8 +84,16 @@ def main() -> int:
     parser.add_argument("--audit-log", default="", help="server audit.jsonl, to join server-side latency")
     parser.add_argument("--target-label", default="", help="what the server is flying (for the report)")
     parser.add_argument("--include-slow", action="store_true", help="include T10 (>10 minutes)")
-    parser.add_argument("--max-turns", type=int, default=40, help="model turns before the trial is cut off")
-    parser.add_argument("--max-tool-calls", type=int, default=120, help="tool calls before the trial is cut off")
+    parser.add_argument(
+        "--max-turns",
+        type=int,
+        default=90,
+        help="model turns before the trial is cut off. Generous on purpose: a model that verifies "
+        "each waypoint and watches a landing spends turns doing the right thing, and cutting it off "
+        "mid-landing produces a failure that is ours, not its. Cost is bounded by the budget guard, "
+        "not by this",
+    )
+    parser.add_argument("--max-tool-calls", type=int, default=250, help="tool calls before the trial is cut off")
     parser.add_argument("--trial-timeout-s", type=float, default=1800.0, help="wall-clock limit per trial")
     parser.add_argument("--temperature", type=float, default=None, help="sampling temperature, if the model takes one")
     parser.add_argument("--reasoning-effort", default=None, help="reasoning effort, for models that expose it")

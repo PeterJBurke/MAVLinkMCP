@@ -44,8 +44,8 @@ from droneserver.llm.providers import ModelSession, ModelTurn, ProviderQuotaErro
 class Limits:
     """Where a trial stops if the model does not stop it first."""
 
-    max_turns: int = 40
-    max_tool_calls: int = 120
+    max_turns: int = 90
+    max_tool_calls: int = 250
     wall_clock_s: float = 1800.0
     max_total_tokens: int = 2_000_000
     #: Dollars this single trial may spend before it is stopped. Enforced turn
