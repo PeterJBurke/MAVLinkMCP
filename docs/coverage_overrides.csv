@@ -1,0 +1,29 @@
+plugin,method,implemented_by,note
+telemetry,altitude,get_telemetry_extended,dispatched dynamically via getattr(drone.telemetry, topic)
+telemetry,attitude_quaternion,get_telemetry_extended,dispatched dynamically via getattr
+telemetry,attitude_angular_velocity_body,get_telemetry_extended,dispatched dynamically via getattr
+telemetry,raw_gps,get_telemetry_extended,dispatched dynamically via getattr
+telemetry,scaled_pressure,get_telemetry_extended,dispatched dynamically via getattr
+telemetry,position_velocity_ned,get_telemetry_extended,dispatched dynamically via getattr
+telemetry,unix_epoch_time,get_telemetry_extended,dispatched dynamically via getattr
+telemetry,distance_sensor,get_telemetry_extended,dispatched dynamically via getattr
+telemetry,vtol_state,get_telemetry_extended,dispatched dynamically via getattr
+telemetry,ground_truth,get_telemetry_extended,dispatched dynamically via getattr
+telemetry,fixedwing_metrics,get_telemetry_extended,dispatched dynamically via getattr
+telemetry,actuator_control_target,get_telemetry_extended,dispatched dynamically via getattr
+telemetry,actuator_output_status,get_telemetry_extended,dispatched dynamically via getattr
+telemetry,scaled_imu,get_telemetry_extended,dispatched dynamically via getattr
+telemetry,raw_imu,get_telemetry_extended,dispatched dynamically via getattr
+calibration,calibrate_gyro,calibrate,dispatched via a method dict keyed by sensor name
+calibration,calibrate_accelerometer,calibrate,dispatched via a method dict keyed by sensor name
+calibration,calibrate_magnetometer,calibrate,dispatched via a method dict keyed by sensor name
+calibration,calibrate_level_horizon,calibrate,dispatched via a method dict keyed by sensor name
+calibration,calibrate_gimbal_accelerometer,calibrate,dispatched via a method dict keyed by sensor name
+winch,relax,payload_mechanism,dispatched via a method dict keyed by action name
+winch,retract,payload_mechanism,dispatched via a method dict keyed by action name
+winch,deliver,payload_mechanism,dispatched via a method dict keyed by action name
+winch,hold,payload_mechanism,dispatched via a method dict keyed by action name
+winch,lock,payload_mechanism,dispatched via a method dict keyed by action name
+winch,load_line,payload_mechanism,dispatched via a method dict keyed by action name
+winch,load_payload,payload_mechanism,dispatched via a method dict keyed by action name
+winch,abandon_line,payload_mechanism,dispatched via a method dict keyed by action name

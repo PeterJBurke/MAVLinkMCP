@@ -84,6 +84,33 @@ V2_TOOLS = {
     "raw_geofence_transfer",
     "raw_mission_control",
     "flight_logs",
+    # v1-plugin completion (action / telemetry / mission / param)
+    "do_orbit",
+    "vehicle_power",
+    "set_actuator",
+    "flight_altitudes",
+    "vtol_transition",
+    "get_telemetry_extended",
+    "set_telemetry_rate",
+    "rtl_after_mission",
+    "cancel_mission_transfer",
+    "param_select_component",
+    # P2 / P3
+    "system_info",
+    "send_status_text",
+    "set_mavlink_timeout",
+    "calibrate",
+    "cancel_calibration",
+    "inject_failure",
+    "manual_control",
+    "follow_me",
+    "payload_mechanism",
+    "read_transponder",
+    "play_tune",
+    "send_mocap",
+    "send_rtcm",
+    "autopilot_files",
+    "autopilot_shell",
 }
 
 EXPECTED_TOOLS = V1_TOOLS | V2_TOOLS
@@ -93,7 +120,7 @@ async def test_expected_tool_inventory_registered():
     tools = await mcp.list_tools()
     names = {t.name for t in tools}
     assert names == EXPECTED_TOOLS
-    assert len(tools) == len(EXPECTED_TOOLS) == 69
+    assert len(tools) == len(EXPECTED_TOOLS) == 94
 
 
 async def test_tools_have_descriptions():

@@ -43,6 +43,7 @@ from mavsdk import System
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PACKAGE_DIR = REPO_ROOT / "src" / "droneserver"
 FIRMWARE_NOTES_CSV = REPO_ROOT / "docs" / "firmware_notes.csv"
+COVERAGE_OVERRIDES_CSV = REPO_ROOT / "docs" / "coverage_overrides.csv"
 
 
 def load_firmware_notes() -> dict[tuple[str, str], dict]:
@@ -53,6 +54,17 @@ def load_firmware_notes() -> dict[tuple[str, str], dict]:
         return {}
     with FIRMWARE_NOTES_CSV.open() as fh:
         return {(row["plugin"], row["method"]): row for row in csv.DictReader(fh)}
+
+
+def load_coverage_overrides() -> dict[tuple[str, str], str]:
+    """Methods implemented via dynamic dispatch (getattr / method dicts) that
+    the AST call-matcher cannot trace, mapped to the tool that implements
+    them. Curated, and cross-checked against the source below (every override
+    method name must appear as an attribute in the package)."""
+    if not COVERAGE_OVERRIDES_CSV.exists():
+        return {}
+    with COVERAGE_OVERRIDES_CSV.open() as fh:
+        return {(row["plugin"], row["method"]): row["implemented_by"] for row in csv.DictReader(fh)}
 
 
 DOCS_DIR = REPO_ROOT / "docs"
@@ -173,6 +185,17 @@ def main() -> None:
     plugins = discover_plugins()
     tool_usage, infra_usage, all_tools = map_v1_usage(set(plugins))
     firmware_notes = load_firmware_notes()
+    overrides = load_coverage_overrides()
+    # Guard: every override must reference a method that actually exists on its
+    # plugin, and a tool name that is actually registered - so the CSV cannot
+    # silently over-claim coverage.
+    override_tool_names = set(overrides.values())
+    unknown_tools = override_tool_names - all_tools
+    if unknown_tools:
+        raise SystemExit(f"coverage_overrides.csv references unregistered tools: {sorted(unknown_tools)}")
+    for pname, method in overrides:
+        if pname not in plugins or not hasattr(plugins[pname], method):
+            raise SystemExit(f"coverage_overrides.csv references unknown method {pname}.{method}")
 
     DOCS_DIR.mkdir(exist_ok=True)
     rows = []
@@ -182,6 +205,9 @@ def main() -> None:
             key = (pname, m["method"])
             tools = sorted(tool_usage.get(key, ()))
             infra = sorted(infra_usage.get(key, ()))
+            override_tool = overrides.get(key)
+            if override_tool and override_tool not in tools:
+                tools = sorted([*tools, f"{override_tool} (dynamic)"])
             implemented_in = ", ".join(tools + [f"[infra: {f}]" for f in infra])
             curated = firmware_notes.get(key, {})
             if tools or infra:

@@ -37,3 +37,18 @@ def test_primitives_pass_through():
     assert to_jsonable("x") == "x"
     assert to_jsonable(None) is None
     assert to_jsonable([1, 2]) == [1, 2]
+
+
+def test_depth_guard_does_not_recurse_forever():
+    class Node:
+        def __init__(self):
+            self.child = None
+
+    root = Node()
+    node = root
+    for _ in range(20):
+        node.child = Node()
+        node = node.child
+    # Should return without hitting the recursion limit
+    result = to_jsonable(root)
+    assert isinstance(result, dict)

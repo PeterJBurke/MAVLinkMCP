@@ -1,25 +1,25 @@
 plugin,plugin_class,method,kind,signature,description,implemented_by_tools,status,priority,firmware_notes
 action,Action,arm,async call,(),Send command to arm the drone.,arm_drone,implemented,,
-action,Action,arm_force,async call,(),Send command to force-arm the drone without any checks.,,missing,,
+action,Action,arm_force,async call,(),Send command to force-arm the drone without any checks.,arm_drone,implemented,,ArduCopter 4.5.7 SITL: works - force-arms bypassing prearm checks.
 action,Action,disarm,async call,(),Send command to disarm the drone.,disarm_drone,implemented,,
-action,Action,do_orbit,async call,"(radius_m, velocity_ms, yaw_behavior, latitude_deg, longitude_deg, absolute_altitude_m)",Send command do orbit to the drone.,,missing,,
-action,Action,get_return_to_launch_altitude,async call,(),Get the return to launch minimum return altitude (in meters).,,missing,,
-action,Action,get_takeoff_altitude,async call,(),Get the takeoff altitude (in meters above ground).,,missing,,
-action,Action,goto_location,async call,"(latitude_deg, longitude_deg, absolute_altitude_m, yaw_deg)",Send command to move the vehicle to a specific global position.,"go_to_location, hold_mission_position, hold_position, move_to_relative, reposition, set_flight_mode, set_yaw",implemented,,
+action,Action,do_orbit,async call,"(radius_m, velocity_ms, yaw_behavior, latitude_deg, longitude_deg, absolute_altitude_m)",Send command do orbit to the drone.,do_orbit,implemented,,ArduCopter 4.5.7 SITL: UNSUPPORTED - ArduPilot has no MAV_CMD_DO_ORBIT handler. PX4 supports it. Use offboard velocity-body for an ArduPilot orbit.
+action,Action,get_return_to_launch_altitude,async call,(),Get the return to launch minimum return altitude (in meters).,flight_altitudes,implemented,,ArduCopter 4.5.7 SITL: PARAMETER_ERROR (PX4 param name). See set_return_to_launch_altitude.
+action,Action,get_takeoff_altitude,async call,(),Get the takeoff altitude (in meters above ground).,flight_altitudes,implemented,,ArduCopter 4.5.7 SITL: works.
+action,Action,goto_location,async call,"(latitude_deg, longitude_deg, absolute_altitude_m, yaw_deg)",Send command to move the vehicle to a specific global position.,"go_to_location, hold_mission_position, hold_position, move_to_relative, pause_mission, reposition, set_flight_mode, set_yaw",implemented,,
 action,Action,hold,async call,(),"Send command to hold position (a.k.a. ""Loiter"").",set_flight_mode,implemented,,
 action,Action,kill,async call,(),Send command to kill the drone.,kill_motors,implemented,,
 action,Action,land,async call,(),Send command to land at the current position.,"land, monitor_flight, set_flight_mode",implemented,,
-action,Action,reboot,async call,(),Send command to reboot the drone components.,,missing,,
+action,Action,reboot,async call,(),Send command to reboot the drone components.,vehicle_power,implemented,,ArduCopter 4.5.7 SITL: works - autopilot reboots and the link re-establishes.
 action,Action,return_to_launch,async call,(),Send command to return to the launch (takeoff) position and land.,"return_to_launch, set_flight_mode",implemented,,
-action,Action,set_actuator,async call,"(index, value)",Send command to set the value of an actuator.,,missing,,
-action,Action,set_current_speed,async call,(speed_m_s),Set current speed.,,missing,,
-action,Action,set_return_to_launch_altitude,async call,(relative_altitude_m),Set the return to launch minimum return altitude (in meters).,,missing,,
-action,Action,set_takeoff_altitude,async call,(altitude),Set takeoff altitude (in meters above ground).,takeoff,implemented,,
-action,Action,shutdown,async call,(),Send command to shut down the drone components.,,missing,,
+action,Action,set_actuator,async call,"(index, value)",Send command to set the value of an actuator.,set_actuator,implemented,,ArduCopter 4.5.7 SITL: reachable; effect depends on a free servo output. Not independently verified.
+action,Action,set_current_speed,async call,(speed_m_s),Set current speed.,set_max_speed,implemented,,ArduCopter 4.5.7 SITL: works in guided/auto flight; rejected (FAILED) when not in an appropriate mode.
+action,Action,set_return_to_launch_altitude,async call,(relative_altitude_m),Set the return to launch minimum return altitude (in meters).,flight_altitudes,implemented,,ArduCopter 4.5.7 SITL: PARAMETER_ERROR - MavSDK uses the PX4 RTL_RETURN_ALT param. On ArduPilot set RTL_ALT (cm) via set_parameter.
+action,Action,set_takeoff_altitude,async call,(altitude),Set takeoff altitude (in meters above ground).,"flight_altitudes, takeoff",implemented,,
+action,Action,shutdown,async call,(),Send command to shut down the drone components.,vehicle_power,implemented,,ArduCopter 4.5.7 SITL: UNSUPPORTED (observed).
 action,Action,takeoff,async call,(),Send command to take off and hover.,takeoff,implemented,,
-action,Action,terminate,async call,(),Send command to terminate the drone.,,missing,,
-action,Action,transition_to_fixedwing,async call,(),Send command to transition the drone to fixedwing.,,missing,,
-action,Action,transition_to_multicopter,async call,(),Send command to transition the drone to multicopter.,,missing,,
+action,Action,terminate,async call,(),Send command to terminate the drone.,vehicle_power,implemented,,ArduCopter 4.5.7 SITL: accepted (flight termination). Not exercised in flight for safety.
+action,Action,transition_to_fixedwing,async call,(),Send command to transition the drone to fixedwing.,vtol_transition,implemented,,"ArduCopter 4.5.7 SITL: UNSUPPORTED (multicopter, not VTOL)."
+action,Action,transition_to_multicopter,async call,(),Send command to transition the drone to multicopter.,vtol_transition,implemented,,"ArduCopter 4.5.7 SITL: UNSUPPORTED (multicopter, not VTOL)."
 action_server,ActionServer,arm_disarm,stream (async generator),(),Subscribe to ARM/DISARM commands,,candidate-N/A,,
 action_server,ActionServer,flight_mode_change,stream (async generator),(),Subscribe to DO_SET_MODE,,candidate-N/A,,
 action_server,ActionServer,get_allowable_flight_modes,async call,(),Get which modes the vehicle can transition to (Manual always allowed),,candidate-N/A,,
@@ -32,12 +32,12 @@ action_server,ActionServer,set_disarmable,async call,"(disarmable, force_disarma
 action_server,ActionServer,shutdown,stream (async generator),(),Subscribe to shutdown command,,candidate-N/A,,
 action_server,ActionServer,takeoff,stream (async generator),(),Subscribe to takeoff command,,candidate-N/A,,
 action_server,ActionServer,terminate,stream (async generator),(),Subscribe to terminate command,,candidate-N/A,,
-calibration,Calibration,calibrate_accelerometer,stream (async generator),(),Perform accelerometer calibration.,,missing,P2,
-calibration,Calibration,calibrate_gimbal_accelerometer,stream (async generator),(),Perform gimbal accelerometer calibration.,,missing,P2,
-calibration,Calibration,calibrate_gyro,stream (async generator),(),Perform gyro calibration.,,missing,P2,
-calibration,Calibration,calibrate_level_horizon,stream (async generator),(),Perform board level horizon calibration.,,missing,P2,
-calibration,Calibration,calibrate_magnetometer,stream (async generator),(),Perform magnetometer calibration.,,missing,P2,
-calibration,Calibration,cancel,async call,(),Cancel ongoing calibration process.,,missing,P2,
+calibration,Calibration,calibrate_accelerometer,stream (async generator),(),Perform accelerometer calibration.,calibrate (dynamic),implemented,P2,ArduCopter 4.5.7 SITL: requires physical vehicle rotation - not possible in SITL.
+calibration,Calibration,calibrate_gimbal_accelerometer,stream (async generator),(),Perform gimbal accelerometer calibration.,calibrate (dynamic),implemented,P2,Untestable in SITL (no physical gimbal IMU).
+calibration,Calibration,calibrate_gyro,stream (async generator),(),Perform gyro calibration.,calibrate (dynamic),implemented,P2,ArduCopter 4.5.7 SITL: does not complete (no calibration progress stream in SITL); tool times out honestly. Real vehicles/PX4 expected to work.
+calibration,Calibration,calibrate_level_horizon,stream (async generator),(),Perform board level horizon calibration.,calibrate (dynamic),implemented,P2,ArduCopter 4.5.7 SITL: BUSY/does not complete in SITL.
+calibration,Calibration,calibrate_magnetometer,stream (async generator),(),Perform magnetometer calibration.,calibrate (dynamic),implemented,P2,ArduCopter 4.5.7 SITL: requires physical vehicle rotation - not possible in SITL.
+calibration,Calibration,cancel,async call,(),Cancel ongoing calibration process.,cancel_calibration,implemented,P2,ArduCopter 4.5.7 SITL: reachable (errors when no calibration is running).
 camera,Camera,camera_list,stream (async generator),(),Subscribe to list of cameras.,list_cameras,implemented,P1,ArduCopter 4.5.7 SITL: works at protocol level - returns empty list (plain SITL has no camera backend). Untestable-in-SITL beyond discovery; needs PX4+gazebo or a camera component.
 camera,Camera,capture_info,stream (async generator),(),Subscribe to capture info updates.,camera_capture,implemented,P1,
 camera,Camera,current_settings,stream (async generator),(),Get the list of current camera settings.,,candidate-N/A,P1,Subscription stream duplicating get_current_settings; redundant for a polling MCP server. Revisit for Phase 4 MCP notifications.
@@ -113,29 +113,29 @@ camera_server,CameraServer,zoom_in_start,stream (async generator),(),Subscribe t
 camera_server,CameraServer,zoom_out_start,stream (async generator),(),Subscribe to zoom out start command,,candidate-N/A,,
 camera_server,CameraServer,zoom_range,stream (async generator),(),Subscribe to zoom range command,,candidate-N/A,,
 camera_server,CameraServer,zoom_stop,stream (async generator),(),Subscribe to zoom stop command,,candidate-N/A,,
-component_information,ComponentInformation,access_float_params,async call,(),List available float params.,,missing,,
-component_information,ComponentInformation,float_param,stream (async generator),(),Subscribe to float param changes/updates.,,missing,,
+component_information,ComponentInformation,access_float_params,async call,(),List available float params.,,candidate-N/A,,mavsdk_server returns UNIMPLEMENTED (gRPC) - the COMPONENT_INFORMATION float-param API is not implemented in MavSDK 3.0.1. Nothing to call.
+component_information,ComponentInformation,float_param,stream (async generator),(),Subscribe to float param changes/updates.,,candidate-N/A,,"Subscription paired with access_float_params, which is UNIMPLEMENTED in MavSDK 3.0.1."
 component_information_server,ComponentInformationServer,float_param,stream (async generator),(),Subscribe to float param updates.,,candidate-N/A,,
 component_information_server,ComponentInformationServer,provide_float_param,async call,(param),Provide a param of type float.,,candidate-N/A,,
 core,Core,connection_state,stream (async generator),(),Subscribe to 'connection state' updates.,[infra: connect_drone_background],implemented,,
-core,Core,set_mavlink_timeout,async call,(timeout_s),Set timeout of MAVLink transfers.,,missing,,
-failure,Failure,inject,async call,"(failure_unit, failure_type, instance)",Injects a failure.,,missing,P2,
-follow_me,FollowMe,get_config,async call,(),Get current configuration.,,missing,P2,
-follow_me,FollowMe,get_last_location,async call,(),Get the last location of the target.,,missing,P2,
-follow_me,FollowMe,is_active,async call,(),Check if FollowMe is active.,,missing,P2,
-follow_me,FollowMe,set_config,async call,(config),Apply configuration by sending it to the system.,,missing,P2,
-follow_me,FollowMe,set_target_location,async call,(location),Set location of the moving target.,,missing,P2,
-follow_me,FollowMe,start,async call,(),Start FollowMe mode.,,missing,P2,
-follow_me,FollowMe,stop,async call,(),Stop FollowMe mode.,,missing,P2,
-ftp,Ftp,are_files_identical,async call,"(local_file_path, remote_file_path)",Compares a local file to a remote file using a CRC32 checksum.,,missing,P2,
-ftp,Ftp,create_directory,async call,(remote_dir),Creates a remote directory.,,missing,P2,
-ftp,Ftp,download,stream (async generator),"(remote_file_path, local_dir, use_burst)",Downloads a file to local directory.,,missing,P2,
-ftp,Ftp,list_directory,async call,(remote_dir),Lists items from a remote directory.,,missing,P2,
-ftp,Ftp,remove_directory,async call,(remote_dir),Removes a remote directory.,,missing,P2,
-ftp,Ftp,remove_file,async call,(remote_file_path),Removes a remote file.,,missing,P2,
-ftp,Ftp,rename,async call,"(remote_from_path, remote_to_path)",Renames a remote file or remote directory.,,missing,P2,
-ftp,Ftp,set_target_compid,async call,(compid),Set target component ID. By default it is the autopilot.,,missing,P2,
-ftp,Ftp,upload,stream (async generator),"(local_file_path, remote_dir)",Uploads local file to remote directory.,,missing,P2,
+core,Core,set_mavlink_timeout,async call,(timeout_s),Set timeout of MAVLink transfers.,set_mavlink_timeout,implemented,,ArduCopter 4.5.7 SITL: works (local MavSDK setting).
+failure,Failure,inject,async call,"(failure_unit, failure_type, instance)",Injects a failure.,inject_failure,implemented,P2,ArduCopter 4.5.7 SITL: UNSUPPORTED - ArduPilot ignores MAVSDK failure injection. Inject via SIM_* params instead (e.g. SIM_GPS_DISABLE). PX4 supports it with SYS_FAILURE_EN=1.
+follow_me,FollowMe,get_config,async call,(),Get current configuration.,follow_me,implemented,P2,ArduCopter 4.5.7 SITL: works (returns defaults). Wired via follow_me action=get_config.
+follow_me,FollowMe,get_last_location,async call,(),Get the last location of the target.,follow_me,implemented,P2,ArduCopter 4.5.7 SITL: works (NaN when never set).
+follow_me,FollowMe,is_active,async call,(),Check if FollowMe is active.,follow_me,implemented,P2,ArduCopter 4.5.7 SITL: works (reports False).
+follow_me,FollowMe,set_config,async call,(config),Apply configuration by sending it to the system.,follow_me,implemented,P2,"ArduCopter 4.5.7 SITL: SET_CONFIG_FAILED - follow-me is a PX4 flight mode, unsupported on ArduCopter."
+follow_me,FollowMe,set_target_location,async call,(location),Set location of the moving target.,follow_me,implemented,P2,ArduCopter 4.5.7 SITL: NOT_ACTIVE unless follow-me is running (PX4-only).
+follow_me,FollowMe,start,async call,(),Start FollowMe mode.,follow_me,implemented,P2,ArduCopter 4.5.7 SITL: UNKNOWN error - PX4-only flight mode.
+follow_me,FollowMe,stop,async call,(),Stop FollowMe mode.,follow_me,implemented,P2,ArduCopter 4.5.7 SITL: reachable.
+ftp,Ftp,are_files_identical,async call,"(local_file_path, remote_file_path)",Compares a local file to a remote file using a CRC32 checksum.,autopilot_files,implemented,P2,ArduCopter 4.5.7 SITL: MAVLink-FTP unsupported. Wired via autopilot_files action=compare; PX4 supported.
+ftp,Ftp,create_directory,async call,(remote_dir),Creates a remote directory.,autopilot_files,implemented,P2,ArduCopter 4.5.7 SITL: PROTOCOL_ERROR (see list_directory).
+ftp,Ftp,download,stream (async generator),"(remote_file_path, local_dir, use_burst)",Downloads a file to local directory.,autopilot_files,implemented,P2,ArduCopter 4.5.7 SITL: PROTOCOL_ERROR. PX4: untested (SITL pending).
+ftp,Ftp,list_directory,async call,(remote_dir),Lists items from a remote directory.,autopilot_files,implemented,P2,ArduCopter 4.5.7 SITL: PROTOCOL_ERROR - ArduPilot MAVLink-FTP support is limited/absent in SITL. PX4 supported.
+ftp,Ftp,remove_directory,async call,(remote_dir),Removes a remote directory.,autopilot_files,implemented,P2,ArduCopter 4.5.7 SITL: PROTOCOL_ERROR.
+ftp,Ftp,remove_file,async call,(remote_file_path),Removes a remote file.,autopilot_files,implemented,P2,ArduCopter 4.5.7 SITL: PROTOCOL_ERROR (untested beyond protocol failure).
+ftp,Ftp,rename,async call,"(remote_from_path, remote_to_path)",Renames a remote file or remote directory.,autopilot_files,implemented,P2,ArduCopter 4.5.7 SITL: PROTOCOL_ERROR.
+ftp,Ftp,set_target_compid,async call,(compid),Set target component ID. By default it is the autopilot.,autopilot_files,implemented,P2,"ArduCopter 4.5.7 SITL: works (local setting, no vehicle round-trip)."
+ftp,Ftp,upload,stream (async generator),"(local_file_path, remote_dir)",Uploads local file to remote directory.,autopilot_files,implemented,P2,ArduCopter 4.5.7 SITL: MAVLink-FTP unsupported (PROTOCOL_ERROR). Wired via autopilot_files action=upload; PX4 supported.
 geofence,Geofence,clear_geofence,async call,(),Clear all geofences saved on the vehicle.,clear_geofence,implemented,P0,ArduCopter 4.5.7 SITL: works. PX4: untested (SITL pending).
 geofence,Geofence,upload_geofence,async call,(geofence_data),Upload geofences.,upload_geofence,implemented,P0,ArduCopter 4.5.7 SITL: works - polygon and circle (inclusion) uploads accepted via fence mission protocol; enforcement additionally requires FENCE_ENABLE=1. PX4: untested (SITL pending).
 gimbal,Gimbal,attitude,stream (async generator),(),Subscribe to attitude updates.,,candidate-N/A,P1,Subscription stream duplicating get_attitude; redundant for a polling MCP server. Revisit for Phase 4 MCP notifications.
@@ -148,34 +148,34 @@ gimbal,Gimbal,set_angles,async call,"(gimbal_id, roll_deg, pitch_deg, yaw_deg, g
 gimbal,Gimbal,set_angular_rates,async call,"(gimbal_id, roll_rate_deg_s, pitch_rate_deg_s, yaw_rate_deg_s, gimbal_mode, send_mode)",Set gimbal angular rates.,gimbal_point,implemented,P1,ArduCopter 4.5.7 SITL (simulated mount): accepted; rate tracking not quantitatively verified.
 gimbal,Gimbal,set_roi_location,async call,"(gimbal_id, latitude_deg, longitude_deg, altitude_m)",Set gimbal region of interest (ROI).,gimbal_point,implemented,P1,ArduCopter 4.5.7 SITL (simulated mount): accepted; pointing behavior not quantitatively verified.
 gimbal,Gimbal,take_control,async call,"(gimbal_id, control_mode)",Take control.,gimbal_control,implemented,P1,ArduCopter 4.5.7 SITL (simulated mount): works. Without a configured mount: GimbalError ERROR.
-gripper,Gripper,grab,async call,(instance),Gripper grab cargo.,,missing,,
-gripper,Gripper,release,async call,(instance),Gripper release cargo.,,missing,,
-info,Info,flight_information,stream (async generator),(),Subscribe to 'flight information' updates.,,missing,,
-info,Info,get_flight_information,async call,(),Get flight information of the system.,,missing,,
-info,Info,get_identification,async call,(),Get the identification of the system.,,missing,,
-info,Info,get_product,async call,(),Get product information of the system.,,missing,,
-info,Info,get_speed_factor,async call,(),Get the speed factor of a simulation (with lockstep a simulation can run faster or slower than realtime).,,missing,,
-info,Info,get_version,async call,(),Get the version information of the system.,,missing,,
+gripper,Gripper,grab,async call,(instance),Gripper grab cargo.,payload_mechanism,implemented,,ArduCopter 4.5.7 SITL: TIMEOUT with GRIP_ENABLE=1 - the SITL has no simulated gripper backend to acknowledge. Reachable; effect untestable in SITL.
+gripper,Gripper,release,async call,(instance),Gripper release cargo.,payload_mechanism,implemented,,ArduCopter 4.5.7 SITL: TIMEOUT (no simulated gripper backend). Untestable in SITL.
+info,Info,flight_information,stream (async generator),(),Subscribe to 'flight information' updates.,,candidate-N/A,,Subscription stream duplicating get_flight_information (which is itself INFORMATION_NOT_RECEIVED_YET on ArduPilot). Redundant for a polling MCP server.
+info,Info,get_flight_information,async call,(),Get flight information of the system.,system_info,implemented,,ArduCopter 4.5.7 SITL: INFORMATION_NOT_RECEIVED_YET - ArduPilot does not send FLIGHT_INFORMATION. PX4 supported.
+info,Info,get_identification,async call,(),Get the identification of the system.,system_info,implemented,,ArduCopter 4.5.7 SITL: works (hardware UID).
+info,Info,get_product,async call,(),Get product information of the system.,system_info,implemented,,ArduCopter 4.5.7 SITL: works (vendor/product undefined in SITL).
+info,Info,get_speed_factor,async call,(),Get the speed factor of a simulation (with lockstep a simulation can run faster or slower than realtime).,system_info,implemented,,ArduCopter 4.5.7 SITL: INFORMATION_NOT_RECEIVED_YET (PX4 feature).
+info,Info,get_version,async call,(),Get the version information of the system.,system_info,implemented,,ArduCopter 4.5.7 SITL: works.
 log_files,LogFiles,download_log_file,stream (async generator),"(entry, path)",Download log file.,flight_logs,implemented,P1,"ArduCopter 4.5.7 SITL: untestable via MavSDK (get_entries fails, see above). PX4: untested (SITL pending)."
 log_files,LogFiles,erase_all_log_files,async call,(),Erase all log files.,flight_logs,implemented,P1,ArduCopter 4.5.7 SITL: call accepted; erase effect not independently verified.
 log_files,LogFiles,get_entries,async call,(),Get List of log files.,flight_logs,implemented,P1,"ArduCopter 4.5.7 SITL: MavSDK reports NO_LOGFILES although the autopilot answers LOG_REQUEST_LIST correctly (verified via pymavlink: num_logs=1, 1-based ids). MavSDK log_files expects PX4 0-based ids -> effectively PX4-only until fixed upstream."
-manual_control,ManualControl,set_manual_control_input,async call,"(x, y, z, r)",Set manual control input,,missing,P2,
-manual_control,ManualControl,start_altitude_control,async call,(),Start altitude control,,missing,P2,
-manual_control,ManualControl,start_position_control,async call,(),Start position control using e.g. joystick input.,,missing,P2,
-mission,Mission,cancel_mission_download,async call,(),Cancel an ongoing mission download.,,missing,,
-mission,Mission,cancel_mission_upload,async call,(),Cancel an ongoing mission upload.,,missing,,
+manual_control,ManualControl,set_manual_control_input,async call,"(x, y, z, r)",Set manual control input,manual_control,implemented,P2,ArduCopter 4.5.7 SITL: accepted in flight.
+manual_control,ManualControl,start_altitude_control,async call,(),Start altitude control,manual_control,implemented,P2,ArduCopter 4.5.7 SITL: works in flight.
+manual_control,ManualControl,start_position_control,async call,(),Start position control using e.g. joystick input.,manual_control,implemented,P2,ArduCopter 4.5.7 SITL: works in flight.
+mission,Mission,cancel_mission_download,async call,(),Cancel an ongoing mission download.,cancel_mission_transfer,implemented,,
+mission,Mission,cancel_mission_upload,async call,(),Cancel an ongoing mission upload.,cancel_mission_transfer,implemented,,
 mission,Mission,clear_mission,async call,(),Clear the mission saved on the vehicle.,clear_mission,implemented,,
-mission,Mission,download_mission,async call,(),Download a list of mission items from the system (asynchronous).,,missing,,
-mission,Mission,download_mission_with_progress,stream (async generator),(),Download a list of mission items from the system (asynchronous) and report progress.,,missing,,
-mission,Mission,get_return_to_launch_after_mission,async call,(),Get whether to trigger Return-to-Launch (RTL) after mission is complete.,,missing,,
+mission,Mission,download_mission,async call,(),Download a list of mission items from the system (asynchronous).,,candidate-N/A,,Typed mission download returns UNSUPPORTED on ArduPilot (observed). The firmware-agnostic raw path (mission_raw.download_mission) is used by the download_mission tool instead.
+mission,Mission,download_mission_with_progress,stream (async generator),(),Download a list of mission items from the system (asynchronous) and report progress.,,candidate-N/A,,Streaming variant of the typed download; superseded by the raw download path (see download_mission).
+mission,Mission,get_return_to_launch_after_mission,async call,(),Get whether to trigger Return-to-Launch (RTL) after mission is complete.,rtl_after_mission,implemented,,
 mission,Mission,is_mission_finished,async call,(),Check if the mission has been finished.,is_mission_finished,implemented,,
-mission,Mission,mission_progress,stream (async generator),(),Subscribe to mission progress updates.,"download_mission, hold_mission_position, is_mission_finished, print_mission_progress, resume_mission",implemented,,
-mission,Mission,pause_mission,async call,(),Pause the mission.,,missing,,
+mission,Mission,mission_progress,stream (async generator),(),Subscribe to mission progress updates.,"hold_mission_position, is_mission_finished, pause_mission, print_mission_progress, resume_mission",implemented,,
+mission,Mission,pause_mission,async call,(),Pause the mission.,pause_mission,implemented,,
 mission,Mission,set_current_mission_item,async call,(index),Sets the mission item index to go to.,set_current_waypoint,implemented,,
-mission,Mission,set_return_to_launch_after_mission,async call,(enable),Set whether to trigger Return-to-Launch (RTL) after the mission is complete.,initiate_mission,implemented,,
+mission,Mission,set_return_to_launch_after_mission,async call,(enable),Set whether to trigger Return-to-Launch (RTL) after the mission is complete.,"initiate_mission, rtl_after_mission",implemented,,
 mission,Mission,start_mission,async call,(),Start the mission.,"initiate_mission, resume_mission",implemented,,
-mission,Mission,upload_mission,async call,(mission_plan),Upload a list of mission items to the system.,,missing,,
-mission,Mission,upload_mission_with_progress,stream (async generator),(mission_plan),Upload a list of mission items to the system and report upload progress.,,missing,,
+mission,Mission,upload_mission,async call,(mission_plan),Upload a list of mission items to the system.,,candidate-N/A,,Typed mission upload; the tools use the ArduPilot-compatible raw path (mission_raw.upload_mission) via initiate_mission/upload_mission.
+mission,Mission,upload_mission_with_progress,stream (async generator),(mission_plan),Upload a list of mission items to the system and report upload progress.,,candidate-N/A,,Streaming variant of the typed upload; superseded by the raw upload path (see upload_mission).
 mission_raw,MissionRaw,cancel_mission_download,async call,(),Cancel an ongoing mission download.,raw_mission_control,implemented,P1,ArduCopter 4.5.7 SITL: errors when no transfer is in progress (expected); mid-transfer cancel not separately verified.
 mission_raw,MissionRaw,cancel_mission_upload,async call,(),Cancel an ongoing mission upload.,raw_mission_control,implemented,P1,ArduCopter 4.5.7 SITL: errors when no transfer is in progress (expected); mid-transfer cancel not separately verified.
 mission_raw,MissionRaw,clear_mission,async call,(),Clear the mission saved on the vehicle.,raw_mission_control,implemented,P1,ArduCopter 4.5.7 SITL: works.
@@ -196,9 +196,9 @@ mission_raw_server,MissionRawServer,clear_all,stream (async generator),(),Subscr
 mission_raw_server,MissionRawServer,current_item_changed,stream (async generator),(),Subscribe to when a new current item is set,,candidate-N/A,,
 mission_raw_server,MissionRawServer,incoming_mission,stream (async generator),(),Subscribe to when a new mission is uploaded (asynchronous).,,candidate-N/A,,
 mission_raw_server,MissionRawServer,set_current_item_complete,async call,(),Set Current item as completed,,candidate-N/A,,
-mocap,Mocap,set_attitude_position_mocap,async call,(attitude_position_mocap),Send motion capture attitude and position.,,missing,,
-mocap,Mocap,set_odometry,async call,(odometry),Send odometry information with an external interface.,,missing,,
-mocap,Mocap,set_vision_position_estimate,async call,(vision_position_estimate),Send Global position/attitude estimate from a vision source.,,missing,,
+mocap,Mocap,set_attitude_position_mocap,async call,(attitude_position_mocap),Send motion capture attitude and position.,send_mocap,implemented,,ArduCopter 4.5.7 SITL: accepted (send-only).
+mocap,Mocap,set_odometry,async call,(odometry),Send odometry information with an external interface.,send_mocap,implemented,,ArduCopter 4.5.7 SITL: accepted (send-only external odometry via send_mocap kind=odometry).
+mocap,Mocap,set_vision_position_estimate,async call,(vision_position_estimate),Send Global position/attitude estimate from a vision source.,send_mocap,implemented,,ArduCopter 4.5.7 SITL: accepted (send-only; effect on EKF not independently verified).
 offboard,Offboard,is_active,async call,(),Check if offboard control is active.,offboard_control,implemented,P0,ArduCopter 4.5.7 SITL: works - tracks start/stop correctly. PX4: untested (SITL pending).
 offboard,Offboard,set_acceleration_ned,async call,(acceleration_ned),Set the acceleration in NED coordinates.,offboard_set_acceleration_ned,implemented,P0,ArduCopter 4.5.7 SITL: accepted (ArduCopter GUIDED supports acceleration targets since 4.3); effect not quantitatively verified. PX4: untested (SITL pending).
 offboard,Offboard,set_actuator_control,async call,(actuator_control),Set direct actuator control values to groups #0 and #1.,offboard_set_actuator_control,implemented,P0,ArduCopter 4.5.7 SITL: RPC accepted but inert - ArduPilot has no SET_ACTUATOR_CONTROL_TARGET handler; treat as PX4-only. PX4: untested (SITL pending).
@@ -213,12 +213,12 @@ offboard,Offboard,set_velocity_ned,async call,(velocity_ned_yaw),Set the velocit
 offboard,Offboard,start,async call,(),Start offboard control.,offboard_control,implemented,P0,ArduCopter 4.5.7 SITL: works - MavSDK maps offboard to GUIDED mode. PX4: untested (SITL pending).
 offboard,Offboard,stop,async call,(),Stop offboard control.,offboard_control,implemented,P0,ArduCopter 4.5.7 SITL: works - vehicle switches to Loiter (reported as HOLD). PX4: untested (SITL pending).
 param,Param,get_all_params,async call,(),Get all parameters.,list_parameters,implemented,,
-param,Param,get_param_custom,async call,(name),Get a custom parameter.,,missing,,
+param,Param,get_param_custom,async call,(name),Get a custom parameter.,get_parameter,implemented,,ArduCopter 4.5.7 SITL: TIMEOUT - PARAM_EXT (custom/string params) is a PX4 feature; ArduPilot does not implement it.
 param,Param,get_param_float,async call,(name),Get a float parameter.,"get_parameter, set_parameter",implemented,,
 param,Param,get_param_int,async call,(name),Get an int parameter.,"get_parameter, set_parameter",implemented,,
-param,Param,select_component,async call,"(component_id, protocol_version)",Select component ID of parameter component to talk to and param protocol version.,,missing,,
-param,Param,set_param_custom,async call,"(name, value)",Set a custom parameter.,,missing,,
-param,Param,set_param_float,async call,"(name, value)",Set a float parameter.,set_parameter,implemented,,
+param,Param,select_component,async call,"(component_id, protocol_version)",Select component ID of parameter component to talk to and param protocol version.,param_select_component,implemented,,ArduCopter 4.5.7 SITL: reachable; used to target non-autopilot components' params.
+param,Param,set_param_custom,async call,"(name, value)",Set a custom parameter.,set_parameter,implemented,,ArduCopter 4.5.7 SITL: TIMEOUT (PX4-only PARAM_EXT).
+param,Param,set_param_float,async call,"(name, value)",Set a float parameter.,"set_max_speed, set_parameter",implemented,,
 param,Param,set_param_int,async call,"(name, value)",Set an int parameter.,set_parameter,implemented,,
 param_server,ParamServer,changed_param_custom,stream (async generator),(),Subscribe to changed custom param.,,candidate-N/A,,
 param_server,ParamServer,changed_param_float,stream (async generator),(),Subscribe to changed float param.,,candidate-N/A,,
@@ -231,24 +231,24 @@ param_server,ParamServer,retrieve_param_custom,async call,(name),Retrieve a cust
 param_server,ParamServer,retrieve_param_float,async call,(name),Retrieve a float parameter.,,candidate-N/A,,
 param_server,ParamServer,retrieve_param_int,async call,(name),Retrieve an int parameter.,,candidate-N/A,,
 param_server,ParamServer,set_protocol,async call,(extended_protocol),Set param protocol.,,candidate-N/A,,
-rtk,Rtk,send_rtcm_data,async call,(rtcm_data),Send RTCM data.,,missing,,
-server_utility,ServerUtility,send_status_text,async call,"(type, text)",Sends a statustext.,,missing,,
-shell,Shell,receive,stream (async generator),(),Receive feedback from a sent command line.,,missing,P2,
-shell,Shell,send,async call,(command),Send a command line.,,missing,P2,
-telemetry,Telemetry,actuator_control_target,stream (async generator),(),Subscribe to 'actuator control target' updates.,,missing,,
-telemetry,Telemetry,actuator_output_status,stream (async generator),(),Subscribe to 'actuator output status' updates.,,missing,,
-telemetry,Telemetry,altitude,stream (async generator),(),Subscribe to 'Altitude' updates.,,missing,,
+rtk,Rtk,send_rtcm_data,async call,(rtcm_data),Send RTCM data.,send_rtcm,implemented,,ArduCopter 4.5.7 SITL: accepted (send-only RTCM injection; no RTK base in SITL to verify a fix).
+server_utility,ServerUtility,send_status_text,async call,"(type, text)",Sends a statustext.,send_status_text,implemented,,ArduCopter 4.5.7 SITL: works - STATUSTEXT emitted onto the MAVLink network.
+shell,Shell,receive,stream (async generator),(),Receive feedback from a sent command line.,autopilot_shell,implemented,P2,ArduCopter 4.5.7 SITL: TIMEOUT - ArduPilot exposes no MAVLink shell. PX4 supported.
+shell,Shell,send,async call,(command),Send a command line.,autopilot_shell,implemented,P2,"ArduCopter 4.5.7 SITL: send accepted, but ArduPilot has no MAVLink shell so nothing acts on it. PX4 NSH shell supported."
+telemetry,Telemetry,actuator_control_target,stream (async generator),(),Subscribe to 'actuator control target' updates.,get_telemetry_extended (dynamic),implemented,,
+telemetry,Telemetry,actuator_output_status,stream (async generator),(),Subscribe to 'actuator output status' updates.,get_telemetry_extended (dynamic),implemented,,
+telemetry,Telemetry,altitude,stream (async generator),(),Subscribe to 'Altitude' updates.,get_telemetry_extended (dynamic),implemented,,ArduCopter 4.5.7 SITL: not published (times out).
 telemetry,Telemetry,armed,stream (async generator),(),Subscribe to armed updates.,get_armed,implemented,,
-telemetry,Telemetry,attitude_angular_velocity_body,stream (async generator),(),Subscribe to 'attitude' updates (angular velocity),,missing,,
+telemetry,Telemetry,attitude_angular_velocity_body,stream (async generator),(),Subscribe to 'attitude' updates (angular velocity),get_telemetry_extended (dynamic),implemented,,
 telemetry,Telemetry,attitude_euler,stream (async generator),(),Subscribe to 'attitude' updates (Euler).,get_attitude,implemented,,
-telemetry,Telemetry,attitude_quaternion,stream (async generator),(),Subscribe to 'attitude' updates (quaternion).,,missing,,
+telemetry,Telemetry,attitude_quaternion,stream (async generator),(),Subscribe to 'attitude' updates (quaternion).,get_telemetry_extended (dynamic),implemented,,ArduCopter 4.5.7 SITL: not published (times out); attitude_euler works.
 telemetry,Telemetry,battery,stream (async generator),(),Subscribe to 'battery' updates.,get_battery,implemented,,
-telemetry,Telemetry,distance_sensor,stream (async generator),(),Subscribe to 'Distance Sensor' updates.,,missing,,
-telemetry,Telemetry,fixedwing_metrics,stream (async generator),(),Subscribe to 'fixedwing metrics' updates.,,missing,,
+telemetry,Telemetry,distance_sensor,stream (async generator),(),Subscribe to 'Distance Sensor' updates.,get_telemetry_extended (dynamic),implemented,,ArduCopter 4.5.7 SITL: works when a rangefinder is configured (RNGFND1_TYPE); baked into the test image.
+telemetry,Telemetry,fixedwing_metrics,stream (async generator),(),Subscribe to 'fixedwing metrics' updates.,get_telemetry_extended (dynamic),implemented,,
 telemetry,Telemetry,flight_mode,stream (async generator),(),Subscribe to 'flight mode' updates.,"get_flight_mode, is_mission_finished, resume_mission, set_flight_mode",implemented,,
-telemetry,Telemetry,get_gps_global_origin,async call,(),Get the GPS location of where the estimator has been initialized.,,missing,,
+telemetry,Telemetry,get_gps_global_origin,async call,(),Get the GPS location of where the estimator has been initialized.,get_telemetry_extended,implemented,,ArduCopter 4.5.7 SITL: works.
 telemetry,Telemetry,gps_info,stream (async generator),(),Subscribe to 'GPS info' updates.,get_gps_info,implemented,,
-telemetry,Telemetry,ground_truth,stream (async generator),(),Subscribe to 'ground truth' updates.,,missing,,
+telemetry,Telemetry,ground_truth,stream (async generator),(),Subscribe to 'ground truth' updates.,get_telemetry_extended (dynamic),implemented,,
 telemetry,Telemetry,heading,stream (async generator),(),Subscribe to 'Heading' updates.,"get_heading, [infra: _make_brake]",implemented,,
 telemetry,Telemetry,health,stream (async generator),(),Subscribe to 'health' updates.,"get_health, [infra: connect_drone_background]",implemented,,
 telemetry,Telemetry,health_all_ok,stream (async generator),(),Subscribe to 'HealthAllOk' updates.,get_health_all_ok,implemented,,
@@ -256,41 +256,41 @@ telemetry,Telemetry,home,stream (async generator),(),Subscribe to 'home position
 telemetry,Telemetry,imu,stream (async generator),(),Subscribe to 'IMU' updates (in SI units in NED body frame).,get_imu,implemented,,
 telemetry,Telemetry,in_air,stream (async generator),(),Subscribe to in-air updates.,"get_in_air, monitor_flight",implemented,,
 telemetry,Telemetry,landed_state,stream (async generator),(),Subscribe to landed state updates,"get_landed_state, monitor_flight",implemented,,
-telemetry,Telemetry,odometry,stream (async generator),(),Subscribe to 'odometry' updates.,get_odometry,implemented,,
-telemetry,Telemetry,position,stream (async generator),(),Subscribe to 'position' updates.,"check_arrival, get_position, go_to_location, hold_mission_position, hold_position, land, monitor_flight, move_to_relative, reposition, set_flight_mode, set_yaw, takeoff",implemented,,
-telemetry,Telemetry,position_velocity_ned,stream (async generator),(),Subscribe to 'position velocity' updates.,,missing,,
-telemetry,Telemetry,raw_gps,stream (async generator),(),Subscribe to 'Raw GPS' updates.,,missing,,
-telemetry,Telemetry,raw_imu,stream (async generator),(),Subscribe to 'Raw IMU' updates.,,missing,,
+telemetry,Telemetry,odometry,stream (async generator),(),Subscribe to 'odometry' updates.,get_odometry,implemented,,ArduCopter 4.5.7 SITL: not published (get_odometry times out); ArduPilot does not emit ODOMETRY by default. position/velocity/attitude have dedicated working tools.
+telemetry,Telemetry,position,stream (async generator),(),Subscribe to 'position' updates.,"check_arrival, get_position, go_to_location, hold_mission_position, hold_position, land, monitor_flight, move_to_relative, pause_mission, reposition, set_flight_mode, set_yaw, takeoff",implemented,,
+telemetry,Telemetry,position_velocity_ned,stream (async generator),(),Subscribe to 'position velocity' updates.,get_telemetry_extended (dynamic),implemented,,
+telemetry,Telemetry,raw_gps,stream (async generator),(),Subscribe to 'Raw GPS' updates.,get_telemetry_extended (dynamic),implemented,,ArduCopter 4.5.7 SITL: works.
+telemetry,Telemetry,raw_imu,stream (async generator),(),Subscribe to 'Raw IMU' updates.,get_telemetry_extended (dynamic),implemented,,
 telemetry,Telemetry,rc_status,stream (async generator),(),Subscribe to 'RC status' updates.,get_rc_status,implemented,,
-telemetry,Telemetry,scaled_imu,stream (async generator),(),Subscribe to 'Scaled IMU' updates.,,missing,,
-telemetry,Telemetry,scaled_pressure,stream (async generator),(),Subscribe to 'Scaled Pressure' updates.,,missing,,
-telemetry,Telemetry,set_rate_actuator_control_target,async call,(rate_hz),Set rate to 'actuator control target' updates.,,missing,,
-telemetry,Telemetry,set_rate_actuator_output_status,async call,(rate_hz),Set rate to 'actuator output status' updates.,,missing,,
-telemetry,Telemetry,set_rate_altitude,async call,(rate_hz),Set rate to 'Altitude' updates.,,missing,,
-telemetry,Telemetry,set_rate_attitude_euler,async call,(rate_hz),Set rate to 'attitude quaternion' updates.,,missing,,
-telemetry,Telemetry,set_rate_attitude_quaternion,async call,(rate_hz),Set rate to 'attitude euler angle' updates.,,missing,,
-telemetry,Telemetry,set_rate_battery,async call,(rate_hz),Set rate to 'battery' updates.,,missing,,
-telemetry,Telemetry,set_rate_distance_sensor,async call,(rate_hz),Set rate to 'Distance Sensor' updates.,,missing,,
-telemetry,Telemetry,set_rate_fixedwing_metrics,async call,(rate_hz),Set rate to 'fixedwing metrics' updates.,,missing,,
-telemetry,Telemetry,set_rate_gps_info,async call,(rate_hz),Set rate to 'GPS info' updates.,,missing,,
-telemetry,Telemetry,set_rate_ground_truth,async call,(rate_hz),Set rate to 'ground truth' updates.,,missing,,
-telemetry,Telemetry,set_rate_home,async call,(rate_hz),Set rate to 'home position' updates.,,missing,,
-telemetry,Telemetry,set_rate_imu,async call,(rate_hz),Set rate to 'IMU' updates.,get_imu,implemented,,
-telemetry,Telemetry,set_rate_in_air,async call,(rate_hz),Set rate to in-air updates.,,missing,,
-telemetry,Telemetry,set_rate_landed_state,async call,(rate_hz),Set rate to landed state updates,,missing,,
-telemetry,Telemetry,set_rate_odometry,async call,(rate_hz),Set rate to 'odometry' updates.,,missing,,
-telemetry,Telemetry,set_rate_position,async call,(rate_hz),Set rate to 'position' updates.,,missing,,
-telemetry,Telemetry,set_rate_position_velocity_ned,async call,(rate_hz),Set rate to 'position velocity' updates.,,missing,,
-telemetry,Telemetry,set_rate_raw_imu,async call,(rate_hz),Set rate to 'Raw IMU' updates.,,missing,,
-telemetry,Telemetry,set_rate_rc_status,async call,(rate_hz),Set rate to 'RC status' updates.,,missing,,
-telemetry,Telemetry,set_rate_scaled_imu,async call,(rate_hz),Set rate to 'Scaled IMU' updates.,,missing,,
-telemetry,Telemetry,set_rate_unix_epoch_time,async call,(rate_hz),Set rate to 'unix epoch time' updates.,,missing,,
-telemetry,Telemetry,set_rate_velocity_ned,async call,(rate_hz),Set rate of camera attitude updates.,,missing,,
-telemetry,Telemetry,set_rate_vtol_state,async call,(rate_hz),Set rate to VTOL state updates,,missing,,
+telemetry,Telemetry,scaled_imu,stream (async generator),(),Subscribe to 'Scaled IMU' updates.,get_telemetry_extended (dynamic),implemented,,ArduCopter 4.5.7 SITL: not published (times out); raw_imu works.
+telemetry,Telemetry,scaled_pressure,stream (async generator),(),Subscribe to 'Scaled Pressure' updates.,get_telemetry_extended (dynamic),implemented,,ArduCopter 4.5.7 SITL: works.
+telemetry,Telemetry,set_rate_actuator_control_target,async call,(rate_hz),Set rate to 'actuator control target' updates.,set_telemetry_rate,implemented,,
+telemetry,Telemetry,set_rate_actuator_output_status,async call,(rate_hz),Set rate to 'actuator output status' updates.,set_telemetry_rate,implemented,,
+telemetry,Telemetry,set_rate_altitude,async call,(rate_hz),Set rate to 'Altitude' updates.,set_telemetry_rate,implemented,,
+telemetry,Telemetry,set_rate_attitude_euler,async call,(rate_hz),Set rate to 'attitude quaternion' updates.,set_telemetry_rate,implemented,,
+telemetry,Telemetry,set_rate_attitude_quaternion,async call,(rate_hz),Set rate to 'attitude euler angle' updates.,set_telemetry_rate,implemented,,
+telemetry,Telemetry,set_rate_battery,async call,(rate_hz),Set rate to 'battery' updates.,set_telemetry_rate,implemented,,
+telemetry,Telemetry,set_rate_distance_sensor,async call,(rate_hz),Set rate to 'Distance Sensor' updates.,set_telemetry_rate,implemented,,
+telemetry,Telemetry,set_rate_fixedwing_metrics,async call,(rate_hz),Set rate to 'fixedwing metrics' updates.,set_telemetry_rate,implemented,,
+telemetry,Telemetry,set_rate_gps_info,async call,(rate_hz),Set rate to 'GPS info' updates.,set_telemetry_rate,implemented,,
+telemetry,Telemetry,set_rate_ground_truth,async call,(rate_hz),Set rate to 'ground truth' updates.,set_telemetry_rate,implemented,,
+telemetry,Telemetry,set_rate_home,async call,(rate_hz),Set rate to 'home position' updates.,set_telemetry_rate,implemented,,
+telemetry,Telemetry,set_rate_imu,async call,(rate_hz),Set rate to 'IMU' updates.,"get_imu, set_telemetry_rate",implemented,,
+telemetry,Telemetry,set_rate_in_air,async call,(rate_hz),Set rate to in-air updates.,set_telemetry_rate,implemented,,
+telemetry,Telemetry,set_rate_landed_state,async call,(rate_hz),Set rate to landed state updates,set_telemetry_rate,implemented,,
+telemetry,Telemetry,set_rate_odometry,async call,(rate_hz),Set rate to 'odometry' updates.,set_telemetry_rate,implemented,,ArduCopter 4.5.7 SITL: COMMAND_DENIED (ArduPilot does not stream odometry).
+telemetry,Telemetry,set_rate_position,async call,(rate_hz),Set rate to 'position' updates.,set_telemetry_rate,implemented,,
+telemetry,Telemetry,set_rate_position_velocity_ned,async call,(rate_hz),Set rate to 'position velocity' updates.,set_telemetry_rate,implemented,,
+telemetry,Telemetry,set_rate_raw_imu,async call,(rate_hz),Set rate to 'Raw IMU' updates.,set_telemetry_rate,implemented,,
+telemetry,Telemetry,set_rate_rc_status,async call,(rate_hz),Set rate to 'RC status' updates.,set_telemetry_rate,implemented,,
+telemetry,Telemetry,set_rate_scaled_imu,async call,(rate_hz),Set rate to 'Scaled IMU' updates.,set_telemetry_rate,implemented,,
+telemetry,Telemetry,set_rate_unix_epoch_time,async call,(rate_hz),Set rate to 'unix epoch time' updates.,set_telemetry_rate,implemented,,
+telemetry,Telemetry,set_rate_velocity_ned,async call,(rate_hz),Set rate of camera attitude updates.,set_telemetry_rate,implemented,,
+telemetry,Telemetry,set_rate_vtol_state,async call,(rate_hz),Set rate to VTOL state updates,set_telemetry_rate,implemented,,
 telemetry,Telemetry,status_text,stream (async generator),(),Subscribe to 'status text' updates.,print_status_text,implemented,,
-telemetry,Telemetry,unix_epoch_time,stream (async generator),(),Subscribe to 'unix epoch time' updates.,,missing,,
+telemetry,Telemetry,unix_epoch_time,stream (async generator),(),Subscribe to 'unix epoch time' updates.,get_telemetry_extended (dynamic),implemented,,
 telemetry,Telemetry,velocity_ned,stream (async generator),(),Subscribe to 'ground speed' updates (NED).,"get_speed, go_to_location, monitor_flight",implemented,,
-telemetry,Telemetry,vtol_state,stream (async generator),(),subscribe to vtol state Updates,,missing,,
+telemetry,Telemetry,vtol_state,stream (async generator),(),subscribe to vtol state Updates,get_telemetry_extended (dynamic),implemented,,
 telemetry_server,TelemetryServer,publish_battery,async call,(battery),Publish to 'battery' updates.,,candidate-N/A,,
 telemetry_server,TelemetryServer,publish_distance_sensor,async call,(distance_sensor),"Publish to ""distance sensor"" updates.",,candidate-N/A,,
 telemetry_server,TelemetryServer,publish_extended_sys_state,async call,"(vtol_state, landed_state)",Publish 'extended sys state' updates.,,candidate-N/A,,
@@ -315,17 +315,17 @@ tracking_server,TrackingServer,set_tracking_rectangle_status,async call,(tracked
 tracking_server,TrackingServer,tracking_off_command,stream (async generator),(),Subscribe to incoming tracking off command.,,candidate-N/A,,
 tracking_server,TrackingServer,tracking_point_command,stream (async generator),(),Subscribe to incoming tracking point command.,,candidate-N/A,,
 tracking_server,TrackingServer,tracking_rectangle_command,stream (async generator),(),Subscribe to incoming tracking rectangle command.,,candidate-N/A,,
-transponder,Transponder,set_rate_transponder,async call,(rate_hz),Set rate to 'transponder' updates.,,missing,P2,
-transponder,Transponder,transponder,stream (async generator),(),Subscribe to 'transponder' updates.,,missing,P2,
-tune,Tune,play_tune,async call,(tune_description),Send a tune to be played by the system.,,missing,P2,
-winch,Winch,abandon_line,async call,(instance),Spool out the entire length of the line.,,missing,,
-winch,Winch,deliver,async call,(instance),"Sequence of drop, slow down, touch down, reel up, lock.",,missing,,
-winch,Winch,hold,async call,(instance),Engage motor and hold current position.,,missing,,
-winch,Winch,load_line,async call,(instance),Load the reel with line.,,missing,,
-winch,Winch,load_payload,async call,(instance),Spools out just enough to present the hook to the user to load the payload.,,missing,,
-winch,Winch,lock,async call,(instance),Perform the locking sequence to relieve motor while in the fully retracted position.,,missing,,
-winch,Winch,rate_control,async call,"(instance, rate_m_s)",Wind or unwind line at specified rate.,,missing,,
-winch,Winch,relative_length_control,async call,"(instance, length_m, rate_m_s)","Wind or unwind specified length of line, optionally using specified rate.",,missing,,
-winch,Winch,relax,async call,(instance),Allow motor to freewheel.,,missing,,
-winch,Winch,retract,async call,(instance),Return the reel to the fully retracted position.,,missing,,
-winch,Winch,status,stream (async generator),(),Subscribe to 'winch status' updates.,,missing,,
+transponder,Transponder,set_rate_transponder,async call,(rate_hz),Set rate to 'transponder' updates.,read_transponder,implemented,P2,ArduCopter 4.5.7 SITL: works.
+transponder,Transponder,transponder,stream (async generator),(),Subscribe to 'transponder' updates.,read_transponder,implemented,P2,"ArduCopter 4.5.7 SITL: works with simulated ADS-B traffic (ADSB_TYPE=1, SIM_ADSB_COUNT) - returns nearby aircraft ICAO/position/velocity."
+tune,Tune,play_tune,async call,(tune_description),Send a tune to be played by the system.,play_tune,implemented,P2,ArduCopter 4.5.7 SITL: accepted.
+winch,Winch,abandon_line,async call,(instance),Spool out the entire length of the line.,payload_mechanism (dynamic),implemented,,ArduCopter 4.5.7 SITL: untestable (no winch backend).
+winch,Winch,deliver,async call,(instance),"Sequence of drop, slow down, touch down, reel up, lock.",payload_mechanism (dynamic),implemented,,ArduCopter 4.5.7 SITL: untestable (no winch backend).
+winch,Winch,hold,async call,(instance),Engage motor and hold current position.,payload_mechanism (dynamic),implemented,,ArduCopter 4.5.7 SITL: TIMEOUT (no simulated winch backend).
+winch,Winch,load_line,async call,(instance),Load the reel with line.,payload_mechanism (dynamic),implemented,,ArduCopter 4.5.7 SITL: untestable (no winch backend).
+winch,Winch,load_payload,async call,(instance),Spools out just enough to present the hook to the user to load the payload.,payload_mechanism (dynamic),implemented,,ArduCopter 4.5.7 SITL: untestable (no winch backend). Wired via payload_mechanism action=load_payload.
+winch,Winch,lock,async call,(instance),Perform the locking sequence to relieve motor while in the fully retracted position.,payload_mechanism (dynamic),implemented,,ArduCopter 4.5.7 SITL: untestable (no winch backend).
+winch,Winch,rate_control,async call,"(instance, rate_m_s)",Wind or unwind line at specified rate.,payload_mechanism,implemented,,ArduCopter 4.5.7 SITL: untestable (no winch backend).
+winch,Winch,relative_length_control,async call,"(instance, length_m, rate_m_s)","Wind or unwind specified length of line, optionally using specified rate.",payload_mechanism,implemented,,ArduCopter 4.5.7 SITL: untestable (no winch backend).
+winch,Winch,relax,async call,(instance),Allow motor to freewheel.,payload_mechanism (dynamic),implemented,,ArduCopter 4.5.7 SITL: TIMEOUT (no simulated winch actuator ack). winch.status telemetry does stream.
+winch,Winch,retract,async call,(instance),Return the reel to the fully retracted position.,payload_mechanism (dynamic),implemented,,ArduCopter 4.5.7 SITL: untestable (no winch backend).
+winch,Winch,status,stream (async generator),(),Subscribe to 'winch status' updates.,payload_mechanism,implemented,,"ArduCopter 4.5.7 SITL: winch STATUS telemetry streams when WINCH_TYPE is set, but WINCH_TYPE also makes the vehicle report the winch unhealthy and blocks arming - so the test SITL leaves winch disabled and this is documented untestable-in-suite. Reachable code path."

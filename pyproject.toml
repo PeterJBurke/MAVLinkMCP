@@ -87,15 +87,8 @@ select = [
     "W",  # pycodestyle warnings
 ]
 
-[tool.ruff.lint.per-file-ignores]
-# v1 tool bodies are kept byte-identical from the Phase 6 refactor. Bare
-# excepts (E722) also catch asyncio.CancelledError, so "fixing" them to
-# `except Exception:` would change cancellation behavior - deferred to the
-# per-tool Phase 2 rewrite. New v2 tool modules get no exemption.
-"src/droneserver/tools/action.py" = ["E722", "F841"]
-"src/droneserver/tools/telemetry.py" = ["E722", "F841"]
-"src/droneserver/tools/mission.py" = ["E722", "F841"]
-"src/droneserver/tools/param.py" = ["E722", "F841"]
+# (No per-file lint ignores: the v1 tool modules were fully rewritten to v2
+# standards in Phase 2 - bare excepts and unused vars removed.)
 
 [tool.mypy]
 # Permissive baseline; per-module strictness will be ratcheted up module by
@@ -106,18 +99,6 @@ ignore_missing_imports = true
 check_untyped_defs = false
 warn_unused_configs = true
 
-[[tool.mypy.overrides]]
-# v1 tool bodies (kept byte-identical in the Phase 6 refactor) have latent
-# issues mypy correctly flags: `async for` handlers that can fall off the end
-# without returning, and int variables reassigned to float. Fixing these
-# changes behavior/signatures, so it is deferred to the Phase 2 tool rewrite.
-# (20 findings as of the refactor: 18x missing-return in `async for` handlers,
-# 2x int-reassigned-to-float. Revisit per tool during Phase 2.)
-# Scoped to the four v1 modules only - new v2 tool modules are fully checked.
-module = [
-    "droneserver.tools.action",
-    "droneserver.tools.telemetry",
-    "droneserver.tools.mission",
-    "droneserver.tools.param",
-]
-ignore_errors = true
+# (No module ignore_errors overrides: the Phase 2 rewrite removed the
+# fall-off-the-end telemetry handlers and int/float reassignments the v1 code
+# carried, so the whole package type-checks cleanly.)

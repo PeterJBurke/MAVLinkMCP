@@ -192,3 +192,85 @@ Notable finding: ArduPilot answers the MAVLink log-download protocol
 correctly (verified with pymavlink), but MavSDK 3.0.1 expects PX4's 0-based
 log ids and reports NO_LOGFILES — effectively PX4-only until fixed upstream
 (recorded in `firmware_notes.csv`).
+
+## v1-plugin completion (v2)
+
+The four v1 modules were rewritten to v2 standards (bounded stream reads, no
+fall-off-the-end handlers, no bare `except:`) and completed to full plugin
+coverage. Semantic changes worth noting:
+
+- **action**: `pause_mission` is no longer a deprecated error stub - it now
+  has a real, safe implementation (see mission below). `set_max_speed` used to
+  call a non-existent MavSDK method (`set_maximum_speed`) and always errored;
+  it now uses `set_current_speed` (DO_CHANGE_SPEED) with a WPNAV_SPEED
+  parameter fallback. New tools: `do_orbit` (PX4; ArduPilot UNSUPPORTED),
+  `vehicle_power` (reboot/shutdown/terminate - CRITICAL, confirm-gated),
+  `set_actuator`, `flight_altitudes` (takeoff/RTL altitude get/set),
+  `vtol_transition`. `arm_drone` gained a `force` flag (arm_force).
+- **telemetry**: every getter now reads its stream with a 10 s bound and
+  returns an honest "not published" error instead of hanging or returning null
+  (the v1 fall-off-the-end bug). Two new tools cover the long tail:
+  `get_telemetry_extended(topic)` (16 niche topics via one generic schema) and
+  `set_telemetry_rate(topic, rate_hz)` (24 `set_rate_*` methods).
+- **mission**: `pause_mission(mode)` replaces the v1 stub -
+  `mode="guided_hold"` (default) holds position in GUIDED (the altitude-safe
+  fix for the documented LOITER crash), `mode="native_hold"` exposes the
+  firmware pause with an explicit RC-throttle warning. `download_mission` no
+  longer hangs when the mission was uploaded via the raw path (v1 blocked on
+  the mission-plugin progress stream). New tools: `rtl_after_mission` (get/set)
+  and `cancel_mission_transfer`. The typed mission upload/download variants are
+  documented-N/A (the raw path is the firmware-agnostic one already wired).
+- **param**: `custom` parameter type (PARAM_EXT string params; PX4-only) added
+  to get/set; new `param_select_component` for multi-component parameter
+  access.
+
+## P2 / P3 groups (v2)
+
+Grouped tightly to hold the sprawl line (R3): 13 tools cover 8 plugins plus
+info/core/server_utility.
+
+| Tool | Plugin(s) / methods | ArduPilot SITL |
+|---|---|---|
+| `system_info(topic)` | info: version/identification/product/flight_information/speed_factor | version/id/product work; flight_information/speed_factor are PX4-only |
+| `send_status_text` | server_utility.send_status_text | works |
+| `set_mavlink_timeout` | core.set_mavlink_timeout | works |
+| `calibrate(sensor)` / `cancel_calibration` | calibration: 5 calibrations + cancel | reachable; calibrations need physical motion / don't complete in SITL |
+| `inject_failure(unit, type)` | failure.inject | **UNSUPPORTED on ArduPilot** - use SIM_* params; PX4 supported. Enables the paper's safety experiments |
+| `manual_control(action)` | manual_control: input/position/altitude | works in flight |
+| `follow_me(action)` | follow_me: 7 methods | PX4-only flight mode; get_config/is_active work, start/set_config fail on ArduPilot |
+| `payload_mechanism(device, action)` | gripper (2) + winch (11) | winch.status streams; gripper/winch commands need a physical backend (time out in SITL) |
+| `read_transponder` | transponder: set_rate + read | **works** - decodes simulated ADS-B traffic |
+| `play_tune(notes, tempo)` | tune.play_tune | accepted |
+| `send_mocap(kind)` | mocap: 3 methods | accepted (send-only) |
+| `send_rtcm(rtcm_base64)` | rtk.send_rtcm_data | accepted (send-only) |
+| `autopilot_files(action)` | ftp: 9 methods | **PROTOCOL_ERROR on ArduPilot** (limited MAVLink-FTP); PX4 supported |
+| `autopilot_shell(command, confirm)` | shell: send/receive | **⚠️ TIER-CRITICAL** (confirm-gated). ArduPilot has no MAVLink shell (no output); PX4 NSH supported |
+
+**`autopilot_shell` is security-sensitive**: it runs arbitrary commands on the
+autopilot console. It requires `confirm=true` today and is flagged here as a
+Phase 3 tier-critical tool that must additionally require auth + a
+confirmation-token round-trip once the safety layer lands. `vehicle_power`
+(terminate/reboot) and `inject_failure` are the other confirm-gated /
+safety-relevant tools.
+
+## Documented-N/A (client-side)
+
+15 client-side methods are implemented-or-N/A-with-reason rather than wrapped
+in a tool (all recorded in `firmware_notes.csv` with a `status_override`):
+
+- **Subscription streams that duplicate one-shot getters** (redundant for a
+  polling MCP server; revisited for Phase 4 MCP notifications): camera
+  `current_settings`/`mode`/`possible_setting_options`/`storage`/
+  `video_stream_info`, gimbal `attitude`/`control_status`, mission_raw
+  `mission_changed`, info `flight_information`.
+- **Typed mission upload/download + their `*_with_progress` streaming
+  variants** (4): superseded by the firmware-agnostic `mission_raw` path the
+  tools already use; the typed variants return UNSUPPORTED on ArduPilot.
+- **component_information `access_float_params` + `float_param`** (2):
+  `UNIMPLEMENTED` in mavsdk_server 3.0.1 - there is nothing to call.
+
+Methods reached through dynamic dispatch (getattr / method dicts) that the
+coverage generator's AST matcher cannot trace are declared in
+`docs/coverage_overrides.csv` (telemetry extended topics, calibration, winch),
+and the generator validates every entry against the real plugin classes so the
+override file cannot silently over-claim coverage.
