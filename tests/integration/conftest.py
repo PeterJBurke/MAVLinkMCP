@@ -249,3 +249,146 @@ def drone_tools(droneserver_url):
             last = repr(e)
         time.sleep(2)
     pytest.fail(f"droneserver never reached the SITL; last probe result: {last}")
+
+
+# --------------------------------------------------------------------------
+# Safety-layer fixtures (Phase 3). A second server instance is started with
+# the safety layer fully configured: API keys, a tight geofence around the
+# SITL home, low limits so the rules are easy to trip deliberately.
+# --------------------------------------------------------------------------
+
+CONTROL_KEY = "test-control-key"
+TELEMETRY_KEY = "test-telemetry-key"
+#: Extra control-scope identities so test groups get independent rate-limit
+#: budgets (limits are per client by design).
+GROUP_KEYS = {name: f"test-control-key-{name}" for name in ("tiers", "inject", "ratelimit")}
+
+#: ~220 m square around the SITL home - big enough to fly in, small enough
+#: that a deliberate violation is unambiguous.
+_D = 0.002
+SAFE_POLYGON = ";".join(
+    f"{SITL_HOME['lat'] + dlat},{SITL_HOME['lon'] + dlon}"
+    for dlat, dlon in ((-_D, -_D), (-_D, _D), (_D, _D), (_D, -_D))
+)
+
+SAFETY_ENV = {
+    "SAFETY_ENABLED": "1",
+    "SAFETY_API_KEYS": ",".join(
+        [f"tester:{CONTROL_KEY}:control", f"readonly:{TELEMETRY_KEY}:telemetry"]
+        + [f"{name}:{key}:control" for name, key in GROUP_KEYS.items()]
+    ),
+    "SAFETY_UNAUTHENTICATED_SCOPE": "telemetry",
+    "SAFETY_MAX_ALTITUDE_M": "60",
+    "SAFETY_MAX_SPEED_M_S": "15",
+    "SAFETY_GEOFENCE_POLYGON": SAFE_POLYGON,
+    "SAFETY_GEOFENCE_MAX_ALTITUDE_M": "60",
+    "SAFETY_GEOFENCE_MAX_RADIUS_M": "400",
+    "SAFETY_CONFIRMATION_TTL_S": "60",
+    "SAFETY_RATE_LIMIT_CALLS": "40",
+    "SAFETY_RATE_LIMIT_WINDOW_S": "60",
+    "SAFETY_RATE_LIMIT_CRITICAL_CALLS": "20",
+    "SAFETY_TAKEOFF_SETTLE_S": "3",
+}
+
+
+@pytest.fixture(scope="module")
+def safe_server(sitl, tmp_path_factory):
+    """droneserver subprocess with the safety layer configured; yields
+    (base_sse_url, audit_log_path)."""
+    port = _free_port()
+    workdir = tmp_path_factory.mktemp("droneserver-safe")
+    audit_path = workdir / "audit.jsonl"
+    env = dict(
+        os.environ,
+        MCP_HOST="127.0.0.1",
+        MCP_PORT=str(port),
+        MAVLINK_ADDRESS=sitl["address"],
+        MAVLINK_PORT=str(sitl["port"]),
+        MAVLINK_PROTOCOL="tcp",
+        FLIGHT_LOG_DIR=str(workdir / "flight_logs"),
+        SAFETY_AUDIT_LOG_PATH=str(audit_path),
+        **SAFETY_ENV,
+    )
+    log_path = workdir / "server.log"
+    with open(log_path, "w") as log_file:
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "droneserver.server"],
+            env=env,
+            cwd=REPO_ROOT,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+        )
+        try:
+            deadline = time.monotonic() + 30
+            while True:
+                if proc.poll() is not None:
+                    pytest.fail(f"safe droneserver exited early; log: {log_path.read_text()[-2000:]}")
+                try:
+                    with socket.create_connection(("127.0.0.1", port), timeout=1):
+                        break
+                except OSError:
+                    if time.monotonic() > deadline:
+                        pytest.fail(f"safe droneserver did not open port {port}")
+                    time.sleep(0.5)
+            yield f"http://127.0.0.1:{port}/sse", audit_path
+        finally:
+            proc.terminate()
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+
+
+def _client_ready(client, label):
+    deadline = time.monotonic() + 180
+    last = None
+    while time.monotonic() < deadline:
+        try:
+            last = client.call("get_armed", timeout=40)
+            if isinstance(last, dict) and last.get("status") == "success":
+                return client
+        except Exception as e:
+            last = repr(e)
+        time.sleep(2)
+    pytest.fail(f"{label} never reached the SITL; last probe: {last}")
+
+
+@pytest.fixture(scope="module")
+def control_tools(safe_server):
+    """Authenticated control-scope client against the safety-enabled server."""
+    from tests.integration.mcp_client import MCPToolClient
+
+    url, _ = safe_server
+    return _client_ready(MCPToolClient(url, headers={"X-API-Key": CONTROL_KEY}), "control client")
+
+
+@pytest.fixture(scope="module")
+def telemetry_tools(safe_server):
+    """Telemetry-scope client (read-only) against the safety-enabled server."""
+    from tests.integration.mcp_client import MCPToolClient
+
+    url, _ = safe_server
+    return _client_ready(MCPToolClient(url, headers={"X-API-Key": TELEMETRY_KEY}), "telemetry client")
+
+
+@pytest.fixture(scope="module")
+def group_client(safe_server):
+    """Factory: an independent control-scope client per test group, so one
+    group's rate-limit probing cannot starve another's."""
+    from tests.integration.mcp_client import MCPToolClient
+
+    url, _ = safe_server
+    cache: dict[str, MCPToolClient] = {}
+
+    def make(name: str) -> MCPToolClient:
+        if name not in cache:
+            client = MCPToolClient(url, headers={"X-API-Key": GROUP_KEYS[name]})
+            cache[name] = _client_ready(client, f"{name} client")
+        return cache[name]
+
+    return make
+
+
+@pytest.fixture(scope="module")
+def audit_path(safe_server):
+    return safe_server[1]

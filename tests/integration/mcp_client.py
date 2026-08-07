@@ -23,8 +23,9 @@ class ToolCallError(RuntimeError):
 
 
 class MCPToolClient:
-    def __init__(self, url: str):
+    def __init__(self, url: str, headers: dict | None = None):
         self.url = url
+        self.headers = headers or {}
 
     def list_tools(self) -> list[str]:
         """Tool names as advertised over the wire."""
@@ -39,14 +40,14 @@ class MCPToolClient:
         return asyncio.run(self._call(tool, arguments, timeout))
 
     async def _list_tools(self) -> list[str]:
-        async with sse_client(self.url) as (read, write):
+        async with sse_client(self.url, headers=self.headers) as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 result = await session.list_tools()
                 return [t.name for t in result.tools]
 
     async def _call(self, tool: str, arguments: dict, timeout: float) -> dict:
-        async with sse_client(self.url) as (read, write):
+        async with sse_client(self.url, headers=self.headers) as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 result = await session.call_tool(
