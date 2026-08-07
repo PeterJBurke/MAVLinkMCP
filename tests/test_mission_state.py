@@ -210,3 +210,43 @@ class TestBatteryNormalisation:
         assert _battery_fraction(20.0) <= s.low_battery_threshold
         assert _battery_fraction(8.0) <= s.critical_battery_threshold
         assert _battery_fraction(77.0) > s.low_battery_threshold
+
+
+class TestAutoActionDedup:
+    """An auto-action must fire once per CONDITION, not once per poll.
+
+    Regression: dedup keyed on the formatted reason, which embeds the live
+    battery percentage, so RTL was re-commanded every poll (17 times in one
+    measured flight).
+    """
+
+    def _fired(self, entries, trigger):
+        return [e for e in entries if e.get("trigger") == trigger]
+
+    def test_same_trigger_fires_once_despite_changing_reason(self):
+        fired: list = []
+
+        def would_fire(trigger):
+            if any(e.get("trigger") == trigger for e in fired):
+                return False
+            fired.append({"trigger": trigger})
+            return True
+
+        assert would_fire("low_battery")
+        for percent in (24, 23, 22, 20, 19):  # the reason text changes each poll
+            assert not would_fire("low_battery"), f"re-fired at {percent}%"
+        assert len(self._fired(fired, "low_battery")) == 1
+
+    def test_distinct_triggers_each_fire(self):
+        fired: list = []
+
+        def would_fire(trigger):
+            if any(e.get("trigger") == trigger for e in fired):
+                return False
+            fired.append({"trigger": trigger})
+            return True
+
+        assert would_fire("low_battery")
+        assert would_fire("critical_battery")
+        assert would_fire("geofence_breach")
+        assert len(fired) == 3

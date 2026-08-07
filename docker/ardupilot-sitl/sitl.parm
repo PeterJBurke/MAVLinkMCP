@@ -31,6 +31,13 @@ RNGFND1_MAX_CM 4000
 RNGFND1_ORIENT 25
 ADSB_TYPE 1
 SIM_ADSB_COUNT 5
+# Simulated battery sized for a survey-length flight. The SITL default drains
+# to the low-battery threshold in ~7 minutes, which cut the >10-minute
+# demonstration mission short (the server's own low-battery auto-action
+# correctly RTL'd it). A real survey aircraft carries a battery sized for its
+# mission; this mirrors that rather than disabling any failsafe.
+BATT_CAPACITY 30000
+SIM_BATT_CAP_AH 30
 SR1_EXT_STAT 2
 SR1_POSITION 4
 SR1_EXTRA1 4

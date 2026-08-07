@@ -351,7 +351,7 @@ class MissionRunner:
                     and s.link_loss_action != "none"
                     and (time.monotonic() - link_lost_at) > s.link_loss_grace_s
                 ):
-                    await self._auto_action(s.link_loss_action, drone, s, "link loss")
+                    await self._auto_action(s.link_loss_action, drone, s, "link loss", "link_loss")
                     link_lost_at = None
                 continue
             link_lost_at = None
@@ -381,9 +381,17 @@ class MissionRunner:
                         self.emit("battery", f"battery at {fraction * 100:.0f}%", s, percent=round(fraction * 100, 1))
                 if s.auto_actions_enabled:
                     if fraction <= s.critical_battery_threshold:
-                        await self._auto_action("land", drone, s, f"critical battery {fraction * 100:.0f}%")
+                        await self._auto_action(
+                            "land", drone, s, f"critical battery {fraction * 100:.0f}%", "critical_battery"
+                        )
                     elif fraction <= s.low_battery_threshold and s.low_battery_action != "none":
-                        await self._auto_action(s.low_battery_action, drone, s, f"low battery {fraction * 100:.0f}%")
+                        await self._auto_action(
+                            s.low_battery_action,
+                            drone,
+                            s,
+                            f"low battery {fraction * 100:.0f}%",
+                            "low_battery",
+                        )
 
             # ---- geofence breach ----
             if s.auto_actions_enabled and s.geofence_breach_action != "none" and record.last_position:
@@ -395,7 +403,13 @@ class MissionRunner:
                     record.last_position.get("relative_altitude_m"),
                 )
                 if violation is not None:
-                    await self._auto_action(s.geofence_breach_action, drone, s, f"geofence breach: {violation.detail}")
+                    await self._auto_action(
+                        s.geofence_breach_action,
+                        drone,
+                        s,
+                        f"geofence breach: {violation.detail}",
+                        "geofence_breach",
+                    )
 
             # ---- completion ----
             altitude = (record.last_position or {}).get("relative_altitude_m") or 0.0
@@ -453,11 +467,19 @@ class MissionRunner:
 
     # ------------------------------------------------------------- actions
 
-    async def _auto_action(self, action: str, drone, s: MissionSettings, reason: str) -> None:
+    async def _auto_action(self, action: str, drone, s: MissionSettings, reason: str, trigger: str) -> None:
+        """Fire an auto-action once per TRIGGER.
+
+        The dedup key is the trigger id ("low_battery"), never the formatted
+        reason: the reason embeds the live battery percentage, so keying on it
+        re-fired RTL on every poll (measured: 17 RTL commands in one flight).
+        """
         assert self.record is not None
-        if any(a.get("action") == action and a.get("reason") == reason for a in self.record.auto_actions_fired):
-            return  # already fired for this exact reason
-        self.record.auto_actions_fired.append({"action": action, "reason": reason, "ts": time.time()})
+        if any(a.get("trigger") == trigger for a in self.record.auto_actions_fired):
+            return  # already fired for this condition
+        self.record.auto_actions_fired.append(
+            {"action": action, "trigger": trigger, "reason": reason, "ts": time.time()}
+        )
         self.emit("auto_action", f"auto-action '{action}' fired: {reason}", s, action=action, reason=reason)
         await self._do_action(action, drone, s, reason)
 
