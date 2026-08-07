@@ -201,6 +201,12 @@ def droneserver_url(sitl, tmp_path_factory):
         MAVLINK_PORT=str(sitl["port"]),
         MAVLINK_PROTOCOL="tcp",
         FLIGHT_LOG_DIR=str(workdir / "flight_logs"),
+        # The functional suites run many critical-tool round-trips back to
+        # back, which would legitimately trip the default critical budget
+        # (6/60s). The rate limiter itself is covered by unit tests and by the
+        # adversarial suite (case G1); throttling the functional tests would
+        # only make them flaky. Everything else keeps its production default.
+        SAFETY_RATE_LIMIT_CRITICAL_CALLS="100",
     )
     log_path = workdir / "server.log"
     with open(log_path, "w") as log_file:

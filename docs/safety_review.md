@@ -164,9 +164,23 @@ Per client, sliding window: 60 calls/60 s normal, 6 calls/60 s critical
 ## 6. AuthN / AuthZ
 
 Keys come from `SAFETY_API_KEYS` as `client_id:key:scope,…` with scope in
-`telemetry` < `control` < `admin`. Unauthenticated clients get
-`SAFETY_UNAUTHENTICATED_SCOPE` (default `telemetry` = read-only; `reject`
-denies everything). Keys are compared with `hmac.compare_digest`.
+`telemetry` < `control` < `admin`. Keys are compared with `hmac.compare_digest`.
+
+> **⚠ Reviewer decision — the unconfigured default.** When `SAFETY_API_KEYS`
+> is **empty**, no client can possibly authenticate, so enforcing a scope
+> would make a default install refuse every command. We therefore grant
+> `control` to everyone in that case, log a prominent one-time warning, and
+> still record `authenticated: false` on every audit line. The reasoning: a
+> guardrail that bricks the server out of the box is one operators disable
+> wholesale, which is strictly worse. The deployment posture assumes the
+> tailnet is the network boundary (zero public ports) and keys are defence in
+> depth. **Set `SAFETY_API_KEYS` before any real-hardware flight.** To lock
+> the server down without keys, set `SAFETY_UNAUTHENTICATED_SCOPE=reject`
+> (an explicit setting always wins over this fallback).
+>
+> Once any key is configured, enforcement is strict again: an unknown or
+> absent key gets `SAFETY_UNAUTHENTICATED_SCOPE` (default `telemetry`,
+> read-only).
 
 **Keys are never logged**: audit records store `client_id` and a 12-char SHA-256
 fingerprint only, and `SafetySettings.__repr__` is overridden so a traceback
@@ -264,6 +278,9 @@ uv run pytest -m sitl tests/integration/test_safety_flight_sitl.py
 7. **No signed audit log.** Tamper-evidence (hash chaining) is not implemented.
 8. **Client identity comes from a transport header**; on stdio there is none,
    so the unauthenticated policy applies.
-9. `emergency_stop` is exempt from tokens *and* rate limiting by design — a
+9. **Unconfigured auth grants `control`** (§6) — deliberate, warned, and
+   overridable, but it means an install that never sets `SAFETY_API_KEYS` has
+   no authentication at all.
+10. `emergency_stop` is exempt from tokens *and* rate limiting by design — a
    hostile client could spam it. It is the least destructive action available
    and always audited, which we judge the better trade.

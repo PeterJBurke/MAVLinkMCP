@@ -103,6 +103,24 @@ class TestAuth:
         assert not telemetry.can(Tier.CRITICAL)
         assert control.can(Tier.CRITICAL) and control.can(Tier.EMERGENCY)
 
+    def test_no_keys_configured_grants_control_with_warning(self):
+        """A default install must be usable; auth binds once it is configured."""
+        s = SafetySettings(_env_file=None, api_keys="")
+        client = authenticate(None, s)
+        assert client.scope == "control" and client.can(Tier.CRITICAL)
+        assert not client.authenticated  # still recorded as unauthenticated
+        assert client.client_id == "unconfigured"
+
+    def test_explicit_policy_honored_even_without_keys(self):
+        s = SafetySettings(_env_file=None, api_keys="", unauthenticated_scope="reject")
+        client = authenticate(None, s)
+        assert client.scope == "none" and not client.can(Tier.READ_ONLY)
+
+    def test_configured_keys_restore_enforcement(self):
+        s = SafetySettings(_env_file=None, api_keys="alice:KEY1:control")
+        assert not authenticate(None, s).can(Tier.NORMAL)  # anonymous -> telemetry
+        assert authenticate("KEY1", s).can(Tier.CRITICAL)
+
     def test_key_never_in_repr(self):
         s = SafetySettings(_env_file=None, api_keys="alice:SUPERSECRET:control")
         assert "SUPERSECRET" not in repr(s)

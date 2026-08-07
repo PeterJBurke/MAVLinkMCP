@@ -20,6 +20,7 @@ import hashlib
 import hmac
 from dataclasses import dataclass
 
+from droneserver.logging_setup import logger
 from droneserver.safety.config import SafetySettings
 from droneserver.safety.tiers import Tier
 
@@ -71,17 +72,45 @@ def parse_api_keys(spec: str) -> dict[str, tuple[str, str]]:
     return registry
 
 
+_warned_unconfigured = False
+
+
+def _warn_unconfigured_once() -> None:
+    global _warned_unconfigured
+    if _warned_unconfigured:
+        return
+    _warned_unconfigured = True
+    logger.warning(
+        "SAFETY: no API keys configured (SAFETY_API_KEYS is empty) - every client is "
+        "granted 'control' scope. Authentication is NOT protecting this server. "
+        "Configure SAFETY_API_KEYS before any real-hardware use, or set "
+        "SAFETY_UNAUTHENTICATED_SCOPE explicitly to choose a policy."
+    )
+
+
 def authenticate(presented_key: str | None, s: SafetySettings) -> Client:
     """Resolve a presented key to a client.
 
-    Unauthenticated behavior follows ``unauthenticated_scope``:
-    ``telemetry`` (default, read-only), ``control`` (open server - only for
-    an isolated bench), or ``reject`` (scope "none", every tier denied).
+    **When no API keys are configured at all**, no client can possibly
+    authenticate, so enforcing a scope would make the server inoperable out of
+    the box - a guardrail people would respond to by disabling the whole layer.
+    In that case every client gets ``control`` scope and a loud warning is
+    logged (once), and audit records still show ``authenticated: false``. Set
+    ``SAFETY_UNAUTHENTICATED_SCOPE`` explicitly to override this, including to
+    ``reject``.
+
+    Once keys ARE configured, an unknown/absent key falls back to
+    ``unauthenticated_scope``: ``telemetry`` (default, read-only),
+    ``control``, or ``reject`` (scope "none", every tier denied).
     """
     if not s.auth_enabled:
         return Client("unauthenticated", "admin", authenticated=False)
 
     registry = parse_api_keys(s.api_keys)
+    if not registry and "unauthenticated_scope" not in s.model_fields_set:
+        _warn_unconfigured_once()
+        return Client("unconfigured", "control", authenticated=False)
+
     if presented_key:
         # constant-time compare against each configured key
         for key, (client_id, scope) in registry.items():

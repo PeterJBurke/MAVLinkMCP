@@ -137,8 +137,12 @@ def test_follow_me_get_config(drone_tools):
 
 
 def test_inject_failure_unsupported_on_ardupilot(drone_tools):
-    result = drone_tools.call("inject_failure", unit="gps", failure_type="off")
-    assert result["status"] == "failed"
+    """inject_failure is tier CRITICAL - confirm first, then ArduPilot rejects
+    the injection itself (UNSUPPORTED) and the tool points at the SIM_* route."""
+    issued = drone_tools.call("inject_failure", unit="gps", failure_type="off")
+    assert issued["status"] == "confirmation_required", issued
+    result = drone_tools.call("inject_failure", unit="gps", failure_type="off", confirm_token=issued["confirm_token"])
+    assert result["status"] == "failed", result
     assert "SIM_" in result.get("hint", "")  # points at the ArduPilot workaround
 
 
@@ -148,22 +152,40 @@ def test_ftp_protocol_error_on_ardupilot(drone_tools):
 
 
 def test_shell_no_output_on_ardupilot(drone_tools):
-    result = drone_tools.call("autopilot_shell", command="help", confirm=True, timeout=20)
-    # send is accepted; ArduPilot has no shell so no output comes back
-    assert result["status"] == "success"
+    """autopilot_shell is tier CRITICAL, so the safety layer requires a
+    confirmation round-trip before the tool ever runs (see docs/safety_review.md).
+    After confirming: ArduPilot has no MAVLink shell, so no output comes back."""
+    issued = drone_tools.call("autopilot_shell", command="help", confirm=True, timeout=20)
+    assert issued["status"] == "confirmation_required", issued
+    result = drone_tools.call(
+        "autopilot_shell",
+        command="help",
+        confirm=True,
+        confirm_token=issued["confirm_token"],
+        timeout=30,
+    )
+    assert result["status"] == "success", result
     assert result.get("output") == []
 
 
 def test_shell_refused_without_confirm(drone_tools):
-    result = drone_tools.call("autopilot_shell", command="help", confirm=False)
-    assert result["status"] == "failed"
+    """Two independent gates for the shell: the safety layer's confirmation
+    token (tier CRITICAL) and the tool's own confirm flag."""
+    issued = drone_tools.call("autopilot_shell", command="help", confirm=False)
+    assert issued["status"] == "confirmation_required", issued
+    result = drone_tools.call("autopilot_shell", command="help", confirm=False, confirm_token=issued["confirm_token"])
+    assert result["status"] == "failed", result
     assert "confirm" in result["error"]
 
 
 # ---------------------------------------------------------------- action v2
 
 
-def test_do_orbit_unsupported_on_ardupilot(drone_tools):
+def test_do_orbit_blocked_on_the_ground(drone_tools):
+    """With the safety layer active, do_orbit on the ground is stopped by the
+    navigation precondition before it reaches the autopilot. The firmware
+    finding itself (ArduPilot has no DO_ORBIT handler -> UNSUPPORTED) is
+    recorded in docs/firmware_notes.csv from a direct in-flight probe."""
     result = drone_tools.call(
         "do_orbit",
         radius_m=20.0,
@@ -172,7 +194,8 @@ def test_do_orbit_unsupported_on_ardupilot(drone_tools):
         longitude_deg=149.165,
         absolute_altitude_m=604.0,
     )
-    assert result["status"] == "failed"  # ArduPilot has no DO_ORBIT
+    assert result["status"] == "rejected", result
+    assert result["rule"] == "precondition.navigation_requires_airborne"
 
 
 def test_flight_altitudes_takeoff_get(drone_tools):
@@ -182,7 +205,13 @@ def test_flight_altitudes_takeoff_get(drone_tools):
 
 
 def test_vehicle_power_requires_confirm(drone_tools):
-    result = drone_tools.call("vehicle_power", action="reboot", confirm=False)
+    """Two independent gates: the safety layer's confirmation token (tier
+    CRITICAL) and the tool's own confirm flag."""
+    issued = drone_tools.call("vehicle_power", action="reboot", confirm=False)
+    assert issued["status"] == "confirmation_required", issued
+    assert "reboot" in issued["consequence"].lower() or "autopilot" in issued["consequence"].lower()
+    # Even WITH a valid token, the tool's own confirm flag still applies.
+    result = drone_tools.call("vehicle_power", action="reboot", confirm=False, confirm_token=issued["confirm_token"])
     assert result["status"] == "failed"
     assert "confirm" in result["error"]
 
