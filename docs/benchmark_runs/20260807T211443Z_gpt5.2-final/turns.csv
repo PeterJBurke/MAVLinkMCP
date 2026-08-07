@@ -1,0 +1,161 @@
+mission_id,trial,turn,decision_latency_ms,provider_wait_ms,attempts,input_tokens,cached_input_tokens,output_tokens,reasoning_tokens,tool_calls,finish_reason,text_chars
+T1,1,1,2140.1,0.0,1,17152,17024,81,0,get_health_all_ok get_armed get_in_air get_position get_landed_state,tool_calls,0
+T1,1,2,1523.3,0.0,1,17438,17280,14,0,arm_drone,tool_calls,0
+T1,1,3,1934.8,0.0,1,17477,17408,27,0,takeoff,tool_calls,0
+T1,1,4,1717.6,0.0,1,17570,17408,13,0,get_position,tool_calls,0
+T1,1,5,1996.4,0.0,1,17653,17536,14,0,hold_position,tool_calls,0
+T1,1,6,1657.2,0.0,1,17764,17536,13,0,get_position,tool_calls,0
+T1,1,7,1766.8,0.0,1,17849,17664,12,0,land,tool_calls,0
+T1,1,8,2031.4,0.0,1,17900,17792,15,0,get_landed_state,tool_calls,0
+T1,1,9,1371.2,0.0,1,17976,17792,15,0,get_landed_state,tool_calls,0
+T1,1,10,1343.1,0.0,1,18052,17920,15,0,get_landed_state,tool_calls,0
+T1,1,11,2565.7,0.0,1,18128,17920,15,0,get_landed_state,tool_calls,0
+T1,1,12,2502.3,0.0,1,18204,18048,15,0,get_landed_state,tool_calls,0
+T1,1,13,1761.9,0.0,1,18280,18176,15,0,get_landed_state,tool_calls,0
+T1,1,14,1526.7,0.0,1,18356,18176,15,0,get_landed_state,tool_calls,0
+T1,1,15,1557.9,0.0,1,18432,18304,15,0,get_landed_state,tool_calls,0
+T1,1,16,1453.0,0.0,1,18508,18304,15,0,get_landed_state,tool_calls,0
+T1,1,17,1877.5,0.0,1,18584,18432,15,0,get_landed_state,tool_calls,0
+T1,1,18,2292.9,0.0,1,18660,18560,15,0,get_landed_state,tool_calls,0
+T1,1,19,2321.3,0.0,1,18736,18560,15,0,get_landed_state,tool_calls,0
+T1,1,20,1927.1,0.0,1,18812,18688,15,0,get_landed_state,tool_calls,0
+T1,1,21,1485.8,0.0,1,18888,18688,15,0,get_landed_state,tool_calls,0
+T1,1,22,2103.3,0.0,1,18964,18816,15,0,get_landed_state,tool_calls,0
+T1,1,23,1751.7,0.0,1,19042,18816,15,0,disarm_drone,tool_calls,0
+T1,1,24,1761.5,0.0,1,19087,18944,14,0,get_armed,tool_calls,0
+T1,1,25,5745.6,0.0,1,19138,18944,114,0,,stop,417
+T2,1,1,2187.1,0.0,1,17147,17024,80,0,get_position get_in_air get_armed get_health_all_ok get_home_position,tool_calls,0
+T2,1,2,1966.6,0.0,1,17431,17152,20,0,set_max_speed,tool_calls,0
+T2,1,3,1644.7,0.0,1,17526,17408,14,0,arm_drone,tool_calls,0
+T2,1,4,1317.5,0.0,1,17565,17408,27,0,takeoff,tool_calls,0
+T2,1,5,1924.2,0.0,1,17658,17536,29,0,move_to_relative,tool_calls,0
+T2,1,6,2264.8,0.0,1,17775,17536,55,0,get_position get_speed get_landed_state,tool_calls,0
+T2,1,7,3432.5,0.0,1,18016,17792,55,0,get_position get_speed get_landed_state,tool_calls,0
+T2,1,8,1801.8,0.0,1,18266,17920,55,0,get_position get_speed get_landed_state,tool_calls,0
+T2,1,9,3131.8,0.0,1,18516,18176,55,0,get_position get_speed get_landed_state,tool_calls,0
+T2,1,10,2154.2,0.0,1,18767,18432,55,0,get_position get_speed get_landed_state,tool_calls,0
+T2,1,11,2882.8,0.0,1,19010,18688,16,0,land,tool_calls,0
+T2,1,12,1614.0,0.0,1,19065,18944,25,0,monitor_flight,tool_calls,0
+T2,1,13,5555.2,0.0,1,19171,18944,25,0,monitor_flight,tool_calls,0
+T2,1,14,3024.4,0.0,1,19277,19072,25,0,monitor_flight,tool_calls,0
+T2,1,15,1628.3,0.0,1,19383,19200,25,0,monitor_flight,tool_calls,0
+T2,1,16,1765.6,0.0,1,19489,19328,25,0,monitor_flight,tool_calls,0
+T2,1,17,2069.1,0.0,1,19595,19456,25,0,monitor_flight,tool_calls,0
+T2,1,18,1555.5,0.0,1,19701,19456,25,0,monitor_flight,tool_calls,0
+T2,1,19,1603.8,0.0,1,19807,19584,25,0,monitor_flight,tool_calls,0
+T2,1,20,1492.1,0.0,1,19913,19712,25,0,monitor_flight,tool_calls,0
+T2,1,21,1561.7,0.0,1,20019,19840,25,0,monitor_flight,tool_calls,0
+T2,1,22,1546.2,0.0,1,20125,19968,25,0,monitor_flight,tool_calls,0
+T2,1,23,1555.6,0.0,1,20209,20096,15,0,disarm_drone,tool_calls,0
+T2,1,24,3142.7,0.0,1,20254,20096,55,0,get_position get_armed get_in_air,tool_calls,0
+T2,1,25,3804.7,0.0,1,20432,20224,165,0,,stop,561
+T3,1,1,2657.5,0.0,1,17172,17024,92,0,get_health_all_ok get_position get_in_air get_armed get_landed_state get_heading,tool_calls,0
+T3,1,2,1484.0,0.0,1,17500,17152,14,0,arm_drone,tool_calls,0
+T3,1,3,1970.7,0.0,1,17539,17408,29,0,takeoff,tool_calls,0
+T3,1,4,1622.7,0.0,1,17634,17408,36,0,move_to_relative,tool_calls,0
+T3,1,5,1600.3,0.0,1,17758,17536,13,0,get_position,tool_calls,0
+T3,1,6,2119.6,0.0,1,17842,17664,13,0,get_position,tool_calls,0
+T3,1,7,1643.7,0.0,1,17927,17792,13,0,get_position,tool_calls,0
+T3,1,8,1354.3,0.0,1,18012,17792,13,0,get_position,tool_calls,0
+T3,1,9,1780.5,0.0,1,18098,17920,13,0,get_position,tool_calls,0
+T3,1,10,2040.4,0.0,1,18182,18048,13,0,get_position,tool_calls,0
+T3,1,11,1616.8,0.0,1,18266,18048,13,0,get_position,tool_calls,0
+T3,1,12,1251.0,0.0,1,18352,18176,13,0,get_position,tool_calls,0
+T3,1,13,2235.2,0.0,1,18437,18304,36,0,move_to_relative,tool_calls,0
+T3,1,14,1519.0,0.0,1,18560,18432,13,0,get_position,tool_calls,0
+T3,1,15,1360.1,0.0,1,18645,18432,13,0,get_position,tool_calls,0
+T3,1,16,1315.5,0.0,1,18730,18560,13,0,get_position,tool_calls,0
+T3,1,17,1547.6,0.0,1,18817,18688,13,0,get_position,tool_calls,0
+T3,1,18,1625.1,0.0,1,18904,18688,13,0,get_position,tool_calls,0
+T3,1,19,2165.9,0.0,1,18989,18816,13,0,get_position,tool_calls,0
+T3,1,20,1483.6,0.0,1,19076,18944,13,0,get_position,tool_calls,0
+T3,1,21,1520.7,0.0,1,19163,18944,13,0,get_position,tool_calls,0
+T3,1,22,2223.5,0.0,1,19250,19072,37,0,move_to_relative,tool_calls,0
+T3,1,23,1403.9,0.0,1,19376,19200,13,0,get_position,tool_calls,0
+T3,1,24,1636.2,0.0,1,19461,19328,13,0,get_position,tool_calls,0
+T3,1,25,2809.5,0.0,1,19545,19328,13,0,get_position,tool_calls,0
+T3,1,26,2591.8,0.0,1,19632,19456,13,0,get_position,tool_calls,0
+T3,1,27,1390.2,0.0,1,19717,19584,13,0,get_position,tool_calls,0
+T3,1,28,1570.1,0.0,1,19802,19584,13,0,get_position,tool_calls,0
+T3,1,29,1714.9,0.0,1,19887,19712,13,0,get_position,tool_calls,0
+T3,1,30,1526.6,0.0,1,19974,19840,37,0,move_to_relative,tool_calls,0
+T3,1,31,1574.2,0.0,1,20099,19968,13,0,get_position,tool_calls,0
+T3,1,32,1570.2,0.0,1,20186,19968,13,0,get_position,tool_calls,0
+T3,1,33,4537.2,0.0,1,20273,20096,13,0,get_position,tool_calls,0
+T3,1,34,4215.1,0.0,1,20358,20224,13,0,get_position,tool_calls,0
+T3,1,35,1571.4,0.0,1,20442,20224,13,0,get_position,tool_calls,0
+T3,1,36,2267.6,0.0,1,20527,20352,16,0,land,tool_calls,0
+T3,1,37,2628.1,0.0,1,20582,20480,27,0,monitor_flight,tool_calls,0
+T3,1,38,1768.3,0.0,1,20690,20480,27,0,monitor_flight,tool_calls,0
+T3,1,39,1606.8,0.0,1,20798,20608,27,0,monitor_flight,tool_calls,0
+T3,1,40,4693.9,0.0,1,20906,20736,27,0,monitor_flight,tool_calls,0
+T3,1,41,2141.1,0.0,1,21014,20864,27,0,monitor_flight,tool_calls,0
+T3,1,42,2654.7,0.0,1,21122,20992,27,0,monitor_flight,tool_calls,0
+T3,1,43,1718.0,0.0,1,21230,20992,27,0,monitor_flight,tool_calls,0
+T3,1,44,1721.7,0.0,1,21338,21120,27,0,monitor_flight,tool_calls,0
+T3,1,45,1809.6,0.0,1,21446,21248,27,0,monitor_flight,tool_calls,0
+T3,1,46,1855.3,0.0,1,21554,21376,27,0,monitor_flight,tool_calls,0
+T3,1,47,1415.5,0.0,1,21640,21504,15,0,disarm_drone,tool_calls,0
+T3,1,48,2078.6,0.0,1,21685,21504,68,0,get_position get_in_air get_armed get_landed_state,tool_calls,0
+T3,1,49,2965.5,0.0,1,21925,21632,129,0,,stop,488
+T4,1,1,2556.8,0.0,1,17194,17152,69,0,get_home_position get_health_all_ok get_armed get_in_air,tool_calls,0
+T4,1,2,2881.2,0.0,1,17403,17152,126,0,start_managed_mission,tool_calls,0
+T4,1,3,1849.1,0.0,1,17625,17408,25,0,get_mission_status,tool_calls,0
+T4,1,4,1797.4,0.0,1,18272,17536,25,0,get_mission_status,tool_calls,0
+T4,1,5,1330.3,0.0,1,18919,18176,25,0,get_mission_status,tool_calls,0
+T4,1,6,1499.2,0.0,1,19566,18816,20,0,control_managed_mission,tool_calls,0
+T4,1,7,1799.8,0.0,1,19659,19456,66,0,get_mission_status get_in_air get_armed,tool_calls,0
+T4,1,8,1231.4,0.0,1,20526,19584,12,0,land,tool_calls,0
+T4,1,9,2835.1,0.0,1,20577,20480,14,0,monitor_flight,tool_calls,0
+T4,1,10,1431.9,0.0,1,20672,20480,14,0,monitor_flight,tool_calls,0
+T4,1,11,1214.0,0.0,1,20767,20608,14,0,monitor_flight,tool_calls,0
+T4,1,12,1350.5,0.0,1,20862,20736,14,0,monitor_flight,tool_calls,0
+T4,1,13,1588.7,0.0,1,20957,20736,14,0,monitor_flight,tool_calls,0
+T4,1,14,1389.2,0.0,1,21052,20864,14,0,monitor_flight,tool_calls,0
+T4,1,15,1228.9,0.0,1,21147,20992,14,0,monitor_flight,tool_calls,0
+T4,1,16,1401.3,0.0,1,21242,21120,14,0,monitor_flight,tool_calls,0
+T4,1,17,2764.9,0.0,1,21315,21120,15,0,disarm_drone,tool_calls,0
+T4,1,18,1696.7,0.0,1,21360,21248,77,0,get_landed_state get_armed get_position get_mission_status,tool_calls,0
+T4,1,19,5393.6,0.0,1,22329,21376,212,0,,stop,834
+T5,1,1,1972.7,0.0,1,17153,17024,80,0,get_health_all_ok get_position get_home_position get_armed get_in_air,tool_calls,0
+T5,1,2,1771.8,0.0,1,17437,17152,14,0,arm_drone,tool_calls,0
+T5,1,3,1447.1,0.0,1,17476,17408,29,0,takeoff,tool_calls,0
+T5,1,4,4084.5,0.0,1,17571,17408,42,0,move_to_relative,tool_calls,0
+T5,1,5,1268.8,0.0,1,17700,17536,14,0,hold_position,tool_calls,0
+T5,1,6,1294.1,0.0,1,17815,17664,14,0,return_to_launch,tool_calls,0
+T5,1,7,1575.6,0.0,1,17860,17664,27,0,monitor_flight,tool_calls,0
+T5,1,8,1730.7,0.0,1,17971,17792,15,0,get_flight_mode,tool_calls,0
+T5,1,9,1268.8,0.0,1,18016,17920,13,0,get_position,tool_calls,0
+T5,1,10,1915.3,0.0,1,18103,17920,14,0,get_home_position,tool_calls,0
+T5,1,11,1682.6,0.0,1,18177,18048,19,0,set_flight_mode,tool_calls,0
+T5,1,12,1950.3,0.0,1,18239,18048,80,0,get_landed_state get_position get_home_position get_armed get_in_air,tool_calls,0
+T5,1,13,1479.1,0.0,1,18541,18176,15,0,get_landed_state,tool_calls,0
+T5,1,14,1303.0,0.0,1,18617,18432,15,0,get_landed_state,tool_calls,0
+T5,1,15,1414.8,0.0,1,18693,18560,15,0,get_landed_state,tool_calls,0
+T5,1,16,1703.0,0.0,1,18769,18560,15,0,get_landed_state,tool_calls,0
+T5,1,17,1530.5,0.0,1,18845,18688,15,0,get_landed_state,tool_calls,0
+T5,1,18,2467.6,0.0,1,18921,18816,68,0,get_landed_state get_position get_armed get_in_air,tool_calls,0
+T5,1,19,1953.1,0.0,1,19161,18944,68,0,get_landed_state get_position get_armed get_in_air,tool_calls,0
+T5,1,20,2307.7,0.0,1,19401,19072,68,0,get_landed_state get_position get_armed get_in_air,tool_calls,0
+T5,1,21,1719.0,0.0,1,19641,19328,68,0,get_landed_state get_position get_armed get_in_air,tool_calls,0
+T5,1,22,1783.2,0.0,1,19882,19584,68,0,get_landed_state get_position get_armed get_in_air,tool_calls,0
+T5,1,23,1949.8,0.0,1,20123,19840,68,0,get_landed_state get_position get_armed get_in_air,tool_calls,0
+T5,1,24,1901.8,0.0,1,20364,20096,68,0,get_landed_state get_position get_armed get_in_air,tool_calls,0
+T5,1,25,1886.8,0.0,1,20602,20352,80,0,get_landed_state get_position get_home_position get_armed get_in_air,tool_calls,0
+T5,1,26,4042.4,0.0,1,20903,20608,217,0,,stop,725
+T7,1,1,1782.4,0.0,1,17157,17024,25,0,get_parameter,tool_calls,0
+T7,1,2,1708.9,0.0,1,17222,17152,29,0,set_parameter,tool_calls,0
+T7,1,3,1648.9,0.0,1,17411,17152,50,0,set_parameter,tool_calls,0
+T7,1,4,1431.7,0.0,1,17541,17408,25,0,get_parameter,tool_calls,0
+T7,1,5,1360.3,0.0,1,17606,17408,29,0,set_parameter,tool_calls,0
+T7,1,6,1659.3,0.0,1,17797,17536,50,0,set_parameter,tool_calls,0
+T7,1,7,5005.4,0.0,1,17927,17792,25,0,get_parameter,tool_calls,0
+T7,1,8,1998.2,0.0,1,17992,17792,82,0,,stop,225
+T8,1,1,2271.3,0.0,1,17136,17024,80,0,get_position get_health_all_ok get_in_air get_armed get_home_position,tool_calls,0
+T8,1,2,1435.9,0.0,1,17420,17152,14,0,arm_drone,tool_calls,0
+T8,1,3,1789.4,0.0,1,17459,17280,29,0,takeoff,tool_calls,0
+T8,1,4,1793.2,0.0,1,17554,17408,48,0,go_to_location,tool_calls,0
+T8,1,5,3886.4,0.0,1,17701,17536,145,0,,stop,496
+T9,1,1,1969.9,0.0,1,17190,17024,14,0,get_in_air,tool_calls,0
+T9,1,2,2541.6,0.0,1,17237,17152,14,0,get_armed,tool_calls,0
+T9,1,3,5168.3,0.0,1,17288,17152,92,0,,stop,411
