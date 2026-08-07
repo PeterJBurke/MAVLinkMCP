@@ -26,32 +26,124 @@ pytestmark = [pytest.mark.sitl, pytest.mark.longmission]
 DOC_PATH = Path(__file__).resolve().parents[2] / "docs" / "long_mission_demo.md"
 LAT, LON = SITL_HOME["lat"], SITL_HOME["lon"]
 
-#: A lap of ~1.6 km at 25-40 m. ArduCopter SITL cruises ~5 m/s by default, so
-#: this takes well over 10 minutes including takeoff, holds and RTL.
-D = 0.0018  # ~200 m
-LAP = [
-    {"latitude_deg": LAT + D, "longitude_deg": LON, "altitude_m": 30, "hold_s": 10},
-    {"latitude_deg": LAT + D, "longitude_deg": LON + D, "altitude_m": 35, "hold_s": 10},
-    {"latitude_deg": LAT, "longitude_deg": LON + D, "altitude_m": 40, "hold_s": 10},
-    {"latitude_deg": LAT - D, "longitude_deg": LON + D, "altitude_m": 35, "hold_s": 10},
-    {"latitude_deg": LAT - D, "longitude_deg": LON, "altitude_m": 30, "hold_s": 10},
-    {"latitude_deg": LAT - D, "longitude_deg": LON - D, "altitude_m": 30, "hold_s": 10},
-    {"latitude_deg": LAT, "longitude_deg": LON - D, "altitude_m": 35, "hold_s": 10},
-    {"latitude_deg": LAT + D, "longitude_deg": LON - D, "altitude_m": 30, "hold_s": 10},
-]
-WAYPOINTS = LAP + LAP  # two laps
+#: A boustrophedon ("lawnmower") survey of DISTINCT waypoints.
+#:
+#: Two measured lessons drive this shape:
+#: 1. Repeating a lap does NOT lengthen a mission - ArduPilot completes a
+#:    waypoint it is already sitting on instantly (2 laps and 3 laps of the
+#:    same 8 points both finished in ~370 s).
+#: 2. Neither WPNAV_SPEED nor per-waypoint hold time moved the total much
+#:    (~370 s -> ~411 s), so duration is governed by PATH LENGTH. The survey
+#:    below is ~5 km of distinct legs, which is what actually buys the time.
+#:
+#: The legs are longer than the adversarial suite's tight test fence allows,
+#: so this module runs its own server with a wide fence (see
+#: ``long_mission_server``) - the safety layer stays fully enabled.
+D = 0.005  # ~550 m half-width
+ROWS, COLS = 4, 4
+CRUISE_SPEED_CM_S = 300  # 3 m/s via WPNAV_SPEED
+HOLD_S = 5.0
+
+
+def _survey() -> list:
+    points = []
+    for r in range(ROWS):
+        dlat = -D + (2 * D) * r / (ROWS - 1)
+        columns = range(COLS) if r % 2 == 0 else reversed(range(COLS))
+        for c in columns:
+            dlon = -D + (2 * D) * c / (COLS - 1)
+            points.append(
+                {
+                    "latitude_deg": LAT + dlat,
+                    "longitude_deg": LON + dlon,
+                    "altitude_m": 40 + 5 * (r % 2),
+                    "hold_s": HOLD_S,
+                }
+            )
+    return points
+
+
+WAYPOINTS = _survey()
 
 DISCONNECT_S = 240.0  # 4 minutes with NO client attached at all
 TOTAL_TIMEOUT_S = 2400.0
+
+
+@pytest.fixture(scope="module")
+def long_mission_server(sitl, tmp_path_factory):
+    """A safety-enabled server whose geofence is wide enough for a ~5 km
+    survey. Everything else keeps production defaults."""
+    import os
+    import socket
+    import subprocess
+    import sys
+
+    from tests.integration.conftest import (
+        CONTROL_KEY,
+        REPO_ROOT,
+        SAFETY_ENV,
+        TELEMETRY_KEY,
+        _free_port,
+    )
+
+    port = _free_port()
+    workdir = tmp_path_factory.mktemp("droneserver-longmission")
+    audit = workdir / "audit.jsonl"
+    env = dict(
+        os.environ,
+        **SAFETY_ENV,
+        MCP_HOST="127.0.0.1",
+        MCP_PORT=str(port),
+        MAVLINK_ADDRESS=sitl["address"],
+        MAVLINK_PORT=str(sitl["port"]),
+        MAVLINK_PROTOCOL="tcp",
+        FLIGHT_LOG_DIR=str(workdir / "flight_logs"),
+        SAFETY_AUDIT_LOG_PATH=str(audit),
+    )
+    # widen the fence for the survey; keep the altitude ceiling meaningful
+    env["SAFETY_GEOFENCE_POLYGON"] = ""
+    env["SAFETY_GEOFENCE_MAX_RADIUS_M"] = "3000"
+    env["SAFETY_GEOFENCE_MAX_ALTITUDE_M"] = "120"
+    env["SAFETY_MAX_ALTITUDE_M"] = "120"
+    env["SAFETY_API_KEYS"] = f"tester:{CONTROL_KEY}:control,readonly:{TELEMETRY_KEY}:telemetry"
+
+    log_path = workdir / "server.log"
+    with open(log_path, "w") as log_file:
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "droneserver.server"],
+            env=env,
+            cwd=REPO_ROOT,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+        )
+        try:
+            deadline = time.monotonic() + 30
+            while True:
+                if proc.poll() is not None:
+                    pytest.fail(f"long-mission server exited early; log: {log_path.read_text()[-2000:]}")
+                try:
+                    with socket.create_connection(("127.0.0.1", port), timeout=1):
+                        break
+                except OSError:
+                    if time.monotonic() > deadline:
+                        pytest.fail(f"long-mission server did not open port {port}")
+                    time.sleep(0.5)
+            yield f"http://127.0.0.1:{port}/sse", audit
+        finally:
+            proc.terminate()
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
 
 
 def _mission(status):
     return status.get("mission") or {}
 
 
-def test_long_mission_with_client_disconnect(safe_server, audit_path):
+def test_long_mission_with_client_disconnect(long_mission_server):
     """Submit -> disconnect entirely -> reconnect -> poll -> complete."""
-    url, _ = safe_server
+    url, audit_path = long_mission_server
     from tests.integration.conftest import CONTROL_KEY
 
     timeline: list[dict] = []
@@ -89,10 +181,26 @@ def test_long_mission_with_client_disconnect(safe_server, audit_path):
     if _mission(status):
         client1.call("control_managed_mission", action="clear", timeout=40)
 
+    # Reduce the cruise speed so the survey takes realistic survey time. This
+    # also exercises the safety layer's confirmation round-trip inside the
+    # demo: WPNAV_SPEED is a safety-critical parameter name, so it escalates
+    # to CRITICAL and needs a token.
+    issued = client1.call("set_parameter", name="WPNAV_SPEED", value=CRUISE_SPEED_CM_S, timeout=60)
+    if issued.get("status") == "confirmation_required":
+        issued = client1.call(
+            "set_parameter",
+            name="WPNAV_SPEED",
+            value=CRUISE_SPEED_CM_S,
+            confirm_token=issued["confirm_token"],
+            timeout=60,
+        )
+    assert issued.get("status") == "success", issued
+    note("cruise speed set", {"mission": {}}, f"WPNAV_SPEED={CRUISE_SPEED_CM_S} cm/s (confirmed token round-trip)")
+
     submitted = client1.call(
         "start_managed_mission",
         waypoints=WAYPOINTS,
-        takeoff_altitude_m=30.0,
+        takeoff_altitude_m=40.0,
         return_to_launch=True,
         timeout=90,
     )
@@ -101,7 +209,7 @@ def test_long_mission_with_client_disconnect(safe_server, audit_path):
     note(
         "submitted (session 1)",
         {"mission": {"phase": submitted["phase"]}},
-        f"{len(WAYPOINTS)} waypoints; call returned immediately",
+        f"{len(WAYPOINTS)} distinct survey waypoints; call returned immediately",
     )
 
     # wait until it is genuinely flying, then leave
@@ -151,15 +259,16 @@ def test_long_mission_with_client_disconnect(safe_server, audit_path):
     note("finished", final, f"phase={mission.get('phase')}")
 
     elapsed = mission.get("elapsed_s") or 0
-    assert mission["phase"] == "completed", f"mission did not complete: {mission}"
-    assert elapsed > 600, f"demo must exceed 10 minutes of flight, got {elapsed:.0f}s"
 
-    # ---------- the artifact ----------
+    # ---------- the artifact (written before the assertions, so a failed run
+    # still leaves the timeline to diagnose) ----------
     audit = [json.loads(line) for line in audit_path.read_text().splitlines() if line.strip()]
     mission_events = [r for r in audit if r["tool"].startswith("mission.")]
     _write_doc(mission_id, elapsed, disconnected_for, timeline, final["events"], mission_events, mission)
-
     client2.call("control_managed_mission", action="clear", timeout=40)
+
+    assert mission["phase"] == "completed", f"mission did not complete: {mission}"
+    assert elapsed > 600, f"demo must exceed 10 minutes of flight, got {elapsed:.0f}s"
 
 
 def _write_doc(mission_id, elapsed, disconnected_for, timeline, events, audit_events, mission):
