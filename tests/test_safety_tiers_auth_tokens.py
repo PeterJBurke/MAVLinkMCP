@@ -45,9 +45,55 @@ class TestTierTable:
         assert effective_tier("emergency_stop", {}, {})[0] is Tier.EMERGENCY
 
     def test_disarm_escalates_in_air_only(self):
-        assert effective_tier("disarm_drone", {}, {"in_air": False})[0] is Tier.NORMAL
-        tier, why = effective_tier("disarm_drone", {}, {"in_air": True})
+        grounded = {"in_air": False, "unknown": False}
+        assert effective_tier("disarm_drone", {}, grounded)[0] is Tier.NORMAL
+        tier, why = effective_tier("disarm_drone", {}, {"in_air": True, "unknown": False})
         assert tier is Tier.CRITICAL and "CRASH" in why
+
+    def test_unknown_state_escalates_like_in_air(self):
+        """Reading "we could not tell" as "on the ground" skipped the in-air
+        escalations exactly when telemetry was least trustworthy."""
+        unknown = {"unknown": True}
+        assert effective_tier("disarm_drone", {}, unknown)[0] is Tier.CRITICAL
+        assert effective_tier("clear_geofence", {}, unknown)[0] is Tier.CRITICAL
+        assert effective_tier("upload_geofence", {}, unknown)[0] is Tier.CRITICAL
+        # an empty state dict is also "unknown"
+        assert effective_tier("disarm_drone", {}, {})[0] is Tier.CRITICAL
+
+    def test_fence_writes_escalate_in_air(self):
+        grounded = {"in_air": False, "unknown": False}
+        airborne = {"in_air": True, "unknown": False}
+        for tool in ("upload_geofence", "raw_geofence_transfer"):
+            assert effective_tier(tool, {}, grounded)[0] is Tier.NORMAL
+            assert effective_tier(tool, {}, airborne)[0] is Tier.CRITICAL
+
+    def test_qgc_import_escalates_only_when_uploading(self):
+        airborne = {"in_air": True, "unknown": False}
+        assert effective_tier("import_qgc_mission", {"upload": False}, airborne)[0] is Tier.NORMAL
+        assert effective_tier("import_qgc_mission", {"upload": True}, airborne)[0] is Tier.CRITICAL
+
+    def test_file_writes_escalate_reads_do_not(self):
+        grounded = {"in_air": False, "unknown": False}
+        for action in ("mkdir", "rmdir", "remove", "rename", "upload"):
+            assert effective_tier("autopilot_files", {"action": action}, grounded)[0] is Tier.CRITICAL
+        for action in ("list", "download", "compare"):
+            assert effective_tier("autopilot_files", {"action": action}, grounded)[0] is Tier.NORMAL
+
+    def test_px4_parameter_names_escalate(self):
+        """The prefix list was ArduPilot-only, leaving the same class of
+        parameter unguarded on the other firmware this project supports."""
+        grounded = {"in_air": False, "unknown": False}
+        for name in (
+            "COM_DISARM_LAND",
+            "NAV_DLL_ACT",
+            "GF_ACTION",
+            "BAT_LOW_THR",
+            "CBRK_SUPPLY_CHK",
+            "SYS_FAILURE_EN",
+            "MPC_XY_VEL_MAX",
+            "MIS_TAKEOFF_ALT",
+        ):
+            assert effective_tier("set_parameter", {"name": name}, grounded)[0] is Tier.CRITICAL, name
 
     def test_force_arm_escalates(self):
         assert effective_tier("arm_drone", {"force": False}, {})[0] is Tier.NORMAL

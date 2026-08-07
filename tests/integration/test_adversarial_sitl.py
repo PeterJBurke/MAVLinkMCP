@@ -383,6 +383,150 @@ def test_H1_every_attempt_is_audited(control_tools, audit_path):
         assert "test-control-key" not in json.dumps(r)  # keys never logged
 
 
+# ============================================ I. independent-review regressions
+
+
+def test_I1_relative_move_is_bounded_and_fenced(control_tools):
+    """B3: move_to_relative had no bounds and no fence at all."""
+    r = control_tools.call("move_to_relative", north_m=50000, east_m=0, down_m=0)
+    ok = _rejected(r) and r.get("rule") in (
+        "bounds.max_offset",
+        "geofence.radius",
+        "geofence.polygon",
+        "geofence.target_unresolvable",
+        "precondition.navigation_requires_airborne",
+    )
+    record(
+        "I1",
+        "review regression",
+        "move_to_relative 50 km north (previously unguarded)",
+        "rejected by bounds/fence/precondition",
+        r,
+        ok,
+    )
+    assert ok, r
+
+
+def test_I2_offboard_ned_horizontal_is_fenced(control_tools):
+    """S1: only the vertical component of offboard NED was checked."""
+    r = control_tools.call("offboard_set_position_ned", north_m=100000, east_m=0, down_m=-20)
+    ok = _rejected(r)
+    record(
+        "I2",
+        "review regression",
+        "offboard NED setpoint 100 km north",
+        "rejected (horizontal component now fenced)",
+        r,
+        ok,
+    )
+    assert ok, r
+
+
+def test_I3_gimbal_not_blocked_by_the_fence(control_tools):
+    """S2: a configured polygon rejected every gimbal command, because lat/lon
+    default to 0,0 for action='set_angles'."""
+    r = control_tools.call("gimbal_point", gimbal_id=1, action="set_angles", pitch=-30.0)
+    ok = isinstance(r, dict) and r.get("rule") not in ("geofence.polygon", "geofence.radius")
+    record(
+        "I3",
+        "review regression",
+        "gimbal_point set_angles with a polygon fence configured",
+        "NOT rejected by the geofence (angles are not positions)",
+        r,
+        ok,
+    )
+    assert ok, r
+
+
+def test_I4_fence_write_escalates_and_import_is_validated(control_tools):
+    """S3/B5: fence writes were NORMAL, and imported plans bypassed the fence."""
+    d = 0.002
+    poly = [
+        {"latitude_deg": SITL_HOME["lat"] - d, "longitude_deg": SITL_HOME["lon"] - d},
+        {"latitude_deg": SITL_HOME["lat"] - d, "longitude_deg": SITL_HOME["lon"] + d},
+        {"latitude_deg": SITL_HOME["lat"] + d, "longitude_deg": SITL_HOME["lon"] + d},
+    ]
+    on_ground = control_tools.call("upload_geofence", polygons=[{"points": poly, "fence_type": "inclusion"}])
+    ok = isinstance(on_ground, dict) and on_ground.get("status") in ("success", "confirmation_required")
+
+    far = SITL_HOME["lat"] + 0.5
+    plan = json.dumps(
+        {
+            "fileType": "Plan",
+            "version": 1,
+            "groundStation": "test",
+            "geoFence": {"circles": [], "polygons": [], "version": 2},
+            "rallyPoints": {"points": [], "version": 2},
+            "mission": {
+                "cruiseSpeed": 10,
+                "firmwareType": 3,
+                "hoverSpeed": 5,
+                "vehicleType": 2,
+                "version": 2,
+                "plannedHomePosition": [SITL_HOME["lat"], SITL_HOME["lon"], SITL_HOME["alt_amsl"]],
+                "items": [
+                    {
+                        "AMSLAltAboveTerrain": None,
+                        "Altitude": 25,
+                        "AltitudeMode": 1,
+                        "autoContinue": True,
+                        "command": 16,
+                        "doJumpId": 1,
+                        "frame": 3,
+                        "params": [0, 0, 0, None, far, SITL_HOME["lon"], 25],
+                        "type": "SimpleItem",
+                    }
+                ],
+            },
+        }
+    )
+    imported = control_tools.call("import_qgc_mission", plan_json=plan, upload=True, timeout=60)
+    ok = ok and _rejected(imported) and "geofence" in imported.get("rule", "")
+    record(
+        "I4",
+        "review regression",
+        "QGC .plan with a waypoint 55 km outside the fence",
+        "import rejected before upload; fence writes escalate",
+        imported,
+        ok,
+    )
+    assert ok, imported
+
+
+def test_I5_calibration_refused_unless_on_the_ground(control_tools):
+    """S6: calibrate had no in-air gate. (On the ground here it must be allowed
+    to proceed as far as the firmware takes it.)"""
+    r = control_tools.call("calibrate", sensor="gyro", timeout_s=6, timeout=40)
+    ok = isinstance(r, dict) and r.get("rule") != "precondition.ground_only"
+    record(
+        "I5",
+        "review regression",
+        "calibrate on the ground (in-air gate must not misfire)",
+        "not blocked by the ground-only rule while on the ground",
+        r,
+        ok,
+    )
+    assert ok, r
+
+
+def test_I6_audit_records_carry_honest_timing_fields(control_tools, audit_path):
+    """S10: latency excluded the settings load and the durable write."""
+    control_tools.call("get_position")
+    time.sleep(0.5)
+    records = [json.loads(line) for line in audit_path.read_text().splitlines() if line.strip()]
+    recent = records[-1]
+    ok = "audit_write_ms" in recent and "guard_error" in recent and recent["latency_ms"] > 0
+    record(
+        "I6",
+        "review regression",
+        "audit record timing fields (latency + durable write)",
+        "latency_ms and audit_write_ms both present and non-negative",
+        {"status": "checked"},
+        ok,
+    )
+    assert ok, recent
+
+
 def test_H2_write_results_table(control_tools):
     """Emit the paper artifact. Runs last (alphabetically) so it sees all rows."""
     assert RESULTS, "no adversarial results recorded"

@@ -121,3 +121,39 @@ def test_emergency_stop_needs_no_confirmation(control_tools):
 def test_emergency_stop_rejects_bad_mode(control_tools):
     result = control_tools.call("emergency_stop", mode="explode")
     assert result["status"] == "failed"
+
+
+def test_emergency_stop_kill_is_reachable_without_a_token(control_tools):
+    """B2 coverage (behaviour deliberately unchanged, pending Peter's ruling).
+
+    mode="kill" was the one emergency_stop path with no test at all. It is
+    tier EMERGENCY: no confirmation token, no rate limit. Exercised here on the
+    GROUND and disarmed, where killing the motors is a no-op, so the test
+    proves reachability without risking a simulated crash.
+    """
+    armed = control_tools.call("get_armed", timeout=30)
+    assert armed.get("status") == "success" and armed["armed"] is False, (
+        f"this test must run disarmed on the ground; state was {armed}"
+    )
+
+    result = control_tools.call("emergency_stop", mode="kill", timeout=60)
+    assert result.get("status") != "confirmation_required", (
+        "emergency_stop must never require a token - a handshake during an emergency is itself a hazard"
+    )
+    assert result["status"] in ("success", "failed"), result
+    if result["status"] == "success":
+        assert result["mode"] == "kill"
+        assert any("KILL" in a.upper() for a in result["actions_taken"]), result
+
+    still_disarmed = control_tools.call("get_armed", timeout=30)
+    assert still_disarmed["armed"] is False
+
+
+def test_emergency_stop_is_exempt_from_rate_limiting(control_tools):
+    """B2 coverage: the exemption is deliberate; pin it so it cannot regress
+    silently into a throttled path."""
+    last = None
+    for _ in range(8):
+        last = control_tools.call("emergency_stop", mode="land", timeout=60)
+        assert not (isinstance(last, dict) and str(last.get("rule", "")).startswith("rate_limit")), last
+    assert isinstance(last, dict)
