@@ -53,8 +53,31 @@ _POSITION_ARGS: dict[str, tuple[str, str, str | None, str]] = {
     "reposition": ("latitude_deg", "longitude_deg", "altitude_m", AMSL),
     "do_orbit": ("latitude_deg", "longitude_deg", "absolute_altitude_m", AMSL),
     "offboard_set_position_global": ("latitude_deg", "longitude_deg", "altitude_m", DYNAMIC),
-    "gimbal_point": ("latitude_deg", "longitude_deg", None, REL),  # ROI target only
 }
+
+#: Tools carrying lat/lon that are NOT flight targets - sanity-checked but
+#: never fenced. Pointing a camera at something outside the fence is not a
+#: containment breach, and these tools default lat/lon to 0.0 when the caller
+#: is doing something else entirely (gimbal_point action="set_angles"), which
+#: made a configured polygon reject every gimbal command.
+_LOOK_AT_ARGS: dict[str, tuple[str, str]] = {
+    "gimbal_point": ("latitude_deg", "longitude_deg"),
+}
+
+#: Tools whose target is an OFFSET from the vehicle's current position. To
+#: fence these we need to resolve the offset against live position.
+_RELATIVE_TARGET_TOOLS = frozenset({"move_to_relative", "offboard_set_position_ned"})
+
+#: Velocity tools: fenced by projecting the commanded velocity forward over the
+#: stale-setpoint window and checking the PREDICTED position.
+_VELOCITY_TOOLS = frozenset({"offboard_set_velocity_ned", "offboard_set_velocity_body"})
+
+#: Tools that command a follow-me / external target position.
+_TARGET_LOCATION_TOOLS = frozenset({"follow_me"})
+
+#: Metres per degree of latitude (good to <1% anywhere; used to convert small
+#: local offsets to lat/lon for fence checks).
+_M_PER_DEG_LAT = 111320.0
 
 #: Tools that command an altitude without a horizontal target:
 #: tool -> (alt_arg, frame)
@@ -62,6 +85,8 @@ _ALTITUDE_ONLY_ARGS: dict[str, tuple[str, str]] = {
     "takeoff": ("takeoff_altitude", REL),
     "flight_altitudes": ("altitude_m", REL),
     "offboard_set_position_ned": ("down_m", NED_DOWN),
+    # S7: the managed-mission takeoff altitude was accepted unchecked.
+    "start_managed_mission": ("takeoff_altitude_m", REL),
 }
 
 
@@ -142,7 +167,26 @@ def _num(args: dict, key: str):
 
 def check_parameter_bounds(tool: str, args: dict, s: SafetySettings, state: dict | None = None) -> Rejection | None:
     """Altitude / speed / coordinate sanity, independent of the geofence."""
-    altitude = _relative_altitude(tool, args, state or {})
+    state = state or {}
+    altitude = _relative_altitude(tool, args, state)
+
+    # B3: offset commands (move_to_relative, offboard_set_position_ned) got no
+    # bounds at all. Bound the offset magnitude - which works even with no
+    # position fix - and resolve the commanded altitude against live position.
+    if tool in _RELATIVE_TARGET_TOOLS:
+        north, east = _num(args, "north_m") or 0.0, _num(args, "east_m") or 0.0
+        offset_m = (north**2 + east**2) ** 0.5
+        if offset_m > s.max_distance_from_home_m:
+            return Rejection(
+                "bounds.max_offset",
+                f"requested move of {offset_m:.0f} m exceeds the configured maximum "
+                f"single-command distance of {s.max_distance_from_home_m:.0f} m",
+                f"Break the move into steps of at most {s.max_distance_from_home_m:.0f} m.",
+            )
+        position = state.get("position") or {}
+        down = _num(args, "down_m")
+        if altitude is None and down is not None and position.get("relative_altitude_m") is not None:
+            altitude = position["relative_altitude_m"] - down
     if altitude is not None and altitude > s.max_altitude_m:
         return Rejection(
             "bounds.max_altitude",
@@ -195,12 +239,32 @@ def check_parameter_bounds(tool: str, args: dict, s: SafetySettings, state: dict
     return None
 
 
+#: Tools that must not run while the vehicle is airborne.
+GROUND_ONLY_TOOLS = frozenset({"calibrate", "cancel_calibration"})
+
+#: Every tool whose safety depends on vehicle state - the full set the
+#: fail-closed policy applies to (S9: it previously covered navigation only).
+STATE_DEPENDENT_RULES = NAVIGATION_TOOLS | MISSION_START_TOOLS | GROUND_ONLY_TOOLS | {"takeoff"}
+
+
 def check_preconditions(tool: str, args: dict, state: dict, s: SafetySettings) -> Rejection | None:
     """Vehicle-state preconditions, including the takeoff-then-crash fix."""
+    # Evaluated before the unknown-state early return: calibrating in flight is
+    # a crash, so "we cannot tell whether we are flying" must block it
+    # regardless of the fail-open/fail-closed policy.
+    if tool in GROUND_ONLY_TOOLS and (state.get("in_air") or state.get("unknown")):
+        return Rejection(
+            "precondition.ground_only",
+            f"{tool} was commanded while the drone is airborne (or its state is unknown)",
+            "Land and disarm first. Calibration must never run in flight.",
+        )
+
     if state.get("unknown"):
         # Telemetry unreadable. Default is fail-open (documented) so a
-        # telemetry hiccup cannot strand an airborne vehicle.
-        if s.preconditions_fail_closed and tool in NAVIGATION_TOOLS:
+        # telemetry hiccup cannot strand an airborne vehicle. When configured
+        # to fail closed this now covers EVERY state-dependent rule, not just
+        # navigation.
+        if s.preconditions_fail_closed and tool in STATE_DEPENDENT_RULES:
             return Rejection(
                 "precondition.state_unknown",
                 "vehicle state could not be read and the safety layer is configured to fail closed",
@@ -253,13 +317,103 @@ def check_preconditions(tool: str, args: dict, state: dict, s: SafetySettings) -
     return None
 
 
+def _offset_to_latlon(lat: float, lon: float, north_m: float, east_m: float) -> tuple[float, float]:
+    """Apply a local NED offset (metres) to a lat/lon."""
+    import math
+
+    dlat = north_m / _M_PER_DEG_LAT
+    dlon = east_m / (_M_PER_DEG_LAT * max(math.cos(math.radians(lat)), 1e-6))
+    return lat + dlat, lon + dlon
+
+
+def resolve_target(
+    tool: str, args: dict, state: dict, s: SafetySettings
+) -> tuple[float | None, float | None, float | None, str | None]:
+    """Resolve a command's horizontal target to (lat, lon, alt_rel, error).
+
+    Handles the three cases the fence previously missed entirely:
+
+    - offsets from the current position (``move_to_relative``,
+      ``offboard_set_position_ned``)
+    - velocities, projected forward over the stale-setpoint window
+    - follow-me target locations
+
+    ``error`` is set when a target *should* be fenced but cannot be resolved
+    (no live position). Callers reject in that case: refusing to move is the
+    safe direction, and silently skipping the fence is what the independent
+    review flagged.
+    """
+    position = state.get("position") or {}
+    cur_lat, cur_lon = position.get("latitude_deg"), position.get("longitude_deg")
+    cur_alt = position.get("relative_altitude_m")
+
+    if tool in _TARGET_LOCATION_TOOLS:
+        if str(args.get("action", "")).lower() != "target":
+            return None, None, None, None
+        return _num(args, "latitude_deg"), _num(args, "longitude_deg"), None, None
+
+    if tool in _RELATIVE_TARGET_TOOLS:
+        north, east = _num(args, "north_m"), _num(args, "east_m")
+        down = _num(args, "down_m")
+        if north is None and east is None and down is None:
+            return None, None, None, None
+        if cur_lat is None or cur_lon is None:
+            return None, None, None, "current position unknown"
+        lat, lon = _offset_to_latlon(cur_lat, cur_lon, north or 0.0, east or 0.0)
+        alt = None
+        if down is not None:
+            # move_to_relative: down is relative to the CURRENT altitude.
+            # offboard_set_position_ned: down is relative to the offboard
+            # origin, which the server approximates as the current position.
+            alt = (cur_alt if cur_alt is not None else 0.0) - down
+        return lat, lon, alt, None
+
+    if tool in _VELOCITY_TOOLS:
+        horizon_s = _num(args, "stale_timeout_s") or 15.0
+        if tool == "offboard_set_velocity_ned":
+            north, east = _num(args, "north_m_s") or 0.0, _num(args, "east_m_s") or 0.0
+        else:  # body frame: without heading, treat the magnitude as worst case
+            forward = _num(args, "forward_m_s") or 0.0
+            right = _num(args, "right_m_s") or 0.0
+            magnitude = (forward**2 + right**2) ** 0.5
+            north, east = magnitude, 0.0
+        if north == 0.0 and east == 0.0:
+            return None, None, None, None
+        if cur_lat is None or cur_lon is None:
+            return None, None, None, "current position unknown"
+        lat, lon = _offset_to_latlon(cur_lat, cur_lon, north * horizon_s, east * horizon_s)
+        return lat, lon, None, None
+
+    return None, None, None, None
+
+
 def check_geofence(
     tool: str, args: dict, fence: Geofence, s: SafetySettings, state: dict | None = None
 ) -> Rejection | None:
-    """Server-side fence: single targets and whole missions."""
+    """Server-side fence: single targets, offsets, velocities and whole missions."""
     if not fence.active:
         return None
     state = state or {}
+
+    # S8: a configured radius fence is inert until home is known. Surface that
+    # instead of silently passing every target.
+    if (
+        fence.max_radius_m > 0
+        and fence.home is None
+        and (
+            tool in _POSITION_ARGS
+            or tool in _RELATIVE_TARGET_TOOLS
+            or tool in _VELOCITY_TOOLS
+            or tool in MISSION_UPLOAD_TOOLS
+        )
+    ):
+        return Rejection(
+            "geofence.home_unknown",
+            "a radius geofence is configured but the drone's home position has not been "
+            "read yet, so the fence cannot be enforced",
+            "Wait for a GPS/home fix (get_home_position) and retry. The command was refused "
+            "rather than flown unfenced.",
+        )
 
     if tool in MISSION_UPLOAD_TOOLS:
         items = args.get("waypoints") or args.get("mission_points") or []
@@ -280,6 +434,18 @@ def check_geofence(
         lat_key, lon_key, _, _ = _POSITION_ARGS[tool]
         lat, lon = _num(args, lat_key), _num(args, lon_key)
     alt = _relative_altitude(tool, args, state)
+
+    resolved_lat, resolved_lon, resolved_alt, resolve_error = resolve_target(tool, args, state, s)
+    if resolve_error is not None:
+        return Rejection(
+            "geofence.target_unresolvable",
+            f"{tool} commands a target relative to the drone, but {resolve_error}, so the geofence cannot be checked",
+            "Wait for position telemetry (get_position) and retry. The command was refused rather than flown unfenced.",
+        )
+    if resolved_lat is not None:
+        lat, lon = resolved_lat, resolved_lon
+    if resolved_alt is not None:
+        alt = resolved_alt
 
     if lat is None and lon is None and alt is None:
         return None

@@ -12,6 +12,7 @@ precondition rules apply the configured fail-open/fail-closed policy.
 """
 
 import asyncio
+import contextlib
 import time
 from dataclasses import dataclass, field
 
@@ -25,6 +26,8 @@ class FlightState:
     unknown: bool = True
     home: tuple[float, float] | None = None
     home_altitude_m: float | None = None
+    #: Live position - required to fence offset/velocity commands.
+    position: dict | None = None
     fetched_at: float = 0.0
 
     takeoff_commanded_at: float | None = field(default=None)
@@ -40,6 +43,7 @@ class FlightState:
             "unknown": self.unknown,
             "home": self.home,
             "home_altitude_m": self.home_altitude_m,
+            "position": self.position,
             "seconds_since_takeoff": since,
             "mission_uploaded": self.mission_uploaded,
         }
@@ -101,6 +105,15 @@ class StateTracker:
             except Exception:
                 self.state.unknown = True
                 return self.state.snapshot()
+
+            with contextlib.suppress(Exception):
+                position = await _first(drone.telemetry.position(), timeout_s)
+                self.state.position = {
+                    "latitude_deg": position.latitude_deg,
+                    "longitude_deg": position.longitude_deg,
+                    "relative_altitude_m": position.relative_altitude_m,
+                    "absolute_altitude_m": position.absolute_altitude_m,
+                }
 
             in_air = await _read_in_air(drone, timeout_s)
             if in_air is None:

@@ -156,6 +156,10 @@ CONSEQUENCES: dict[str, str] = {
     "disarm_drone": "Disarms the motors. IN AIR THIS CAUSES A CRASH.",
     "arm_drone": "Force-arms WITHOUT prearm safety checks (sensor/EKF/GPS checks bypassed).",
     "clear_geofence": "Removes the drone's geofence containment while it is flying.",
+    "upload_geofence": "Replaces the drone's geofence, redefining where it is allowed to fly.",
+    "raw_geofence_transfer": "Writes raw geofence items, redefining where the drone may fly.",
+    "import_qgc_mission": "Uploads a new mission, and any geofence/rally points in the plan.",
+    "autopilot_files": "Modifies files on the autopilot's filesystem.",
     "flight_logs": "PERMANENTLY ERASES all flight logs stored on the drone.",
     "camera_storage": "PERMANENTLY ERASES the camera storage (all photos/videos).",
     "set_parameter": "Changes a safety-critical autopilot parameter; wrong values can make the drone unflyable.",
@@ -176,14 +180,36 @@ SAFETY_CRITICAL_PARAM_PREFIXES = (
     "BRD_SAFETY",
     "THR_",
     "WPNAV_SPEED",
+    # PX4 (S5: the list was ArduPilot-only, so the same class of parameter was
+    # unguarded on the other firmware this project explicitly supports).
+    "COM_",  # commander: disarm, RC loss, low battery, failsafe actions
+    "NAV_",  # NAV_DLL_ACT / NAV_RCL_ACT datalink and RC-loss actions
+    "GF_",  # PX4 geofence
+    "BAT_",  # PX4 battery (ArduPilot uses BATT_)
+    "CBRK_",  # circuit breakers - each one disables a safety check
+    "SYS_",  # SYS_FAILURE_EN and friends
+    "MPC_",  # multicopter limits (max velocity, tilt)
+    "MIS_",  # mission behaviour incl. MIS_TAKEOFF_ALT
+    "FD_",  # failure detector
+    "MAN_",  # manual control limits
 )
 
 # predicate(args, state) -> (escalate, consequence_override|None)
 Predicate = Callable[[dict, dict], tuple[bool, str | None]]
 
 
+def _airborne_or_unknown(state: dict) -> bool:
+    """Treat UNKNOWN vehicle state as airborne for escalation purposes.
+
+    Reading "we could not tell" as "on the ground" silently skipped the
+    in-air escalations (disarm, fence clearing) exactly when telemetry was
+    least trustworthy. Unknown now escalates - the fail-safe direction.
+    """
+    return bool(state.get("in_air")) or bool(state.get("unknown", True))
+
+
 def _disarm_in_air(args: dict, state: dict) -> tuple[bool, str | None]:
-    return bool(state.get("in_air")), None
+    return _airborne_or_unknown(state), None
 
 
 def _force_arm(args: dict, state: dict) -> tuple[bool, str | None]:
@@ -191,7 +217,36 @@ def _force_arm(args: dict, state: dict) -> tuple[bool, str | None]:
 
 
 def _clear_fence_in_air(args: dict, state: dict) -> tuple[bool, str | None]:
-    return bool(state.get("in_air")), None
+    return _airborne_or_unknown(state), None
+
+
+def _fence_write_in_air(args: dict, state: dict) -> tuple[bool, str | None]:
+    """S3: writing a NEW fence in flight redefines containment mid-mission -
+    as consequential as clearing it."""
+    if not _airborne_or_unknown(state):
+        return False, None
+    return True, "Replaces the drone's geofence while it is flying, redefining its containment."
+
+
+def _qgc_import_in_air(args: dict, state: dict) -> tuple[bool, str | None]:
+    """S3/B5: a .plan import can carry a geofence and rally points, so an
+    import that uploads is also a fence write."""
+    if not args.get("upload", True):
+        return False, None
+    if not _airborne_or_unknown(state):
+        return False, None
+    return True, (
+        "Uploads a new mission - and any geofence/rally points the plan contains - while the drone is flying."
+    )
+
+
+def _file_write(args: dict, state: dict) -> tuple[bool, str | None]:
+    """S4: autopilot_shell is CRITICAL, so destructive filesystem writes on the
+    same autopilot should be too. Reads stay NORMAL."""
+    action = str(args.get("action", "")).lower()
+    if action in ("mkdir", "rmdir", "remove", "rename", "upload"):
+        return True, f"Modifies the autopilot's filesystem ({action})."
+    return False, None
 
 
 def _erase_logs(args: dict, state: dict) -> tuple[bool, str | None]:
@@ -212,6 +267,10 @@ def _critical_param(args: dict, state: dict) -> tuple[bool, str | None]:
 #: NORMAL -> CRITICAL escalations. Read together with TOOL_TIERS.
 ESCALATIONS: dict[str, Predicate] = {
     "disarm_drone": _disarm_in_air,
+    "upload_geofence": _fence_write_in_air,
+    "raw_geofence_transfer": _fence_write_in_air,
+    "import_qgc_mission": _qgc_import_in_air,
+    "autopilot_files": _file_write,
     "arm_drone": _force_arm,
     "clear_geofence": _clear_fence_in_air,
     "flight_logs": _erase_logs,
