@@ -32,6 +32,12 @@ jobs:
         run: uv run mypy
 
       - name: Unit tests (no SITL)
+        # NOTE: this figure is unit-only and is low by construction (~29%).
+        # Most of the codebase is drone-tool bodies that can only run against a
+        # simulator, so the meaningful coverage number is produced by the
+        # nightly SITL workflow. No gate is set on this number deliberately -
+        # a threshold on a figure that does not measure what it appears to
+        # would be worse than none.
         run: uv run pytest --cov=src/droneserver --cov-report=term-missing --cov-report=xml
 
       - name: Coverage summary

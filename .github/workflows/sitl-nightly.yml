@@ -28,10 +28,17 @@ jobs:
       - name: Build the pinned ArduPilot SITL image
         run: docker build -t droneserver-sitl-arducopter:4.5.7 docker/ardupilot-sitl
 
-      - name: SITL integration suite
+      - name: SITL integration suite (with coverage)
         # The >10-minute demonstration mission is excluded deliberately; it is
         # a documented artifact run on demand, not a gate.
-        run: uv run pytest -m "sitl and not longmission" tests/integration -q
+        #
+        # Coverage is measured HERE, not in the fast job: most of this codebase
+        # is drone-tool bodies that only execute against a simulator, so the
+        # unit-only figure (~29%) says nothing useful about how much of the
+        # system is actually exercised.
+        run: |
+          uv run pytest -m "sitl and not longmission" tests/integration -q \
+            --cov=src/droneserver --cov-report=term --cov-report=xml
 
       - name: Upload generated artifacts
         if: always()
@@ -40,4 +47,5 @@ jobs:
           name: sitl-artifacts
           path: |
             docs/adversarial_results.md
+            coverage.xml
           if-no-files-found: ignore
