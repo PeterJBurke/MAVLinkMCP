@@ -1,124 +1,160 @@
-# Emergency stop — the full override chain
+# Emergency stop — how to make the drone stop, and what to trust
 
-The `emergency_stop` MCP tool is the **innermost and least authoritative** ring
-of a four-ring chain. It depends on the MCP server, the network, and the
-autopilot link all working. The outer rings do not. **Never plan a flight on
-the assumption that the software e-stop will be available.**
+**Who this is for:** anyone who may need to stop this aircraft — a safety
+pilot, an operator, or a reviewer checking that a language model flying a drone
+can always be overruled. You do not need to have read the code.
 
-Rings, outermost (most authoritative) first:
+## The one-paragraph version
 
-| Ring | Mechanism | Depends on | Beats |
+There are four independent ways to stop the drone. They are ranked by how
+little has to be working for them to succeed. The radio transmitter in a
+pilot's hands needs only the radio link. The software "emergency stop" — the
+one the AI itself can call — needs the network, the server, and the AI to all
+be behaving, which is exactly what you cannot assume in an emergency. **So the
+software stop is the innermost and weakest ring, not the primary one.** Never
+plan a flight assuming it will be available.
+
+## Terms used here
+
+- **MAVLink** — the radio/network language ground software and autopilots speak
+  to each other. Everything in this document ultimately travels over MAVLink.
+- **Autopilot / flight controller** — the small computer on the aircraft that
+  actually flies it (running ArduPilot or PX4 firmware). It keeps flying even
+  if everything else disappears.
+- **GCS (ground control station)** — conventional pilot software such as
+  QGroundControl or Mission Planner, talking to the autopilot over MAVLink.
+- **Companion computer** — a small computer carried on the aircraft that
+  relays commands from the network to the autopilot.
+- **MCP server (this project)** — the service that exposes drone commands as
+  "tools" an AI model can call.
+- **Failsafe** — behaviour the autopilot performs on its own when something is
+  lost (radio, GPS, the ground link), e.g. return home and land.
+- **Disarm** — switch the motors off. On the ground: routine. In the air: the
+  aircraft falls.
+- **Kill / motor emergency stop** — cut motor output immediately, in any flight
+  mode. Also makes the aircraft fall. It is *not* a "land now" button.
+
+## The four rings
+
+Outermost is most trustworthy.
+
+| Ring | How you stop the drone | What must still be working | Overrules |
 |---|---|---|---|
-| 1 | **RC transmitter takeover** | RC link only | everything below |
-| 2 | **Ground control station (QGC/MP)** | GCS ↔ vehicle MAVLink link | server + LLM |
-| 3 | **Kill the companion link / stop the service** | shell on the companion or server host | LLM |
-| 4 | **`emergency_stop` MCP tool** | MCP server + LLM behaving | nothing |
+| 1 | **Radio transmitter** — pilot takes over | the radio link only | everything below |
+| 2 | **GCS** (QGroundControl / Mission Planner) | the GCS↔aircraft MAVLink link | the server and the AI |
+| 3 | **Cut the link / stop the service** | shell access to the server or companion | the AI |
+| 4 | **`emergency_stop` tool** (the AI calls it) | network + server + a cooperative AI | nothing |
 
 ---
 
-## Ring 1 — RC takeover (primary)
+## Ring 1 — the pilot's transmitter (primary)
 
-A safety pilot with a bound transmitter is the primary override for any flight
-outside a cage. Flip the mode switch to a pilot-controlled mode
-(**Stabilize / AltHold / Loiter** on ArduPilot, **Position / Altitude /
-Manual** on PX4). The autopilot obeys the RC stick input over any MAVLink
-command in progress.
+For any flight outside a net or cage, a safety pilot with a bound transmitter
+is the primary override. Flip the mode switch to a pilot-flown mode —
+**Stabilize, AltHold or Loiter** on ArduPilot; **Position, Altitude or Manual**
+on PX4 — and the autopilot follows the sticks instead of whatever command was
+in progress.
 
-Requirements, checked before every real flight:
+Check before every flight:
 
-- Transmitter on, bound, and **within range** before arming.
-- A mode switch is configured and the pilot has *practised* the flip.
-- Throttle at **mid-stick** before switching into an altitude-holding mode —
-  this is the exact hazard behind the v1 `pause_mission` crash: LOITER/AltHold
-  take altitude from the throttle stick, and an unknown stick position on a
-  transmitter that was not being held caused a descent to ground impact.
-- `FS_THR_ENABLE` / RC-loss failsafe configured and tested.
+- Transmitter on, bound to the aircraft, and **in range** before arming.
+- A mode switch is configured, and the pilot has *practised* the flip.
+- **Throttle stick at mid-position before switching into an altitude-holding
+  mode.** This is not a detail. It is the hazard that caused a real crash in
+  this project: modes such as LOITER and AltHold take their altitude target
+  from the throttle stick, and a transmitter lying on a table with the stick
+  down commands a descent. The aircraft descended from 25 m into the ground.
+  That incident is why this server's `pause_mission` holds position in GUIDED
+  mode (which needs no stick input) instead of switching to LOITER.
+- Radio-loss failsafe configured and tested (`FS_THR_ENABLE` on ArduPilot).
 
-**Kill switch semantics — know the difference:**
+### Kill switches — know what they actually do
 
-- **ArduPilot**: an RC channel assigned `RCx_OPTION = 31` (Motor Emergency
-  Stop) stops the motors immediately, in any mode, latched while active. The
-  aircraft **falls**. It is not a "land now" switch.
-- **PX4**: `Kill switch` (mapped in the RC setup) does the same — motors off,
-  no landing sequence.
-- On both, **motor kill is not disarm**. Disarm on the ground is routine;
-  disarm/kill in the air is a crash. This is exactly why the safety layer
-  escalates `disarm_drone` to CRITICAL only when `in_air` is true.
+| Firmware | How it is set up | What happens |
+|---|---|---|
+| ArduPilot | an RC channel with `RCx_OPTION = 31` (Motor Emergency Stop) | motors stop immediately, in any mode, and stay stopped while the switch is held |
+| PX4 | "Kill switch" in the RC setup | motors stop immediately |
 
-Use motor kill only when a falling aircraft is safer than a flying one — e.g.
-a flyaway heading toward people, or a wrapped/entangled airframe.
+On both: **motor kill is not the same as disarm, and neither is a landing.**
+The aircraft drops. Use it only when a falling aircraft is safer than a flying
+one — a flyaway heading toward people, or a tangled airframe.
 
-## Ring 2 — Ground control station
+## Ring 2 — the ground control station
 
-Keep QGroundControl (or Mission Planner) connected to the same vehicle for any
-non-trivial flight. From the GCS you can, without the MCP server's cooperation:
+Keep QGroundControl (or Mission Planner) connected for any non-trivial flight.
+From it you can, without the MCP server's cooperation:
 
-- change flight mode (Land / RTL / Loiter),
-- issue Return-to-Launch,
-- disarm on the ground,
-- trigger flight termination if configured.
+- change flight mode (Land, Return-to-Launch, Loiter),
+- command Return-to-Launch,
+- disarm once on the ground,
+- trigger flight termination, if configured.
 
-Because the GCS talks MAVLink directly to the vehicle, it works even if the MCP
-server is wedged, the LLM is looping, or the network to the server is down.
-Note MAVLink is multi-master: the GCS and the server can both be connected, and
-the **last command wins** — a GCS mode change will override a server command,
-and vice versa. Do not leave an LLM issuing setpoints while you fly manually
-from the GCS.
+This works even if the server is wedged, the AI is looping, or the network to
+the server is down, because the GCS talks to the autopilot directly.
 
-## Ring 3 — Cut the link / stop the service
+**One caveat:** MAVLink allows several controllers at once, and the autopilot
+obeys whichever spoke last. If you are flying manually from the GCS while an AI
+is still issuing commands, the two will fight. Stop the server (Ring 3) rather
+than race it.
 
-If the LLM is misbehaving but the vehicle is stable, remove the server from the
-loop rather than fighting it:
+## Ring 3 — take the server out of the loop
+
+If the AI is misbehaving but the aircraft is stable, remove the server rather
+than argue with it:
 
 ```bash
-systemctl stop droneserver        # or: docker stop <container>
+systemctl stop droneserver          # or: docker stop <container>
 ```
 
-The offboard **stale-setpoint watchdog** matters here: if the server dies
-mid-offboard, `mavsdk_server` stops re-sending setpoints and the autopilot's
-own offboard-loss failsafe takes over (PX4: failsafe action; ArduPilot: GUIDED
-without a target holds). Within the server, the watchdog brakes to a
-zero-velocity hover if a motion setpoint is not refreshed within
-`stale_timeout_s` (default 15 s). See `src/droneserver/safety/offboard_watchdog.py`.
+Two things then protect you, and it is worth knowing which is which:
 
-Killing the companion-computer link is also effective: the vehicle's
-**GCS-loss failsafe** (`FS_GCS_ENABLE` on ArduPilot, `NAV_DLL_ACT` on PX4)
-will trigger the configured action — usually RTL or Land. Verify that
-parameter is set the way you expect *before* relying on it.
+- **This server's own watchdog.** In "offboard" flight the aircraft follows a
+  continuously repeated instruction such as *keep moving north at 2 m/s*. If
+  that instruction is not refreshed within a timeout (15 s by default), the
+  server commands a stationary hover. See
+  `src/droneserver/safety/offboard_watchdog.py`.
+- **The autopilot's own ground-link failsafe.** If the link to the ground
+  disappears entirely, the autopilot acts by itself — usually Return-to-Launch
+  or Land (`FS_GCS_ENABLE` on ArduPilot, `NAV_DLL_ACT` on PX4). Confirm that
+  parameter is set the way you expect **before** you rely on it.
 
 ## Ring 4 — the `emergency_stop` tool
 
+This is the stop the AI itself can invoke.
+
 ```
-emergency_stop(mode="land")   # DEFAULT, SAFEST: stop offboard, land here
+emergency_stop(mode="land")   # DEFAULT, SAFEST: stop offboard control, land here
 emergency_stop(mode="rtl")    # fly home, then land
-emergency_stop(mode="kill")   # CUT MOTORS — the drone falls
+emergency_stop(mode="kill")   # CUT MOTORS — the aircraft falls
 ```
 
 Design decisions, and why:
 
-- **No confirmation token.** Every other CRITICAL tool needs a two-call
-  round-trip; requiring one during an emergency would be a hazard, so this tool
-  is tier `EMERGENCY` and executes on the first call.
-- **Exempt from rate limiting**, for the same reason.
-- **Still requires `control` scope**, and is **always audited**.
-- `land` and `rtl` first stop offboard streaming and cancel the offboard
-  watchdog — otherwise a live setpoint would keep commanding the vehicle while
-  the stop is in progress.
-- `kill` maps to MavSDK `action.kill()` — the software equivalent of the RC
-  kill switch, with all the same consequences.
+- **It needs no confirmation step.** Every other dangerous command in this
+  server requires a two-call handshake: the first call returns a one-time token
+  plus a plain statement of the consequence, and only a second call quoting
+  that token executes. Requiring that during an emergency would itself be
+  dangerous, so this tool is exempt.
+- **It is exempt from rate limiting** for the same reason.
+- **It still requires a control-scoped API key, and it is always logged.**
+- `land` and `rtl` first stop the repeating offboard instruction and cancel the
+  watchdog — otherwise a stale instruction would keep commanding the aircraft
+  while the stop was in progress.
+- `kill` is the software equivalent of the RC kill switch, with all the same
+  consequences.
 
-If `emergency_stop` returns `status: "failed"`, its response tells the caller
-to escalate to the out-of-band chain immediately. **Escalate to Ring 1.**
+If `emergency_stop` returns a failure, its response says to escalate. **Escalate
+to Ring 1.**
 
 ## Pre-flight checklist (real hardware)
 
 - [ ] Safety pilot present, transmitter bound, mode switch practised
-- [ ] Kill switch assigned and its semantics understood (motors off, not land)
+- [ ] Kill switch assigned, and its meaning understood (motors off, not land)
+- [ ] Throttle stick at mid-position before any altitude-hold mode is selected
 - [ ] GCS connected and showing live telemetry
-- [ ] RC-loss and GCS-loss failsafe parameters set and verified
-- [ ] Server-side geofence configured for the actual flying site
-      (`SAFETY_GEOFENCE_POLYGON`, ceiling, radius) **and** the firmware fence
-      enabled (`FENCE_ENABLE=1`) — two independent layers, see
-      [safety_review.md](safety_review.md) §5
-- [ ] `emergency_stop` exercised in SITL against the same configuration
-- [ ] Audit log path writable; verify a record appears for a test call
+- [ ] Radio-loss and ground-link-loss failsafes set and tested
+- [ ] Geofence set on **both** layers — the server's own fence
+      (`SAFETY_GEOFENCE_*`) and the autopilot's (`FENCE_ENABLE=1`); see
+      [safety_review.md](safety_review.md) §5 for why two are used
+- [ ] `emergency_stop` exercised in simulation against this exact configuration
+- [ ] Audit log path writable; confirm a record appears for a test call

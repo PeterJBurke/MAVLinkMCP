@@ -1,17 +1,51 @@
-# Safety layer — review document
+# The safety layer — review document
 
-**Read this first.** This is the reviewer-oriented summary of the Phase 3
-safety & security layer: every rule, the tier table, the token flow, the
-config surface, the file map, and how to run the adversarial suite.
+**Who this is for:** the person deciding whether this software may fly a real
+aircraft, and later a journal reviewer. You should be able to follow it without
+having read the code.
 
-Status: implemented and tested in SITL. **Not yet reviewed for real-hardware
-use.** The hard gate is a human review of everything below before any
-real-drone contact.
+## What this thing is, in one paragraph
 
-An **independent read-only reviewer** (a different agent, which did not write
-this layer) audited it and found real defects. They are fixed; see
-[§0 Changes since the independent review](#0-changes-since-the-independent-review)
-for exactly what changed and what is still waiting on your ruling.
+This project lets a large language model (an AI like Claude or GPT) fly a
+drone: the model calls named "tools" — `takeoff`, `go_to_location`,
+`kill_motors` — and the server turns each one into commands the aircraft
+understands. The **safety layer** documented here sits between the two. Every
+tool call passes through it before anything reaches the aircraft. It checks who
+is asking, whether the request is physically sane, whether the target is inside
+the area the operator allowed, whether the aircraft is in a fit state, and
+whether especially dangerous commands have been explicitly confirmed. It then
+writes a permanent record of what happened. The model cannot switch it off.
+
+## Status
+
+Implemented and tested in simulation. **Not yet cleared for real hardware** —
+that is the decision this document exists to support.
+
+An **independent reviewer** (a separate agent that did not write this layer)
+audited it and found genuine defects. They are fixed. §0 lists every one, what
+it actually meant, and what is still waiting on your ruling.
+
+## Terms used in this document
+
+Defined here once, then used freely.
+
+| Term | Meaning |
+|---|---|
+| **Tool** | One named action the AI can invoke, e.g. `takeoff`. The AI sees a list of them and picks. |
+| **The guard** | The safety layer's checking code, wrapped around every tool. Nothing reaches the aircraft without passing through it. |
+| **Fail open / fail closed** | What happens when a check itself breaks. *Fail open* = let the command through anyway. *Fail closed* = refuse it. A door that unlocks in a power cut fails open; a door that stays locked fails closed. For drone commands, refusing is the safe direction. |
+| **Tier** | How dangerous a tool is: *read-only*, *normal*, *critical*, *emergency*. Determines what is required before it runs. |
+| **Confirmation token** | A one-time password the server invents for a dangerous command. The first call returns the token plus a plain statement of the consequence; only a second call quoting that exact token executes. It stops an AI that has been talked into something, or has invented a justification, from acting on the first try. |
+| **Scope** | What a given API key is allowed to do: `telemetry` (read only), `control` (fly it), `admin`. |
+| **Geofence** | A boundary — a polygon, a maximum height, and/or a radius from home — outside which commands are refused. |
+| **Precondition** | A rule about the aircraft's *state* rather than the command, e.g. "you cannot navigate before taking off". |
+| **Audit log** | An append-only file with one line per tool call: who, what, allowed or refused, why, and how long it took. Never edited, only appended. |
+| **MAVLink** | The standard language ground software and drone autopilots speak. |
+| **Autopilot** | The flight computer on the aircraft (ArduPilot or PX4 firmware). |
+| **SITL** | "Software In The Loop" — a simulated aircraft running the real autopilot firmware on a computer. All testing here is against SITL. |
+| **Offboard** | A flight mode where the aircraft continuously follows a repeated instruction (e.g. *keep moving north at 2 m/s*) rather than heading to a fixed point. |
+| **AMSL vs relative altitude** | *AMSL* = height above sea level. *Relative* = height above the take-off point. Confusing the two is a recurring hazard; see §5. |
+| **Rate limiting** | Capping how many commands a client may issue per minute, so a looping AI cannot flood the aircraft. |
 
 ---
 
@@ -21,12 +55,12 @@ for exactly what changed and what is still waiting on your ruling.
 
 | # | Defect | Fix |
 |---|---|---|
-| B1 | The guard **failed OPEN**: an exception inside it executed the tool unguarded. Triggered by `SAFETY_API_KEYS` being re-parsed on every call and raising on a malformed spec. | The guard now **fails CLOSED** with rule `guard.internal_error`, and the audit record carries a `guard_error` field. Keys are parsed once per spec and validated at **startup** (`SystemExit` on a bad spec). Settings are cached. |
-| B3 | `move_to_relative` had **no bounds and no geofence** despite moving the drone. | Offset magnitude bounded (`bounds.max_offset`), commanded altitude resolved against live position, and the target resolved to lat/lon and fenced. |
-| S1 | The horizontal component of `offboard_set_position_ned` / `_velocity_*` and follow-me targets were **unfenced**. | `resolve_target()` resolves offsets against live position and projects velocities forward over the stale-setpoint window; all are fenced. Body-frame velocity uses the worst-case direction. |
-| B4 | Escalation predicates read **unknown telemetry as "on the ground"**, so in-air escalations silently did not fire. | `_airborne_or_unknown()` treats unknown as airborne (fail-safe). Applies to `disarm_drone`, `clear_geofence`, and the new fence-write escalations. |
-| B5 | `import_qgc_mission` uploaded an **unvalidated** mission and could rewrite the firmware fence silently. | Every positional item is validated against the server fence **before upload**; a plan carrying fence items now warns explicitly and escalates in flight. |
-| — | No structural guarantee that a *future* tool is guarded. | `tests/test_safety_coverage_invariant.py`: every NORMAL/CRITICAL/EMERGENCY tool must appear in a rule table **or** in an explicit exemption list with a written reason. |
+| B1 | **If the safety checks themselves crashed, the command ran anyway, unchecked.** Worse, there was a realistic way to make them crash: the list of API keys was re-read and re-parsed on *every single call*, and a typo in that setting raised an error — so one bad character in a config file silently disabled all safety checking for every command. | The checks now **refuse** the command when they crash (rule `guard.internal_error`), and the log entry says so. API keys are parsed once and checked when the server *starts*, which now refuses to start on a bad setting rather than discovering it mid-flight. |
+| B3 | **One tool that flies the aircraft had no limits at all.** `move_to_relative` ("go 50 m north of where you are") was checked against neither the distance/height limits nor the geofence, so an AI could send the drone anywhere with it. | The distance is now capped, the resulting height is worked out from the aircraft's current position, and the destination is converted to real coordinates and checked against the geofence. |
+| S1 | **The geofence only checked height, not direction, for several commands.** Continuous-motion commands ("keep flying north") and follow-me targets could leave the allowed area unchallenged. | Destinations are now worked out from the aircraft's live position; for continuous-motion commands the server projects where the aircraft would be if that instruction ran for its full timeout, and refuses if that point is outside the fence. |
+| B4 | **"We could not tell whether it is flying" was treated as "it is on the ground".** Some commands are only dangerous in flight — switching the motors off, for example. Those extra protections quietly switched themselves off exactly when the aircraft's telemetry was unreliable. | Unknown state now counts as *flying*, so the stricter treatment applies when we are least sure. |
+| B5 | **Importing a flight plan bypassed the geofence entirely** — and such a plan can also silently replace the aircraft's own boundary settings. | Every waypoint in an imported plan is now checked against the geofence *before* anything is sent to the aircraft; one bad waypoint rejects the whole plan. A plan that carries boundary settings now says so explicitly. |
+| — | **Nothing stopped the next new tool from being unprotected.** Every defect above was the same shape: a tool was added and nobody noticed it was in no rule list. | An automated test now fails if any command-issuing tool is absent from both the rule lists and an explicit "needs no rules, because…" list. A future author must make a conscious choice. |
 
 ### Fixed (should-fix-before-flight)
 
@@ -91,17 +125,26 @@ recorded in the coverage-invariant exemption list.
 
 ---
 
-## 1. Architecture in one paragraph
+## 1. How it is wired in
 
-Every MCP tool is wrapped at registration by `droneserver.safety.middleware.guard`.
-There is **no registration path that bypasses it**: `droneserver.app.SafeFastMCP`
-overrides `FastMCP.tool()`, so a tool added later without touching safety code
-is still authenticated, tiered, validated, fenced, rate-limited and audited. A
-failed check returns a normal tool result with `status="rejected"` (never an
-exception), carrying a stable `rule` id, a human `error`, and a `remedy` telling
-the model what to do instead.
+**In plain terms:** the safety checks are attached to every tool automatically,
+at the moment the tool is registered with the server. A developer cannot add a
+new drone command and forget to protect it, because there is no way to register
+one that skips the wrapper.
 
-## 2. Check order
+When a check refuses a command, the AI does not get an error or a crash — it
+gets an ordinary reply saying *rejected*, which rule stopped it, and what to do
+instead. That matters: a model that receives a clear "that waypoint is outside
+the allowed area; pick one inside it" can correct itself, whereas a model that
+receives a stack trace usually retries the same thing.
+
+*In code:* `droneserver.app.SafeFastMCP` overrides `FastMCP.tool()` so every
+registration passes through `droneserver.safety.middleware.guard`.
+
+## 2. What happens to a command, in order
+
+Each numbered step can stop the command. If one does, the later steps never
+run, and the AI is told which rule stopped it.
 
 | # | Check | Module | Fails with |
 |---|---|---|---|
@@ -121,7 +164,12 @@ the model what to do instead.
 *vehicle*. A waypoint outside the fence is illegal however long you wait, so
 when both would fire, the argument problem is the more useful thing to report.
 
-## 3. Criticality tiers (the classification table)
+## 3. How dangerous is each command? (the tier table)
+
+**In plain terms:** every tool is sorted into one of four buckets, and the
+bucket decides what is required before it runs. This table is the thing most
+worth your attention — if a command is in the wrong bucket, everything else
+downstream is applied to it wrongly.
 
 Source of truth: `src/droneserver/safety/tiers.py` (`TOOL_TIERS`). A tool with
 **no entry is treated as CRITICAL** — a new tool cannot slip in unclassified —
@@ -157,7 +205,16 @@ Everything else is `normal`, except the read-only getters/listers
 In particular: is `land`, `set_flight_mode`, or `autopilot_files` (FTP writes)
 critical enough for your operation to warrant a token?
 
-## 4. Confirmation-token flow
+## 4. Confirmation tokens — the two-step handshake for dangerous commands
+
+**In plain terms:** for the small set of commands that can end a flight or
+destroy data, asking once is not enough. The first request does not execute;
+it comes back with a one-time password and a blunt sentence about what will
+happen ("Motors stop INSTANTLY. If airborne the drone will FALL"). Only a
+second request quoting that exact password runs the command. An AI that has
+been manipulated by text it was reading, or that has convinced itself a
+destructive action is reasonable, cannot get past this on the first try — and
+each failed attempt is a separate, countable event in the log.
 
 ```
 LLM → kill_motors()
@@ -199,7 +256,12 @@ each failure is a distinct, countable audit event (`confirmation.unknown_or_used
 | `bounds.mission_size` | 200 items | |
 | `bounds.max_offset` | 2000 m | magnitude of a single relative move (`move_to_relative`, offboard NED) |
 
-> **Altitude frames — read this.** Tools do not agree on a frame:
+> **Altitude is measured from two different places, and mixing them up is the
+> most persistent hazard in this codebase — it has caused a defect three
+> separate times.** "100 metres" can mean 100 m above the take-off point or
+> 100 m above sea level; at a field 584 m above sea level those differ by more
+> than a legal altitude limit. A limit checked against the wrong one either
+> rejects every legitimate command or permits a dangerous one. In detail:
 > `takeoff_altitude` is relative, `go_to_location.absolute_altitude_m` and
 > `reposition.altitude_m` are **AMSL**, `offboard_set_position_ned.down_m` is
 > negative-up, and `offboard_set_position_global` depends on its
@@ -253,7 +315,11 @@ direction.
 Per client, sliding window: 60 calls/60 s normal, 6 calls/60 s critical
 (defaults). `emergency_stop` is exempt.
 
-## 6. AuthN / AuthZ
+## 6. Who is allowed to do what (authentication and authorisation)
+
+**In plain terms:** each client presents an API key. The key decides whether it
+may only *read* the drone's state, or actually *fly* it. A read-only client can
+watch a mission it has no power to command.
 
 Keys come from `SAFETY_API_KEYS` as `client_id:key:scope,…` with scope in
 `telemetry` < `control` < `admin`. Keys are compared with `hmac.compare_digest`.
@@ -281,7 +347,13 @@ cannot leak them. A test asserts the key string never appears in the audit log.
 The key is read from the `X-API-Key` header, or `Authorization: Bearer …`.
 Transports without headers (stdio) fall back to the unauthenticated policy.
 
-## 7. Audit log = latency instrumentation
+## 7. The audit log — the flight record, and the paper's timing data
+
+**In plain terms:** every tool call appends one line to a file that is never
+edited, only added to. Each line records who asked, what they asked for,
+whether it was allowed or refused and under which rule, what the aircraft
+said back, and how long it took. This is simultaneously the accountability
+record and the source of the latency numbers the paper reports.
 
 Append-only JSONL, `O_APPEND` + `fsync`, one object per call, schema
 `droneserver.audit/1` (documented in `audit.py`; fields may be added, never
