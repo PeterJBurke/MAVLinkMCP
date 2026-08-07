@@ -245,13 +245,32 @@ class TelemetryRecorder:
     Runs as a background task. It only ever calls read-only tools, so it cannot
     change what it is measuring, and it swallows its own errors: a hiccup in
     the recorder must not fail a flight.
+
+    **It must be given its own API key.** The server's rate limiter counts
+    calls per *client*, and a client is an API key - so a recorder sharing the
+    model's key spends the model's allowance. The first LLM run hit exactly
+    that: twelve consecutive refusals of the model's own polling, caused
+    entirely by the instrumentation watching it. Measuring an experiment must
+    not perturb it, and a telemetry-scope key of its own costs nothing.
+
+    **Position is sampled every cycle; armed and airborne state less often.**
+    Reading whether the motors are armed costs the server about a second,
+    because it waits on a telemetry stream, while a position read costs
+    milliseconds. Sampling both at the same rate would either halve the track's
+    resolution or spend the recorder's own rate-limit budget. The final sample
+    taken at the end of a trial is always a full one, so the "did it end
+    disarmed?" question is never answered from a stale reading.
     """
+
+    #: Read armed/in-air state on every Nth cycle (see the class docstring).
+    FULL_SAMPLE_EVERY = 4
 
     def __init__(self, url: str, api_key: str = "", interval_s: float = 1.5):
         self.session = LiveMCPSession(url, api_key, client_name=RECORDER_CLIENT_NAME, client_version="2")
         self.interval_s = interval_s
         self.samples: list[TelemetrySample] = []
         self.errors = 0
+        self._cycle = 0
         self._task: asyncio.Task | None = None
         self._stop = asyncio.Event()
 
@@ -270,11 +289,12 @@ class TelemetryRecorder:
 
     async def _loop(self) -> None:
         while not self._stop.is_set():
-            await self.sample_once()
+            self._cycle += 1
+            await self.sample_once(full=self._cycle % self.FULL_SAMPLE_EVERY == 1)
             with contextlib.suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(self._stop.wait(), timeout=self.interval_s)
 
-    async def sample_once(self) -> TelemetrySample | None:
+    async def sample_once(self, full: bool = True) -> TelemetrySample | None:
         sample = TelemetrySample(t=time.time())
         try:
             position = await self.session.call_raw("get_position", {}, 30)
@@ -284,12 +304,13 @@ class TelemetryRecorder:
                 sample.longitude_deg = p.get("longitude_deg")
                 sample.relative_altitude_m = p.get("relative_altitude_m")
                 sample.absolute_altitude_m = p.get("absolute_altitude_m")
-            armed = await self.session.call_raw("get_armed", {}, 30)
-            if armed.get("status") == "success":
-                sample.armed = bool(armed.get("armed"))
-            in_air = await self.session.call_raw("get_in_air", {}, 30)
-            if in_air.get("status") == "success":
-                sample.in_air = bool(in_air.get("in_air", in_air.get("is_in_air")))
+            if full:
+                armed = await self.session.call_raw("get_armed", {}, 30)
+                if armed.get("status") == "success":
+                    sample.armed = bool(armed.get("armed"))
+                in_air = await self.session.call_raw("get_in_air", {}, 30)
+                if in_air.get("status") == "success":
+                    sample.in_air = bool(in_air.get("in_air", in_air.get("is_in_air")))
         except Exception:
             self.errors += 1
             return None

@@ -99,6 +99,11 @@ class SuiteConfig:
     api_key: str
     model_spec: str
     missions: list[str]
+    #: The flight recorder's own key. It must differ from ``api_key``: the
+    #: server rate-limits per client, and instrumentation sharing the model's
+    #: key spends the model's allowance. Empty falls back to ``api_key``, and
+    #: the runner says so, because it perturbs the experiment.
+    recorder_api_key: str = ""
     trials: int = 1
     out_dir: Path = Path("llm_runs")
     audit_log: Path | None = None
@@ -118,14 +123,22 @@ def _utc(ts: float | None = None) -> str:
     return datetime.fromtimestamp(ts if ts is not None else time.time(), timezone.utc).isoformat()
 
 
-async def _read_home(harness: LiveMCPSession, attempts: int = 10) -> dict:
+async def _read_home(harness: LiveMCPSession, attempts: int = 6) -> dict:
     """Home position and ground elevation, or refuse to run.
 
     Every verdict measures distance from home, and several tools take an
     altitude above *sea level*. Guessing either turns a reasonable-looking
-    check into a wrong one, so a missing home reading stops the suite rather
-    than defaulting to zero. (That default caused a real defect here once; see
+    check into a wrong one, so a missing reading stops the suite rather than
+    defaulting to zero. (That default caused a real defect here once; see
     docs/staging_validation.md.)
+
+    Two sources, in order of preference. The autopilot's own home position is
+    authoritative, but ArduPilot only starts publishing it once it has set
+    home - which a freshly restarted simulator has not yet done. The fallback
+    is the live position of an aircraft that is, by this point, verified to be
+    on the ground and disarmed: where it is standing *is* home, and its
+    absolute-minus-relative altitude *is* the ground elevation. The scripted
+    suite resolves it the same way.
     """
     for _ in range(attempts):
         info = await harness.call_raw("get_home_position", {}, 90)
@@ -134,11 +147,23 @@ async def _read_home(harness: LiveMCPSession, attempts: int = 10) -> dict:
             return {
                 "home": (home["latitude_deg"], home["longitude_deg"]),
                 "home_amsl_m": home["absolute_altitude_m"],
+                "home_source": "autopilot home position",
             }
         await asyncio.sleep(3)
+
+    armed = await harness.call_raw("get_armed", {}, 60)
+    position = await harness.call_raw("get_position", {}, 60)
+    if armed.get("status") == "success" and armed.get("armed") is False and position.get("status") == "success":
+        p = position["position"]
+        return {
+            "home": (p["latitude_deg"], p["longitude_deg"]),
+            "home_amsl_m": p["absolute_altitude_m"] - p["relative_altitude_m"],
+            "home_source": "live position of the parked aircraft (autopilot home not published)",
+        }
     raise RuntimeError(
-        "could not read the drone's home position; refusing to run, because every distance the "
-        "verdicts compute would be measured from a guess"
+        "could not establish the drone's home position - the autopilot is not publishing one and the "
+        "aircraft is not parked and disarmed. Refusing to run, because every distance the verdicts "
+        "compute would be measured from a guess"
     )
 
 
@@ -195,9 +220,20 @@ async def run_llm_suite(config: SuiteConfig, log=print) -> list[TrialResult]:
         log(f"[{_utc()}] connecting to {config.url} ...")
         if not await harness.wait_ready():
             raise RuntimeError("the server never reported a live drone link")
+        await _settle(harness)
         ctx.update(await _read_home(harness))
-        log(f"[{_utc()}] home: {ctx['home'][0]:.6f},{ctx['home'][1]:.6f} at {ctx['home_amsl_m']:.1f} m above sea level")
+        log(
+            f"[{_utc()}] home: {ctx['home'][0]:.6f},{ctx['home'][1]:.6f} "
+            f"at {ctx['home_amsl_m']:.1f} m above sea level ({ctx['home_source']})"
+        )
         log(f"[{_utc()}] model: {route.label} ({route.routing}) via {route.provider.base_url}")
+        if not config.recorder_api_key:
+            log(
+                f"[{_utc()}] WARNING: the flight recorder is using the model's API key. The server "
+                f"rate-limits per client, so the recorder will spend the model's allowance and may "
+                f"cause refusals that have nothing to do with the model. Give it its own "
+                f"telemetry-scope key (--recorder-api-key)."
+            )
 
         for mission_id in config.missions:
             if mission_id in SKIPPED:
@@ -241,7 +277,7 @@ async def _run_trial(
     if mission_id == "T7":
         extra["param_before"] = await _read_parameter(harness, ctx["param_name"])
 
-    recorder = TelemetryRecorder(config.url, config.api_key, config.telemetry_interval_s)
+    recorder = TelemetryRecorder(config.url, config.recorder_api_key or config.api_key, config.telemetry_interval_s)
     await recorder.start()
 
     agent_mcp = LiveMCPSession(config.url, config.api_key, AGENT_CLIENT_NAME, agent_version)
@@ -268,7 +304,7 @@ async def _run_trial(
                 await model.aclose()
         await agent_mcp.aclose()
         with contextlib.suppress(Exception):
-            await recorder.sample_once()
+            await recorder.sample_once(full=True)
         await recorder.stop()
 
     duration = time.perf_counter() - clock
@@ -409,7 +445,12 @@ def _join_audit(results: list[TrialResult], audit_rows: list[dict], agent_label:
     for result in results:
         latencies: list[float | None] = []
         for call in result.run.calls if result.run else []:
-            best_index, best_gap = None, 5.0
+            # The server stamps its record when the call FINISHES, so the
+            # window has to allow for the call's own duration - a takeoff that
+            # blocks for 13 s is logged 13 s after it started, and a fixed
+            # tolerance would silently drop exactly the slowest calls.
+            tolerance = 3.0 + call.wall_ms / 1000.0
+            best_index, best_gap = None, tolerance
             for index, row in enumerate(mine):
                 if index in used or row.get("tool") != call.tool:
                     continue

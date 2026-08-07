@@ -45,6 +45,13 @@ def main() -> int:
         default=os.environ.get("DRONESERVER_API_KEY", ""),
         help="drone-server API key ($DRONESERVER_API_KEY)",
     )
+    parser.add_argument(
+        "--recorder-api-key",
+        default=os.environ.get("DRONESERVER_RECORDER_API_KEY", ""),
+        help="a SECOND, telemetry-scope drone-server key for the flight recorder "
+        "($DRONESERVER_RECORDER_API_KEY). Strongly recommended: the server rate-limits per client, "
+        "so a recorder sharing the model's key spends the model's allowance",
+    )
     parser.add_argument("--model", default="gpt-5.2", help="model, or provider:model to force a provider")
     parser.add_argument("--missions", default="T1", help="comma-separated ids, e.g. T1,T2,T8 (default T1)")
     parser.add_argument("--trials", type=int, default=1, help="trials per mission")
@@ -104,6 +111,7 @@ def main() -> int:
     config = SuiteConfig(
         url=args.url,
         api_key=args.api_key,
+        recorder_api_key=args.recorder_api_key,
         model_spec=args.model,
         missions=missions,
         trials=args.trials,
@@ -123,6 +131,9 @@ def main() -> int:
 
     print(f"model:    {route.requested_model} via {route.provider.name} ({route.routing})")
     print(f"server:   {args.url} ({'authenticated' if args.api_key else 'ANONYMOUS - telemetry scope only'})")
+    print(
+        f"recorder: {'own telemetry-scope key' if args.recorder_api_key else 'SHARING the model key (see --recorder-api-key)'}"
+    )
     print(f"missions: {', '.join(missions)} x{args.trials}")
     print(f"output:   {out_dir}")
     if args.dry_run:
