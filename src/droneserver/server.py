@@ -37,8 +37,27 @@ def main() -> None:
         run_sse()
 
 
+def _preflight_safety_config() -> None:
+    """Validate safety configuration before serving anything.
+
+    A malformed SAFETY_API_KEYS must stop the server here, not surface for the
+    first time inside the guard during a flight.
+    """
+    from droneserver.safety.auth import validate_api_keys_at_startup
+    from droneserver.safety.config import get_safety_settings
+
+    safety = get_safety_settings()
+    validate_api_keys_at_startup(safety.api_keys)
+    if not safety.enabled:
+        logger.warning(
+            "SAFETY: the safety layer is DISABLED (SAFETY_ENABLED=0). Calls are still "
+            "audited and marked allowed_safety_disabled."
+        )
+
+
 def run_stdio() -> None:
     """Run over stdio (v1: ``python src/server/droneserver.py``). Logs go to stderr."""
+    _preflight_safety_config()
     import droneserver.tools  # noqa: F401  - registration side effect
     from droneserver.app import mcp
 
@@ -47,6 +66,7 @@ def run_stdio() -> None:
 
 def run_sse() -> None:
     """Start the HTTP/SSE MCP server (v1: ``src/server/droneserver_http.py``)."""
+    _preflight_safety_config()
     settings = get_settings()
     host = settings.mcp_host
     port = settings.mcp_port

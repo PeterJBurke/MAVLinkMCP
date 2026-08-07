@@ -56,7 +56,43 @@ def key_fingerprint_of(key: str) -> str:
     return hashlib.sha256(key.encode()).hexdigest()[:12]
 
 
+_PARSED_KEYS: dict[str, dict[str, tuple[str, str]]] = {}
+
+
 def parse_api_keys(spec: str) -> dict[str, tuple[str, str]]:
+    """Parse the key spec into ``{key: (client_id, scope)}``, cached per spec.
+
+    This used to run on EVERY tool call, and a malformed spec raised
+    ValueError from inside the guard - which the guard then caught and (before
+    the fail-closed fix) turned into an unguarded execution. It is now parsed
+    once per distinct spec and validated at startup by
+    :func:`validate_api_keys_at_startup`.
+    """
+    cached = _PARSED_KEYS.get(spec)
+    if cached is not None:
+        return cached
+    parsed = _parse_api_keys_uncached(spec)
+    _PARSED_KEYS[spec] = parsed
+    return parsed
+
+
+def validate_api_keys_at_startup(spec: str) -> None:
+    """Fail loudly at startup on a malformed SAFETY_API_KEYS spec.
+
+    A bad spec must not be discovered for the first time inside the guard on
+    an in-flight tool call.
+    """
+    try:
+        parse_api_keys(spec)
+    except ValueError as e:
+        raise SystemExit(
+            f"SAFETY_API_KEYS is malformed and the server will not start: {e}. "
+            "Expected 'client_id:key:scope,client_id:key:scope' with scope in "
+            f"{sorted(SCOPE_ORDER)}."
+        ) from e
+
+
+def _parse_api_keys_uncached(spec: str) -> dict[str, tuple[str, str]]:
     """Parse the key spec into ``{key: (client_id, scope)}``."""
     registry: dict[str, tuple[str, str]] = {}
     for entry in (e.strip() for e in (spec or "").split(",") if e.strip()):

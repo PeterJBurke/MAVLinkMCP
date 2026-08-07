@@ -87,7 +87,25 @@ class SafetySettings(BaseSettings):
         return f"SafetySettings(enabled={self.enabled}, api_keys=<{len(self.api_keys.split(',')) if self.api_keys else 0} configured>)"
 
 
+_CACHED: SafetySettings | None = None
+
+
 def get_safety_settings() -> SafetySettings:
-    """Read safety settings fresh from the environment (not cached, like
-    :func:`droneserver.config.get_settings`)."""
-    return SafetySettings()
+    """Return the safety settings, parsed ONCE and cached.
+
+    Caching is load-bearing, not an optimisation: the uncached version re-read
+    the ``.env`` file from disk on every single tool call, which (a) dominated
+    the measured guard cost and (b) meant a mid-flight edit to ``.env`` could
+    silently change the safety envelope between two calls. Call
+    :func:`reset_safety_settings` to re-read (tests, or a deliberate reload).
+    """
+    global _CACHED
+    if _CACHED is None:
+        _CACHED = SafetySettings()
+    return _CACHED
+
+
+def reset_safety_settings() -> None:
+    """Drop the cached settings so the next call re-reads the environment."""
+    global _CACHED
+    _CACHED = None
