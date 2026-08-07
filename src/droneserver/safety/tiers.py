@@ -222,7 +222,15 @@ def _clear_fence_in_air(args: dict, state: dict) -> tuple[bool, str | None]:
 
 def _fence_write_in_air(args: dict, state: dict) -> tuple[bool, str | None]:
     """S3: writing a NEW fence in flight redefines containment mid-mission -
-    as consequential as clearing it."""
+    as consequential as clearing it.
+
+    Only an actual WRITE escalates. ``raw_geofence_transfer`` also serves
+    downloads, which are read-only; escalating those would make verifying the
+    fence harder than changing it.
+    """
+    action = str(args.get("action", "upload")).lower()
+    if action not in ("upload", ""):
+        return False, None
     if not _airborne_or_unknown(state):
         return False, None
     return True, "Replaces the drone's geofence while it is flying, redefining its containment."

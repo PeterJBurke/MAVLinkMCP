@@ -56,7 +56,27 @@ _STATE_DEPENDENT = (
     NAVIGATION_TOOLS
     | MISSION_START_TOOLS
     | MISSION_UPLOAD_TOOLS
-    | {"takeoff", "disarm_drone", "arm_drone", "clear_geofence", "land", "reposition", "do_orbit", "flight_altitudes"}
+    | {
+        "takeoff",
+        "disarm_drone",
+        "arm_drone",
+        "land",
+        "reposition",
+        "do_orbit",
+        "flight_altitudes",
+        # Tools whose TIER depends on whether we are flying must have their
+        # state REFRESHED, not read from a stale snapshot. An unrefreshed
+        # snapshot reads "unknown", which the fail-safe escalation (B4) treats
+        # as airborne - so every one of these demanded a confirmation token
+        # even sitting on the ground. Caught by the SITL sweep: 7 previously
+        # passing tests failed on it.
+        "clear_geofence",
+        "upload_geofence",
+        "raw_geofence_transfer",
+        "import_qgc_mission",
+        "calibrate",
+        "cancel_calibration",
+    }
 )
 
 
