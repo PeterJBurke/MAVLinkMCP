@@ -293,3 +293,96 @@ and `camera_storage` escalates for `format`. The tier table handles this with
 argument-aware escalation predicates rather than by splitting the tools, which
 would have undone the grouping economy. See
 [safety_review.md](safety_review.md) §3.
+
+## managed_mission (v2 Phase 4, 3 tools) — the long-mission answer
+
+`start_managed_mission`, `get_mission_status`, `control_managed_mission`.
+
+**The problem (R3).** An LLM session is a conversation; a survey flight is
+twenty minutes. If the model has to stay attached and poll every step, the
+mission is capped by the session — which is exactly the ceiling the reviewer
+identified.
+
+**The design.** These three tools invert the relationship: the model *submits*
+a mission and the **server** flies it. `start_managed_mission` returns a
+`mission_id` in well under a second. The client may then disconnect entirely —
+process gone — and a *different* client can reattach later, call
+`get_mission_status`, and receive the current phase, progress, position,
+battery, flight mode, elapsed time, auto-actions fired, and the full event
+history it missed. Demonstrated end-to-end in
+[long_mission_demo.md](long_mission_demo.md).
+
+**Why three tools and not one.** Submitting, observing and steering are
+different intents with disjoint parameters and different tiers:
+`get_mission_status` is `read_only` (a telemetry-scope client can watch a
+mission it cannot command), while the other two are `normal`. Collapsing them
+would have forced the read-only observer up to control scope.
+
+### State machine
+
+```
+SUBMITTED → VALIDATING → UPLOADING → ARMING → RUNNING → COMPLETED
+                                                 ├→ PAUSED ⇄ RUNNING
+                                                 └→ RETURNING → LANDING → COMPLETED
+   (any non-terminal phase) → FAILED | ABORTED
+```
+
+Transitions are declared in one table (`missions/state.py:ALLOWED`) and an
+illegal transition is refused and logged rather than silently applied.
+
+### What survives a server restart
+
+The mission record is checkpointed to JSON (atomic write) after **every**
+event. On startup the runner reloads it and, if the mission is still active,
+reattaches the monitor.
+
+| Survives | Does not survive |
+|---|---|
+| Mission id, phase, progress, waypoint counts | The in-flight `asyncio` task (it is recreated) |
+| Full event history (capped at `MISSION_MAX_EVENTS`) | Pending pause/resume/abort requests not yet applied |
+| Last known position, battery, flight mode, armed state | Sub-poll-interval timing precision |
+| Auto-actions already fired (so they do not re-fire) | — |
+
+The **flight itself never depended on the server**: the mission lives on the
+autopilot once uploaded, so a server restart interrupts *monitoring and
+auto-actions*, not the aircraft. That gap is the honest limitation — during a
+restart no server-side auto-action can fire, and the autopilot's own failsafes
+are the only protection.
+
+### Auto-actions (server-side, no model in the loop)
+
+| Event | Default | Setting |
+|---|---|---|
+| Battery ≤ 25 % | `rtl` | `MISSION_LOW_BATTERY_ACTION`, `MISSION_LOW_BATTERY_THRESHOLD` |
+| Battery ≤ 10 % | `land` (always) | `MISSION_CRITICAL_BATTERY_THRESHOLD` |
+| Geofence breach | `rtl` | `MISSION_GEOFENCE_BREACH_ACTION` |
+| MAVLink link loss | `none` (autopilot failsafe owns it) | `MISSION_LINK_LOSS_ACTION`, `MISSION_LINK_LOSS_GRACE_S` |
+
+Each firing is recorded as a `auto_action` mission event, written to the
+append-only audit log with its triggering reason, and reported in
+`get_mission_status`. An action fires at most once per distinct reason.
+Link loss defaults to `none` deliberately: the autopilot is closer to the
+problem and its own failsafe is better placed to act than a server that has
+just lost contact.
+
+### Firmware note discovered here
+
+**ArduCopter will not lift off in AUTO without RC throttle input** — armed in
+AUTO with a `NAV_TAKEOFF` item, the vehicle sits at 0 m in MISSION mode
+indefinitely. The runner therefore takes off in GUIDED (`action.takeoff`),
+waits for the target altitude, and only then starts the AUTO mission, which is
+what a GCS does. Additionally the raw mission layout must be
+`seq 0 = HOME placeholder (current=0)`, `seq 1 = takeoff (current=1)`: putting
+the takeoff at seq 0 uploads fine but `start_mission` then fails with
+`UNKNOWN`. Both measured on ArduCopter 4.5.7 SITL.
+
+### Safety-layer interaction (noted for the pending review)
+
+The three tools are classified in the tier table like every other tool
+(`get_mission_status` read-only, the other two normal) and pass through the
+full guard. **However**, once a mission is running, the runner's own MavSDK
+calls — including auto-action RTL/land — do **not** pass through the tool
+guard, because they are not tool calls. Mitigations already in place: the
+whole mission is validated against the *same* server-side geofence before
+upload, the runner only ever issues RTL/land/hold (never a new target), and
+every action is audited. No safety-layer code was modified for Phase 4.

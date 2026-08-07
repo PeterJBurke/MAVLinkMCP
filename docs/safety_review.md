@@ -263,6 +263,26 @@ uv run pytest -m sitl tests/integration/test_adversarial_sitl.py
 uv run pytest -m sitl tests/integration/test_safety_flight_sitl.py
 ```
 
+## 10a. Phase 4 addition — the mission runner (additive, no safety code changed)
+
+Phase 4 added a server-side mission runner (`src/droneserver/missions/`). It
+does **not** modify any safety module. Two things a reviewer should look at:
+
+- **Its MavSDK calls do not pass through the tool guard.** The three mission
+  *tools* are tiered and guarded normally, but once a mission is running the
+  runner talks to MavSDK directly, including for auto-actions. It only ever
+  issues RTL / land / hold — never a new navigation target — and it validates
+  the entire mission against the same server-side geofence
+  (`safety.geofence.check_mission`) *before* upload. Every action is audited.
+- **Auto-actions act without a model in the loop** (low battery → RTL,
+  geofence breach → RTL, link loss → autopilot's own failsafe by default).
+  Thresholds and actions are configurable (`MISSION_*`); defaults are
+  conservative. See docs/tool_groups.md for the table.
+
+**Reviewer question:** should the runner's auto-actions be routed through the
+validation pipeline too, or is "RTL/land/hold only, fence-validated up front,
+fully audited" the right boundary?
+
 ## 11. Known limitations / deliberately deferred
 
 1. **Tokens are in-memory and per-process.** A server restart invalidates
