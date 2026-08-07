@@ -63,9 +63,10 @@ python_files = ["test_*.py"]
 python_functions = ["test_*"]
 # sitl-marked integration tests are excluded by default (and in CI);
 # run them explicitly: `uv run pytest -m sitl tests/integration`
-addopts = "-v --tb=short -m 'not sitl'"
+addopts = "-v --tb=short -m 'not sitl and not longmission'"
 markers = [
     "sitl: integration test requiring the local docker ArduPilot SITL (see tests/integration/README.md)",
+    "longmission: >10-minute SITL demonstration mission (slow; excluded from default and CI runs) - see docs/long_mission_demo.md",
     "px4: requires a PX4 SITL - auto-skipped until llmuavpx4 exists; ArduPilot result recorded in docs/firmware_notes.csv",
 ]
 
