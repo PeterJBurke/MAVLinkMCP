@@ -21,10 +21,25 @@ Schema (v1)::
       "rule": "bounds.max_altitude"|null,   # set when rejected
       "outcome_status": "success"|"failed"|…|null,  # tool's own status field
       "outcome_error": "…"|null,
-      "latency_ms": 12.3,        # end-to-end, including safety checks
+      "latency_ms": 12.3,        # entry -> result ready (see note below)
       "safety_ms": 1.4,          # time spent in the safety layer alone
+      "audit_write_ms": 0.9,     # measured cost of the PREVIOUS durable write
+      "guard_error": null,       # set when the guard itself failed (fail-closed)
       "guards": {"validation": true, "geofence": true, …}  # config in force
     }
+
+Timing semantics (important for anything quoting these numbers):
+
+- ``latency_ms`` starts at the very first statement of the guard - before the
+  settings are loaded - and ends when the tool's result is ready. It therefore
+  includes every check and the tool's own work.
+- It excludes this record's own fsync'd write, because that write cannot be
+  timed before it happens. That cost is measured and reported on the NEXT
+  record as ``audit_write_ms``. Over a run, mean(latency_ms) +
+  mean(audit_write_ms) is the true end-to-end cost; the one-record lag
+  cancels.
+- ``verdict`` is ``allowed_safety_disabled`` when the layer was switched off,
+  so a guardrails-off experiment is still labelled in its own data.
 """
 
 import json
@@ -74,6 +89,8 @@ class AuditRecord:
     outcome_error: str | None = None
     latency_ms: float = 0.0
     safety_ms: float = 0.0
+    audit_write_ms: float = 0.0
+    guard_error: str | None = None
     guards: dict = field(default_factory=dict)
 
     def to_json(self) -> str:
@@ -95,6 +112,8 @@ class AuditRecord:
                 "outcome_error": self.outcome_error,
                 "latency_ms": round(self.latency_ms, 3),
                 "safety_ms": round(self.safety_ms, 3),
+                "audit_write_ms": round(self.audit_write_ms, 3),
+                "guard_error": self.guard_error,
                 "guards": self.guards,
             },
             default=str,

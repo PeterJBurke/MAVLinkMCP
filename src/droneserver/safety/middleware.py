@@ -69,6 +69,8 @@ class SafetyLayer:
         self.state_tracker = StateTracker()
         self._audit: AuditLog | None = None
         self._audit_path: str | None = None
+        #: Measured duration of the previous durable audit write (ms).
+        self.last_audit_write_ms: float = 0.0
 
     def audit_log(self, s: SafetySettings) -> AuditLog:
         from droneserver.config import get_settings
@@ -283,21 +285,49 @@ def guard(fn: Callable) -> Callable:
 
     @functools.wraps(fn)
     async def wrapper(*fn_args, **kwargs):
-        s = get_safety_settings()
+        # The timer starts HERE, before anything else the guard does, so the
+        # reported latency includes the settings load and every check. (It
+        # used to start after the settings load, which - when settings were
+        # re-read from disk each call - excluded the dominant fixed cost.)
         started = time.perf_counter()
-        if not s.enabled:
-            return await fn(*fn_args, **kwargs)
-
+        s = get_safety_settings()
         ctx = kwargs.get("ctx") or next((a for a in fn_args if hasattr(a, "request_context")), None)
+
+        if not s.enabled:
+            # A guardrails-off run must still be self-documenting: audit the
+            # call, flagged, so an experiment cannot silently produce
+            # unlabelled data.
+            return await _run_unguarded(fn, fn_args, kwargs, tool_name, ctx, s, started)
+
         # Arguments as the caller supplied them (ctx is transport plumbing).
         call_args = {k: v for k, v in kwargs.items() if k != "ctx"}
 
         safety_started = time.perf_counter()
+        guard_error: str | None = None
         try:
             rejection, tier, client, _state = await _evaluate(tool_name, call_args, ctx, s)
-        except Exception as e:  # a broken guard must not brick the server
+        except Exception as e:
+            # FAIL CLOSED. An exception inside the guard means we do not know
+            # whether this call is safe, so we refuse it. (This previously
+            # executed the tool unguarded - the single worst defect the
+            # independent review found.)
             logger.exception(f"safety layer error on {tool_name}: {e}")
-            rejection, tier, client = None, Tier.NORMAL, auth_mod.ANONYMOUS
+            guard_error = f"{type(e).__name__}: {e}"
+            tier, client = Tier.CRITICAL, auth_mod.ANONYMOUS
+            rejection = {
+                "status": "rejected",
+                "error": (
+                    "The safety layer failed while evaluating this call, so the call was "
+                    "refused. This is a server fault, not a problem with your request."
+                ),
+                "rule": "guard.internal_error",
+                "remedy": (
+                    "Retry once. If it fails again, stop commanding the drone and tell the "
+                    "operator - the safety layer needs attention. Read-only telemetry tools "
+                    "are unaffected by the failing check only if they also succeed."
+                ),
+                "safety_layer": "droneserver.safety",
+            }
         safety_ms = (time.perf_counter() - safety_started) * 1000
 
         record = AuditRecord(
@@ -312,6 +342,7 @@ def guard(fn: Callable) -> Callable:
             verdict="allowed",
             guards=_guards_in_force(s),
             safety_ms=safety_ms,
+            guard_error=guard_error,
         )
 
         if rejection is not None:
@@ -359,10 +390,55 @@ def guard(fn: Callable) -> Callable:
     return wrapper
 
 
+async def _run_unguarded(fn, fn_args, kwargs, tool_name: str, ctx, s: SafetySettings, started: float):
+    """Execute a tool with the safety layer disabled - but still audit it."""
+    call_args = {k: v for k, v in kwargs.items() if k != "ctx"}
+    record = AuditRecord(
+        call_id=new_call_id(),
+        client_id="safety_disabled",
+        authenticated=False,
+        key_fp="",
+        model=_reported_model(ctx),
+        tool=tool_name,
+        tier="unclassified",
+        args=call_args,
+        verdict="allowed_safety_disabled",
+        guards=_guards_in_force(s),
+        safety_ms=0.0,
+    )
+    try:
+        result = await fn(*fn_args, **kwargs)
+    except Exception as e:
+        record.verdict = "error"
+        record.outcome_error = str(e)
+        record.latency_ms = (time.perf_counter() - started) * 1000
+        _write_audit(record, s)
+        raise
+    if isinstance(result, dict):
+        record.outcome_status = result.get("status")
+        record.outcome_error = result.get("error")
+    record.latency_ms = (time.perf_counter() - started) * 1000
+    _write_audit(record, s)
+    return result
+
+
 def _write_audit(record: AuditRecord, s: SafetySettings) -> None:
+    """Write the record and measure the durable-write cost.
+
+    ``latency_ms`` covers entry -> result ready, i.e. everything except this
+    record's own fsync'd write. That write is measured here and reported on
+    the NEXT record as ``audit_write_ms``; over any run the mean of
+    ``latency_ms + audit_write_ms`` is the true end-to-end cost (the one-record
+    lag cancels). This is stated in the audit schema and in
+    docs/safety_review.md so the paper's numbers are not quietly optimistic.
+    """
     if not s.audit_enabled:
         return
+    record.audit_write_ms = LAYER.last_audit_write_ms
+    write_started = time.perf_counter()
     try:
         LAYER.audit_log(s).write(record)
     except Exception:
         logger.exception("failed to write audit record")
+    finally:
+        LAYER.last_audit_write_ms = round((time.perf_counter() - write_started) * 1000, 3)
