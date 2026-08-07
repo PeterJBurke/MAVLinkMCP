@@ -73,13 +73,16 @@ def build_rally_items(points: list) -> list[MissionItem]:
     return items
 
 
-def build_raw_items(dicts: list, mission_type: int) -> list[MissionItem]:
+def build_raw_items(dicts: list, mission_type: int, force_first_current: bool = True) -> list[MissionItem]:
     """Expert path: full raw MAVLink mission items from dicts.
 
     Each dict: {"seq", "frame", "command", "current", "autocontinue",
     "param1".."param4", "x" (lat*1e7 int), "y" (lon*1e7 int), "z"}.
-    ``mission_type`` is forced to the given transfer type; ``current`` of the
-    first item is forced to 1 (MavSDK transfer validation).
+    ``mission_type`` is forced to the given transfer type. ``current`` of the
+    first item is forced to 1 (MavSDK transfer validation) unless
+    ``force_first_current=False`` - ArduPilot missions want seq 0 to be a HOME
+    placeholder with ``current=0`` and the flag on the first real item (the
+    layout QGroundControl produces).
     """
     if not dicts:
         raise ValueError("at least one mission item is required")
@@ -94,7 +97,7 @@ def build_raw_items(dicts: list, mission_type: int) -> list[MissionItem]:
                     int(d.get("seq", i)),
                     int(d["frame"]),
                     int(d["command"]),
-                    1 if i == 0 else int(d.get("current", 0)),
+                    1 if (i == 0 and force_first_current) else int(d.get("current", 0)),
                     int(d.get("autocontinue", 1)),
                     _param(d, "param1"),
                     _param(d, "param2"),

@@ -80,6 +80,20 @@ async def connect_drone_background(
             logger.info("=" * 60)
             # Signal that connection is ready!
             connection_ready.set()
+            # Phase 4: if a managed mission was in flight when this server was
+            # last stopped, reattach the monitor to it.
+            try:
+                from droneserver.missions.runner import RUNNER
+
+                resumed = RUNNER.resume_if_active(drone)
+                if resumed is not None and resumed.resumed_after_restart:
+                    logger.info(
+                        "Resumed monitoring managed mission %s (phase %s)",
+                        resumed.mission_id,
+                        resumed.phase,
+                    )
+            except Exception:
+                logger.exception("failed to resume managed mission monitoring")
             break
 
 
