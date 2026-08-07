@@ -218,7 +218,14 @@ def check_preconditions(tool: str, args: dict, state: dict, s: SafetySettings) -
             "Call arm_drone first, then takeoff.",
         )
 
-    if tool in NAVIGATION_TOOLS and s.require_in_air_for_navigation:
+    # offboard_control("stop"/"status") must work on the ground: stopping and
+    # querying are how a caller recovers from a bad state, and refusing them
+    # would be a usability trap. Only "start" actually commands motion.
+    navigation = tool in NAVIGATION_TOOLS
+    if tool == "offboard_control" and str(args.get("action", "")).lower() != "start":
+        navigation = False
+
+    if navigation and s.require_in_air_for_navigation:
         if not in_air:
             return Rejection(
                 "precondition.navigation_requires_airborne",

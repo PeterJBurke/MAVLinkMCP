@@ -19,33 +19,29 @@ pytestmark = pytest.mark.sitl
 # ------------------------------------------------------------ error paths
 
 
-def test_start_without_setpoint_rejected(drone_tools):
-    result = drone_tools.call("offboard_control", action="start")
-    assert result["status"] == "failed"
-    assert "No setpoint" in result["error"]
+def test_offboard_motion_blocked_on_the_ground(drone_tools):
+    """With the safety layer active, offboard motion tools are stopped by the
+    navigation precondition before the tool's own validation runs. Argument
+    validation is exercised in flight (test_argument_validation_in_flight)."""
+    for tool, kwargs in (
+        ("offboard_control", dict(action="start")),
+        ("offboard_set_velocity_ned", dict(north_m_s=1.0, east_m_s=0.0)),
+        ("offboard_set_attitude", dict(roll=0, pitch=0, yaw=0, thrust=0.5)),
+    ):
+        result = drone_tools.call(tool, **kwargs)
+        assert result["status"] == "rejected", (tool, result)
+        assert result["rule"] == "precondition.navigation_requires_airborne", (tool, result)
 
 
-def test_bad_action_rejected(drone_tools):
-    result = drone_tools.call("offboard_control", action="hover")
-    assert result["status"] == "failed"
+def test_offboard_status_and_stop_work_on_the_ground(drone_tools):
+    """Querying and stopping must NOT require being airborne - they are how a
+    caller recovers from a bad state."""
+    status = drone_tools.call("offboard_control", action="status")
+    assert status["status"] == "success", status
+    assert status["offboard_active"] is False
 
-
-def test_overspeed_setpoint_rejected(drone_tools):
-    result = drone_tools.call("offboard_set_velocity_ned", north_m_s=50.0, east_m_s=0.0)
-    assert result["status"] == "failed"
-    assert "north_m_s" in result["error"]
-
-
-def test_attitude_thrust_out_of_range_rejected(drone_tools):
-    result = drone_tools.call("offboard_set_attitude", roll=0, pitch=0, yaw=0, thrust=1.5)
-    assert result["status"] == "failed"
-    assert "thrust" in result["error"]
-
-
-def test_stale_timeout_out_of_range_rejected(drone_tools):
-    result = drone_tools.call("offboard_set_velocity_ned", north_m_s=1.0, east_m_s=0.0, stale_timeout_s=600)
-    assert result["status"] == "failed"
-    assert "stale_timeout_s" in result["error"]
+    bad = drone_tools.call("offboard_control", action="hover")
+    assert bad["status"] == "failed", bad  # the tool's own action validation
 
 
 # ------------------------------------------------------------ flight
@@ -115,8 +111,27 @@ def test_remaining_setpoint_kinds_accepted(drone_tools):
     ]
     for tool, kwargs in calls:
         result = drone_tools.call(tool, **kwargs)
+        # offboard_set_actuator_control is tier CRITICAL (raw actuator
+        # override), so it needs the confirmation round-trip first.
+        if result.get("status") == "confirmation_required":
+            result = drone_tools.call(tool, **kwargs, confirm_token=result["confirm_token"])
         assert result["status"] == "success", (tool, result)
         time.sleep(1)
+
+
+def test_argument_validation_in_flight(drone_tools):
+    """The tools' own argument validation, reached now that we are airborne."""
+    over = drone_tools.call("offboard_set_velocity_ned", north_m_s=50.0, east_m_s=0.0)
+    assert over["status"] == "rejected", over  # safety bounds catch it first
+    assert over["rule"] == "bounds.max_speed"
+
+    thrust = drone_tools.call("offboard_set_attitude", roll=0, pitch=0, yaw=0, thrust=1.5)
+    assert thrust["status"] == "failed", thrust
+    assert "thrust" in thrust["error"]
+
+    stale = drone_tools.call("offboard_set_velocity_ned", north_m_s=1.0, east_m_s=0.0, stale_timeout_s=600)
+    assert stale["status"] == "failed", stale
+    assert "stale_timeout_s" in stale["error"]
 
 
 def test_stale_setpoint_auto_brakes(drone_tools):
