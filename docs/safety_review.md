@@ -57,6 +57,28 @@ for exactly what changed and what is still waiting on your ruling.
    token, and whether the mission runner's auto-actions should route through
    the validation pipeline.
 
+### Two defects the fixes themselves introduced (found by the SITL sweep, fixed)
+
+Recorded because they are exactly the kind of thing this review exists to
+catch, and both were mine:
+
+1. **The S3 fence-write escalation over-fired.** `upload_geofence`,
+   `raw_geofence_transfer` and `import_qgc_mission` were not in the
+   state-refresh set, so their vehicle state read `unknown`, and the B4
+   fail-safe ("unknown counts as airborne") escalated them permanently - a
+   confirmation token was demanded for a fence upload with the drone sitting
+   disarmed on the ground. They are now refreshed and escalate only when
+   genuinely airborne; a fence *download* no longer counts as a write at all.
+   Over-strict rather than unsafe, but it would have been the first thing you
+   hit. 7 SITL tests caught it.
+2. **The new B5 imported-plan check had the very altitude-frame bug it was
+   meant to guard against.** It compared each QGC item's `z` against the
+   ceiling as if it were height above home; a plan's seq-0 HOME placeholder is
+   AMSL (584 m at the SITL field), so every valid plan was rejected. It is now
+   frame-aware: seq 0 skipped, frames 0/5 converted from AMSL using the known
+   home altitude, 3/6/10/11 used as-is, and an AMSL item with no known home has
+   its horizontal position checked but not its altitude.
+
 ### Where I disagree with the reviewer
 
 Nothing material. One note: the reviewer listed the ROI target of
