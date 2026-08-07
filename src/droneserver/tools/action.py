@@ -54,10 +54,24 @@ async def move_to_relative(ctx: Context, north_m: float, east_m: float, down_m: 
     """
     Move the drone relative to the current position using ArduPilot's GUIDED mode.
 
+    IMPORTANT: This function RETURNS IMMEDIATELY, as soon as the command has been
+    accepted. It does NOT wait for the drone to arrive. When it returns, the drone
+    has barely started moving and is still in flight toward the target.
+
+    To find out when the drone has actually arrived, poll check_arrival() with the
+    target coordinates until it reports "arrived", or use monitor_flight(). Do not
+    issue the next navigation command - and in particular do not command a landing
+    or a return-to-launch - until arrival has been confirmed, or the drone will
+    abandon this move part-way through.
+
+    (Contrast takeoff(), which by default DOES block until the target altitude is
+    reached.)
+
     ArduPilot automatically enters GUIDED mode when receiving goto_location commands
     (as long as the drone is armed). No manual mode switching required.
 
-    The drone must be armed and in the air. Waits for connection if not ready.
+    The drone must be armed and in the air. Waits for a drone CONNECTION if one is
+    not yet established - that wait is about the link, not about the flight.
 
     Args:
         ctx (Context): the context.

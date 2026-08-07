@@ -21,12 +21,18 @@ hand, with a note saying where they came from.
 
 import argparse
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
 
 CATALOGUE = "https://openrouter.ai/api/v1/models"
+#: xAI publishes its own prices, so we take them from the vendor rather than
+#: from a reseller's listing. Its units are ten-millionths of a dollar per
+#: token; dividing by 10,000 gives the dollars-per-million everyone quotes.
+XAI_CATALOGUE = "https://api.x.ai/v1/language-models"
+XAI_UNITS_PER_USD_PER_MILLION = 10_000
 DEFAULT_OUT = Path("docs/model_prices.json")
 
 
@@ -63,9 +69,17 @@ def main() -> int:
         bare = entry["id"].split("/")[-1]
         prices.setdefault(bare, row)
 
+    sources = [CATALOGUE]
+    xai_key = os.environ.get("XAI_API_KEY", "").strip()
+    if xai_key:
+        added = _merge_xai(prices, xai_key, args.timeout_s)
+        if added:
+            sources.append(XAI_CATALOGUE)
+            print(f"merged {added} models priced directly by xAI")
+
     blob = {
         "fetched_utc": datetime.now(timezone.utc).isoformat(),
-        "source": CATALOGUE,
+        "source": sources,
         "units": "USD per 1,000,000 tokens",
         "note": (
             "Prices go stale. Providers change them without notice, and OpenRouter's listing for a "
@@ -84,6 +98,46 @@ def main() -> int:
         row = prices.get(args.show) or prices.get(args.show.split("/")[-1])
         print(f"{args.show}: {json.dumps(row) if row else 'not listed'}")
     return 0
+
+
+def _merge_xai(prices: dict, api_key: str, timeout_s: float) -> int:
+    """Add xAI's own published prices, which cover models no reseller lists.
+
+    The grok-4.20 reasoning/non-reasoning ablation pair, in particular, does
+    not appear in OpenRouter's catalogue under those names, and the harness
+    refuses to fly a model it cannot price. Taking the numbers from the vendor
+    is better than aliasing them onto a similar model and hoping.
+    """
+    try:
+        response = httpx.get(XAI_CATALOGUE, headers={"Authorization": f"Bearer {api_key}"}, timeout=timeout_s)
+        response.raise_for_status()
+        catalogue = response.json()
+    except Exception as e:
+        print(f"could not read xAI prices ({type(e).__name__}); leaving them to the reseller listing")
+        return 0
+
+    added = 0
+    for entry in catalogue.get("models") or catalogue.get("data") or []:
+        name = entry.get("id")
+        if not name:
+            continue
+        try:
+            row = {
+                "input": float(entry["prompt_text_token_price"]) / XAI_UNITS_PER_USD_PER_MILLION,
+                "output": float(entry["completion_text_token_price"]) / XAI_UNITS_PER_USD_PER_MILLION,
+                "cached_input": float(entry.get("cached_prompt_text_token_price") or 0.0)
+                / XAI_UNITS_PER_USD_PER_MILLION,
+                "supports_tools": True,
+                "priced_by": "xai",
+            }
+        except (KeyError, TypeError, ValueError):
+            continue
+        if row["input"] <= 0 and row["output"] <= 0:
+            continue
+        prices[name] = row  # the vendor wins over a reseller listing
+        prices.setdefault(f"xai/{name}", row)
+        added += 1
+    return added
 
 
 if __name__ == "__main__":

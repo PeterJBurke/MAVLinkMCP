@@ -173,8 +173,18 @@ PROVIDERS: dict[str, ProviderSpec] = {
     "anthropic": ProviderSpec(
         "anthropic", "anthropic", "https://api.anthropic.com/v1", "ANTHROPIC_API_KEY", "anthropic"
     ),
+    # Google's OWN endpoint, which serves an OpenAI-shaped surface alongside
+    # its native one. This is still a direct call to Google - not an
+    # aggregator - so it satisfies the "direct APIs preferred" rule while
+    # needing no separate adapter. The trade-off is real and worth knowing:
+    # the compatibility surface exposes fewer Gemini-specific controls than
+    # the native API, so anything needing those will want a native adapter.
     "google": ProviderSpec(
-        "google", "google", "https://generativelanguage.googleapis.com/v1beta", "GOOGLE_API_KEY", "google"
+        "google",
+        "openai",
+        "https://generativelanguage.googleapis.com/v1beta/openai",
+        "GEMINI_API_KEY",
+        "google",
     ),
     # Aggregator: last resort, per the Plan 04 routing policy.
     "openrouter": ProviderSpec("openrouter", "openai", "https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
@@ -523,11 +533,202 @@ class OpenAICompatibleSession(ModelSession):
         await self._http.aclose()
 
 
+class AnthropicSession(ModelSession):
+    """Anthropic's Messages API, which is its own shape rather than OpenAI's.
+
+    Four differences matter enough to name:
+
+    1. **The system prompt is a top-level field**, not a message.
+    2. **Tool results go back as a *user* message** containing one
+       ``tool_result`` block per call - and every call in an assistant turn
+       must be answered in a *single* user message. Sending one message per
+       result is rejected. This class buffers them and flushes on the next
+       turn.
+    3. **The assistant's content is a list of blocks**, and it is stored back
+       verbatim. That matters beyond tidiness: with extended thinking enabled,
+       dropping the thinking blocks silently degrades tool use.
+    4. **``max_tokens`` is required**, not optional.
+
+    Prompt caching is requested explicitly. The drone server publishes 98 tool
+    schemas - roughly 22,000 tokens re-sent every single turn - and without a
+    cache breakpoint on the tools and the system prompt, a mission costs
+    something like an order of magnitude more than it should.
+    """
+
+    MAX_ATTEMPTS = 4
+    RETRY_STATUS = {408, 409, 429, 500, 502, 503, 504, 529}
+    API_VERSION = "2023-06-01"
+
+    def __init__(
+        self,
+        route: Route,
+        api_key: str,
+        *,
+        temperature: float | None = None,
+        reasoning_effort: str | None = None,
+        max_output_tokens: int | None = None,
+        timeout_s: float = 240.0,
+        parallel_tool_calls: bool | None = True,
+        tool_choice: str | None = "auto",
+        endpoint_only: list[str] | None = None,
+        pinned_quantization: str = "",
+    ) -> None:
+        self.route = route
+        self.provider = route.provider.name
+        self.model = route.requested_model
+        self._wire_model = route.wire_model
+        self._temperature = temperature
+        self._reasoning_effort = reasoning_effort
+        self._max_output_tokens = max_output_tokens or 8192
+        self._parallel_tool_calls = parallel_tool_calls
+        self._tool_choice = tool_choice or "auto"
+        self._pinned_quantization = pinned_quantization
+        self._system = ""
+        self._messages: list[dict] = []
+        self._pending_results: list[dict] = []
+        self._deadline_s = timeout_s
+        self._http = httpx.AsyncClient(
+            base_url=route.provider.base_url,
+            headers={
+                "x-api-key": api_key,
+                "anthropic-version": self.API_VERSION,
+                "content-type": "application/json",
+            },
+            timeout=httpx.Timeout(connect=20.0, read=timeout_s, write=60.0, pool=60.0),
+        )
+
+    def start(self, system_prompt: str, user_prompt: str) -> None:
+        self._system = system_prompt
+        self._messages = [{"role": "user", "content": user_prompt}]
+        self._pending_results = []
+
+    def record_tool_result(self, call: ToolCall, result: Any) -> None:
+        content = result if isinstance(result, str) else json.dumps(result, default=str)
+        self._pending_results.append({"type": "tool_result", "tool_use_id": call.call_id, "content": content})
+
+    @property
+    def messages(self) -> list:
+        return self._messages
+
+    def _flush_results(self) -> None:
+        if self._pending_results:
+            self._messages.append({"role": "user", "content": self._pending_results})
+            self._pending_results = []
+
+    def _body(self, tools: list[ToolSpec]) -> dict:
+        wire_tools = [{"name": t.name, "description": t.description, "input_schema": t.parameters} for t in tools]
+        if wire_tools:
+            # One breakpoint at the end of the tool list caches all of them.
+            wire_tools[-1] = {**wire_tools[-1], "cache_control": {"type": "ephemeral"}}
+        body: dict[str, Any] = {
+            "model": self._wire_model,
+            "max_tokens": self._max_output_tokens,
+            "system": [{"type": "text", "text": self._system, "cache_control": {"type": "ephemeral"}}],
+            "messages": self._messages,
+            "tools": wire_tools,
+            # Always explicit, like every other provider in the matrix.
+            "tool_choice": {
+                "type": self._tool_choice,
+                "disable_parallel_tool_use": not self._parallel_tool_calls,
+            },
+        }
+        if self._temperature is not None:
+            body["temperature"] = self._temperature
+        if self._reasoning_effort:
+            # Extended thinking needs a token budget, and temperature must be
+            # left alone when it is on.
+            budget = {"low": 2048, "medium": 8192, "high": 16384}.get(self._reasoning_effort, 8192)
+            body["thinking"] = {"type": "enabled", "budget_tokens": budget}
+            body["max_tokens"] = max(self._max_output_tokens, budget + 4096)
+            body.pop("temperature", None)
+            body["tool_choice"] = {"type": "auto"}  # parallel toggle is invalid with thinking
+        return body
+
+    async def next_turn(self, tools: list[ToolSpec]) -> ModelTurn:
+        self._flush_results()
+        body = self._body(tools)
+        wait_ms = 0.0
+        last_error = ""
+        for attempt in range(1, self.MAX_ATTEMPTS + 1):
+            clock = time.perf_counter()
+            try:
+                response = await asyncio.wait_for(self._http.post("/messages", json=body), timeout=self._deadline_s)
+            except (httpx.HTTPError, asyncio.TimeoutError) as e:
+                last_error = (
+                    f"no reply within {self._deadline_s:.0f}s"
+                    if isinstance(e, asyncio.TimeoutError)
+                    else f"{type(e).__name__}: {e}"
+                )
+                wait_ms += (time.perf_counter() - clock) * 1000
+            else:
+                latency_ms = (time.perf_counter() - clock) * 1000
+                if response.status_code == 200:
+                    return self._parse(response.json(), latency_ms, wait_ms, attempt)
+                last_error = f"HTTP {response.status_code}: {response.text[:400]}"
+                wait_ms += latency_ms
+                lowered = response.text.lower()
+                if response.status_code == 402 or any(m in lowered for m in QUOTA_MARKERS):
+                    raise ProviderQuotaError(f"{self.route.label}: {last_error}")
+                if response.status_code not in self.RETRY_STATUS:
+                    break
+            if attempt < self.MAX_ATTEMPTS:
+                backoff = min(2.0**attempt, 20.0)
+                await asyncio.sleep(backoff)
+                wait_ms += backoff * 1000
+        raise ProviderError(f"{self.route.label}: {last_error}")
+
+    def _parse(self, payload: dict, latency_ms: float, wait_ms: float, attempts: int) -> ModelTurn:
+        blocks = payload.get("content") or []
+        # Verbatim, blocks and all - see point 3 in the class docstring.
+        self._messages.append({"role": "assistant", "content": blocks})
+
+        text_parts, calls = [], []
+        for block in blocks:
+            if block.get("type") == "text":
+                text_parts.append(block.get("text") or "")
+            elif block.get("type") == "tool_use":
+                arguments = block.get("input")
+                calls.append(
+                    ToolCall(
+                        call_id=block.get("id") or f"call_{len(calls)}",
+                        name=block.get("name") or "",
+                        arguments=arguments if isinstance(arguments, dict) else {},
+                        raw_arguments=json.dumps(arguments, default=str),
+                        parse_error=None if isinstance(arguments, dict) else "arguments were not an object",
+                    )
+                )
+
+        usage = payload.get("usage") or {}
+        cached = int(usage.get("cache_read_input_tokens") or 0)
+        written = int(usage.get("cache_creation_input_tokens") or 0)
+        return ModelTurn(
+            text="\n".join(p for p in text_parts if p),
+            tool_calls=calls,
+            finish_reason=payload.get("stop_reason") or "",
+            decision_latency_ms=latency_ms,
+            provider_wait_ms=wait_ms,
+            attempts=attempts,
+            # Anthropic reports fresh, cache-read and cache-write separately;
+            # the harness's "input_tokens" means everything that went in.
+            input_tokens=int(usage.get("input_tokens") or 0) + cached + written,
+            cached_input_tokens=cached,
+            output_tokens=int(usage.get("output_tokens") or 0),
+            resolved_model=payload.get("model") or self._wire_model,
+            generation_id=payload.get("id") or "",
+        )
+
+    async def aclose(self) -> None:
+        await self._http.aclose()
+
+
 #: Wire format -> the class that speaks it. Anthropic's and Google's formats
 #: are registered in PROVIDERS for routing, but have no adapter yet; asking for
 #: one raises a message that says exactly what to write, rather than silently
 #: doing something else.
-WIRES: dict[str, type[ModelSession]] = {"openai": OpenAICompatibleSession}
+WIRES: dict[str, type[ModelSession]] = {
+    "openai": OpenAICompatibleSession,
+    "anthropic": AnthropicSession,
+}
 
 
 async def list_openrouter_endpoints(model: str, api_key: str = "", timeout_s: float = 30.0) -> list[dict]:

@@ -37,6 +37,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import re
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -138,10 +139,32 @@ def load_prices(path: Path = DEFAULT_PRICE_FILE) -> tuple[dict[str, Price], str]
     return prices, blob.get("fetched_utc", "")
 
 
-def price_for(prices: dict[str, Price], model: str) -> Price:
-    """The price for a model, trying the plain name and the vendor-slug form."""
+def _name_variants(model: str) -> list[str]:
+    """Other names the same model is listed under.
+
+    Only *identity* mappings, never a substitution for a similar model. A
+    vendor's dated snapshot is the same product as its undated name and is
+    billed at the same rate, and vendors write the version differently in the
+    two places (``claude-haiku-4-5-20251001`` against ``claude-haiku-4.5``).
+    Resolving that is bookkeeping. Falling back to a *different* model's price
+    would be inventing a number, which this module refuses to do.
+    """
     bare = model.split("/")[-1]
-    for candidate in (model, bare, model.lower(), bare.lower()):
+    variants = [model, bare, model.lower(), bare.lower()]
+    undated = re.sub(r"-20\d{6}$", "", bare)
+    if undated != bare:
+        variants += [undated, undated.lower()]
+    for name in list(variants):
+        dotted = re.sub(r"(\d)-(\d)", r"\1.\2", name)
+        if dotted != name:
+            variants.append(dotted)
+    return variants
+
+
+def price_for(prices: dict[str, Price], model: str) -> Price:
+    """The price for a model, trying the names vendors list it under."""
+    bare = model.split("/")[-1]
+    for candidate in _name_variants(model):
         if candidate in prices:
             return prices[candidate]
     for name, price in prices.items():
