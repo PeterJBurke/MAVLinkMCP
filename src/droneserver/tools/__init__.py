@@ -20,11 +20,13 @@ Grouping (see docs/tool_groups.md for the per-group rationale):
 - ``peripherals``: manual control, follow-me, gripper/winch, transponder,
                    tune, mocap, RTK
 - ``filesystem``:  MAVLink FTP + (tier-critical) autopilot shell
+- ``emergency``:   emergency_stop (tier EMERGENCY, see docs/estop.md)
 """
 
 from droneserver.tools import (
     action,
     camera,
+    emergency,
     filesystem,
     geofence,
     gimbal,
@@ -42,6 +44,7 @@ from droneserver.tools import (
 __all__ = [
     "action",
     "camera",
+    "emergency",
     "filesystem",
     "geofence",
     "gimbal",
