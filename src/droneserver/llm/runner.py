@@ -62,6 +62,7 @@ from droneserver.llm.agent import AgentRun, Limits, run_agent, transcript_lines
 from droneserver.llm.mcp_session import AGENT_CLIENT_NAME, CallRecord, LiveMCPSession, TelemetryRecorder
 from droneserver.llm.prompts import SYSTEM_PROMPT, mission_prompts
 from droneserver.llm.providers import ToolSpec, open_session, resolve_model
+from droneserver.llm.spend import BudgetExceeded, Price, SpendLedger, project_trial_cost_usd
 from droneserver.llm.verdicts import TRACK_HEADER, Track, Verdict, judge
 
 HARNESS_CLIENT_NAME = "droneserver-llm-harness"
@@ -104,11 +105,16 @@ class TrialResult:
     server_ms_by_call: list[float | None] = field(default_factory=list)
     #: The server lost its link to the aircraft during (or before) this trial.
     link_failure: bool = False
+    #: The trial did not run, or was cut short, because of the spending cap.
+    budget_stop: bool = False
+    cost_usd: float = 0.0
 
     @property
     def verdict_label(self) -> str:
         if self.skipped:
             return "SKIP"
+        if self.budget_stop:
+            return "BUDGET"
         if self.link_failure:
             return "LINK"
         return "PASS" if self.passed else "FAIL"
@@ -133,8 +139,23 @@ class SuiteConfig:
     telemetry_interval_s: float = 1.5
     limits: Limits = field(default_factory=Limits)
     model_options: dict = field(default_factory=dict)
-    prices: dict = field(default_factory=dict)
     context_overrides: dict = field(default_factory=dict)
+    #: What a thousand tokens costs, and the ledger that enforces the cap.
+    #: Both are required: the harness will not fly a model it cannot price,
+    #: because a budget it cannot compute is a budget it cannot honour.
+    price: Price | None = None
+    ledger: SpendLedger | None = None
+    #: Fingerprint of the model API key the cap is applied to. Never the key.
+    key_id: str = ""
+    #: The provider actually called (openai, openrouter, ...), for the ledger.
+    provider_name: str = ""
+    #: Shell command that brings the drone server's link back up, e.g.
+    #: ``systemctl restart droneserver-staging``. Used only after a link
+    #: failure has already been detected, and always recorded in the result -
+    #: a trial that needed the server restarting under it is not a clean trial.
+    link_recovery_command: str = ""
+    #: How many times one trial may be retried after a link failure.
+    link_retries: int = 1
 
 
 # ------------------------------------------------------------------- helpers
@@ -206,6 +227,54 @@ async def _settle(harness: LiveMCPSession, timeout_s: float = 240.0) -> str:
         return f"harness settle failed: {type(e).__name__}: {e}"
 
 
+def _run_cost(config: SuiteConfig, run: AgentRun) -> float:
+    """What this run has cost so far, in dollars."""
+    if config.price is None:
+        return 0.0
+    return config.price.cost_usd(run.input_tokens, run.cached_input_tokens, run.output_tokens)
+
+
+def _prompt_token_estimate(ctx: dict) -> int:
+    """Rough size of one request to the model, in tokens.
+
+    Used only to project a worst-case trial cost for the budget guard, so it
+    errs high: the drone server publishes 98 tools whose schemas run to about
+    22,000 tokens, and the conversation grows on top of that. 40,000 is a
+    deliberate over-estimate; under-estimating here would let a run slip past
+    the cap.
+    """
+    return int(ctx.get("prompt_token_estimate", 40_000))
+
+
+def _record_spend(config: SuiteConfig, result: TrialResult, log) -> None:
+    """Charge this trial to the ledger, and say what is left."""
+    if config.ledger is None or config.price is None or result.run is None:
+        return
+    run = result.run
+    result.cost_usd = _run_cost(config, run)
+    resolved = next((t.resolved_model for t in run.turns if t.resolved_model), "")
+    served = next((t.served_by for t in run.turns if t.served_by), "")
+    cumulative = config.ledger.record(
+        key=config.key_id,
+        provider=config.provider_name,
+        model=config.model_spec,
+        resolved_model=f"{resolved}{' @ ' + served if served else ''}",
+        mission_id=result.mission_id,
+        trial=result.trial,
+        input_tokens=run.input_tokens,
+        cached_input_tokens=run.cached_input_tokens,
+        output_tokens=run.output_tokens,
+        reasoning_tokens=run.reasoning_tokens,
+        cost_usd=result.cost_usd,
+        run_dir=str(config.out_dir),
+        note=result.verdict_label,
+    )
+    log(
+        f"[{_utc()}] spend: ${result.cost_usd:.4f} this trial; ${cumulative:.2f} of "
+        f"${config.ledger.budget_usd:.2f} used on {config.key_id}"
+    )
+
+
 def _link_errors(calls: list[CallRecord]) -> int:
     """How many of these calls failed because the drone link was down."""
     total = 0
@@ -240,6 +309,40 @@ async def _trial_origin(harness: LiveMCPSession, fallback: dict) -> dict:
     return {k: fallback[k] for k in ("home", "home_amsl_m", "home_source") if k in fallback}
 
 
+async def _recover_link(config: SuiteConfig, harness: LiveMCPSession, log) -> bool:
+    """Bring the drone server's link back after its helper process died.
+
+    This exists because of a defect in the server, not because restarting
+    things is a good way to run an experiment: the helper that carries MAVLink
+    is unsupervised, and when it dies the server keeps answering while the
+    aircraft is unreachable. Until that is fixed in the connection layer, a run
+    of any length needs a way to recover - and every recovery is stamped on the
+    trial that needed it, so no one can mistake a restarted run for a clean one.
+    """
+    if not config.link_recovery_command:
+        return False
+    log(f"[{_utc()}] recovering the drone link: `{config.link_recovery_command}`")
+    process = await asyncio.create_subprocess_shell(
+        config.link_recovery_command,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+    output, _ = await process.communicate()
+    if process.returncode != 0:
+        log(f"[{_utc()}] recovery command failed ({process.returncode}): {output.decode()[:300]}")
+        return False
+    await asyncio.sleep(20)
+    await harness.aclose()
+    try:
+        await harness.__aenter__()
+    except Exception as e:
+        log(f"[{_utc()}] could not reconnect after recovery: {type(e).__name__}: {e}")
+        return False
+    ready = await harness.wait_ready(timeout_s=180)
+    log(f"[{_utc()}] drone link {'restored' if ready else 'still down'} after recovery")
+    return ready
+
+
 async def _read_parameter(harness: LiveMCPSession, name: str) -> float | None:
     result = await harness.call_raw("get_parameter", {"name": name}, 90)
     value = result.get("value") if result.get("status") == "success" else None
@@ -268,6 +371,7 @@ async def run_llm_suite(config: SuiteConfig, log=print) -> list[TrialResult]:
 
     results: list[TrialResult] = []
     window_start = time.time()
+    stop_everything = False
 
     harness = LiveMCPSession(config.url, config.api_key, HARNESS_CLIENT_NAME, "2")
     await harness.__aenter__()
@@ -298,14 +402,53 @@ async def run_llm_suite(config: SuiteConfig, log=print) -> list[TrialResult]:
                 results.append(TrialResult(mission_id, 1, True, "skipped (slow; pass --include-slow)", skipped=True))
                 continue
             for trial in range(1, config.trials + 1):
+                if config.ledger is not None and config.price is not None:
+                    projected = project_trial_cost_usd(
+                        config.price,
+                        config.limits.max_turns,
+                        prompt_tokens_per_turn=_prompt_token_estimate(ctx),
+                        output_tokens_per_turn=4000,
+                    )
+                    try:
+                        left = config.ledger.check_before_trial(config.key_id, projected)
+                    except BudgetExceeded as e:
+                        log(f"[{_utc()}] BUDGET stop before {mission_id} trial {trial}: {e}")
+                        results.append(
+                            TrialResult(mission_id, trial, False, str(e), started_at=time.time(), budget_stop=True)
+                        )
+                        stop_everything = True
+                        break
+                    log(
+                        f"[{_utc()}] budget: ${left:.2f} left on {config.key_id}; this trial is "
+                        f"capped at ${projected:.2f}"
+                    )
                 result = await _run_trial(
                     config, harness, ctx, prompts[mission_id], mission_id, trial, agent_version, log
                 )
+                for attempt in range(config.link_retries):
+                    if not result.link_failure:
+                        break
+                    if not await _recover_link(config, harness, log):
+                        break
+                    log(f"[{_utc()}] retrying {mission_id} trial {trial} after a link recovery")
+                    result = await _run_trial(
+                        config, harness, ctx, prompts[mission_id], mission_id, trial, agent_version, log
+                    )
+                    result.harness_intervened = (
+                        f"{result.harness_intervened}; " if result.harness_intervened else ""
+                    ) + f"drone link was restarted before this attempt (retry {attempt + 1})"
                 results.append(result)
+                _record_spend(config, result, log)
+                if result.run is not None and result.run.out_of_credit:
+                    log(f"[{_utc()}] BUDGET stop: the account is out of credit. Stopping cleanly; rerun to resume.")
+                    stop_everything = True
+                    break
                 log(
                     f"[{_utc()}] {result.verdict_label} {mission_id} trial {trial}/{config.trials} "
                     f"in {result.duration_s:.0f}s - {result.reason}"
                 )
+            if stop_everything:
+                break
     finally:
         with contextlib.suppress(Exception):
             await _settle(harness)
@@ -362,6 +505,7 @@ async def _run_trial(
             user_prompt=prompt,
             limits=config.limits,
             on_event=lambda kind, item: _log_event(log, kind, item),
+            cost_of=lambda r: _run_cost(config, r),
         )
         messages = list(model.messages)
     finally:
@@ -553,23 +697,9 @@ def _join_audit(results: list[TrialResult], audit_rows: list[dict], agent_label:
         result.server_ms_by_call = latencies
 
 
-def _cost(prices: dict, model: str, run: AgentRun) -> float | None:
-    """Dollars, but only when a price has been supplied for this model.
-
-    Prices are configuration, not knowledge: they change, and inventing one
-    would put a made-up number in a paper. With no price file, token counts are
-    still reported and the cost column is left empty.
-    """
-    price = prices.get(model)
-    if not price:
-        return None
-    fresh_input = max(run.input_tokens - run.cached_input_tokens, 0)
-    cached_rate = price.get("cached_input", price.get("input", 0.0))
-    return (
-        fresh_input * price.get("input", 0.0)
-        + run.cached_input_tokens * cached_rate
-        + run.output_tokens * price.get("output", 0.0)
-    ) / 1_000_000
+def _cost(config: SuiteConfig, run: AgentRun) -> float | None:
+    """Dollars for one run, or None when the model has no price on file."""
+    return None if config.price is None else _run_cost(config, run)
 
 
 def _write_outputs(
@@ -615,7 +745,7 @@ def _write_outputs(
             run = r.run
             claim = run.model_claim if run else ""
             matches = "" if r.skipped or r.link_failure or not run else str((claim == "complete") == r.passed)
-            cost = _cost(config.prices, route.requested_model, run) if run else None
+            cost = _cost(config, run) if run else None
             writer.writerow(
                 [
                     r.mission_id,
@@ -759,7 +889,7 @@ def _write_summary(config: SuiteConfig, results: list[TrialResult], ctx: dict, r
     decision = [t.decision_latency_ms for run in runs for t in run.turns]
     command = [c.wall_ms for run in runs for c in run.calls if c.status != "client_rejected"]
     server = [ms for r in ran for ms in r.server_ms_by_call if ms is not None]
-    total_cost = sum(c for c in (_cost(config.prices, route.requested_model, run) for run in runs) if c is not None)
+    total_cost = sum(c for c in (_cost(config, run) for run in runs) if c is not None)
 
     lines = [
         "# LLM-in-the-loop mission suite",
@@ -821,7 +951,7 @@ def _write_summary(config: SuiteConfig, results: list[TrialResult], ctx: dict, r
     ]
     lines.append(
         f"| Cost (USD) | {total_cost:.2f} |"
-        if config.prices.get(route.requested_model)
+        if config.price is not None
         else "| Cost (USD) | not computed - no price supplied for this model (see --prices) |"
     )
 

@@ -37,7 +37,7 @@ import time
 from dataclasses import dataclass, field
 
 from droneserver.llm.mcp_session import CallRecord, LiveMCPSession
-from droneserver.llm.providers import ModelSession, ModelTurn, ToolSpec
+from droneserver.llm.providers import ModelSession, ModelTurn, ProviderQuotaError, ToolSpec
 
 
 @dataclass
@@ -48,6 +48,10 @@ class Limits:
     max_tool_calls: int = 120
     wall_clock_s: float = 1800.0
     max_total_tokens: int = 2_000_000
+    #: Dollars this single trial may spend before it is stopped. Enforced turn
+    #: by turn against the running token count, so a runaway loop cannot spend
+    #: the project's budget while nobody is watching.
+    max_cost_usd: float | None = None
     #: Per tool call, at the MCP layer. Some drone tools legitimately block for
     #: a long time (a takeoff waits for the aircraft to climb).
     tool_timeout_s: float = 300.0
@@ -66,6 +70,14 @@ class TurnRecord:
     finish_reason: str
     text: str
     tool_calls: list[str] = field(default_factory=list)
+    #: Reproducible identity of what actually answered this turn (see
+    #: providers.ModelTurn). "gpt-5.2" is an alias; "gpt-5.2-2025-12-11" served
+    #: by a named host at a named weight precision is a documented version.
+    resolved_model: str = ""
+    generation_id: str = ""
+    served_by: str = ""
+    upstream_id: str = ""
+    quantization: str = ""
 
 
 @dataclass
@@ -77,6 +89,9 @@ class AgentRun:
     started_at: float = 0.0
     duration_s: float = 0.0
     error: str | None = None
+    #: Set when the run stopped because the account ran out of credit. That is
+    #: not a result about the model, and nothing downstream may treat it as one.
+    out_of_credit: bool = False
 
     # -- roll-ups the report and the CSVs both need -------------------------
 
@@ -143,6 +158,7 @@ async def run_agent(
     user_prompt: str,
     limits: Limits | None = None,
     on_event=None,
+    cost_of=None,
 ) -> AgentRun:
     """Run one mission trial. Returns everything that happened."""
     limits = limits or Limits()
@@ -166,11 +182,21 @@ async def run_agent(
             if total_tokens > limits.max_total_tokens:
                 run.stop_reason = f"token budget ({limits.max_total_tokens}) exhausted"
                 break
+            if limits.max_cost_usd is not None and cost_of is not None:
+                spent = cost_of(run)
+                if spent >= limits.max_cost_usd:
+                    run.stop_reason = f"per-trial cost ceiling (${limits.max_cost_usd:.2f}) reached at ${spent:.2f}"
+                    break
 
             turn_index += 1
             turn: ModelTurn = await model.next_turn(tools)
             record = TurnRecord(
                 index=turn_index,
+                resolved_model=turn.resolved_model,
+                generation_id=turn.generation_id,
+                served_by=turn.served_by,
+                upstream_id=turn.upstream_id,
+                quantization=turn.quantization,
                 decision_latency_ms=turn.decision_latency_ms,
                 provider_wait_ms=turn.provider_wait_ms,
                 attempts=turn.attempts,
@@ -230,6 +256,12 @@ async def run_agent(
                 break
     except asyncio.CancelledError:
         raise
+    except ProviderQuotaError as e:
+        # Out of credit is not a result about the model. Record it, mark it,
+        # and let the runner stop the suite cleanly so it can be resumed.
+        run.out_of_credit = True
+        run.error = f"{type(e).__name__}: {e}"
+        run.stop_reason = "the account ran out of credit"
     except Exception as e:  # a crashed trial is a failed trial, and it says why
         run.error = f"{type(e).__name__}: {e}"
         run.stop_reason = f"harness error: {run.error}"

@@ -55,6 +55,30 @@ class ProviderNotConfigured(ProviderError):
     """No API key is available for the provider this model needs."""
 
 
+class ProviderQuotaError(ProviderError):
+    """The account is out of credit or over quota.
+
+    Distinct from every other failure on purpose: this is not the experiment
+    going wrong, it is the money running out. The runner treats it as a clean,
+    resumable stop rather than a failed trial, because recording "the model
+    could not fly" when the truth is "we could not pay" would corrupt the
+    results.
+    """
+
+
+#: Substrings that mean "out of credit", across providers that all phrase it
+#: differently and none of which use a dedicated status code consistently.
+QUOTA_MARKERS = (
+    "insufficient_quota",
+    "insufficient credit",
+    "insufficient balance",
+    "exceeded your current quota",
+    "billing_hard_limit_reached",
+    "requires more credits",
+    "payment required",
+)
+
+
 # --------------------------------------------------------------- data carriers
 
 
@@ -106,6 +130,20 @@ class ModelTurn:
     output_tokens: int = 0
     reasoning_tokens: int = 0
     error: str | None = None
+    #: Exactly which model answered, as the provider reported it - e.g.
+    #: "gpt-5.2-2025-12-11" rather than the alias we asked for. Reviewers
+    #: asked for documented versions, and "gpt-5.2" is not one.
+    resolved_model: str = ""
+    #: The provider's own id for this generation, so a row in our CSV can be
+    #: matched against the provider's records.
+    generation_id: str = ""
+    #: For an aggregator: which upstream company actually served it, and under
+    #: what id. Empty for a direct call, where the answer is not in doubt.
+    served_by: str = ""
+    upstream_id: str = ""
+    #: Weight precision of the serving endpoint (fp8, mxfp4, ...) where the
+    #: provider discloses it. Two endpoints for the same model name can differ.
+    quantization: str = ""
 
 
 # ------------------------------------------------------------------- registry
@@ -284,7 +322,10 @@ class OpenAICompatibleSession(ModelSession):
         reasoning_effort: str | None = None,
         max_output_tokens: int | None = None,
         timeout_s: float = 300.0,
-        parallel_tool_calls: bool | None = None,
+        parallel_tool_calls: bool | None = True,
+        tool_choice: str | None = "auto",
+        endpoint_only: list[str] | None = None,
+        pinned_quantization: str = "",
     ) -> None:
         self.route = route
         self.provider = route.provider.name
@@ -294,6 +335,9 @@ class OpenAICompatibleSession(ModelSession):
         self._reasoning_effort = reasoning_effort
         self._max_output_tokens = max_output_tokens
         self._parallel_tool_calls = parallel_tool_calls
+        self._tool_choice = tool_choice
+        self._endpoint_only = endpoint_only or []
+        self._pinned_quantization = pinned_quantization
         self._messages: list[dict] = []
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         headers.update(route.provider.extra_headers)
@@ -337,9 +381,48 @@ class OpenAICompatibleSession(ModelSession):
             body["reasoning_effort"] = self._reasoning_effort
         if self._max_output_tokens:
             body["max_completion_tokens"] = self._max_output_tokens
+        # Sent ALWAYS, never inherited. Providers disagree on the default -
+        # it is on for Grok and off for Qwen - so leaving it unset would make
+        # "how many commands did the model issue at once" a property of the
+        # vendor rather than of the model. An unstated default is a confound.
         if self._parallel_tool_calls is not None:
             body["parallel_tool_calls"] = self._parallel_tool_calls
+        # Also always explicit. Note that some providers (GLM) support only
+        # "auto" and cannot be made to call a tool, so "auto" is the only
+        # setting every provider in the matrix can honour; anything else would
+        # quietly mean different things to different models.
+        if self._tool_choice:
+            body["tool_choice"] = self._tool_choice
+        if self._endpoint_only:
+            # Tool support varies by SERVING ENDPOINT, not just by model: the
+            # same model name is tool-capable on one host and tool-blind on
+            # another. Without pinning, a run can score a capable model as
+            # incapable - a false negative that would end up in the paper.
+            body["provider"] = {"only": list(self._endpoint_only), "allow_fallbacks": False}
         return body
+
+    async def _enrich_identity(self, turn: ModelTurn) -> None:
+        """Ask an aggregator which upstream actually served this generation.
+
+        A direct call needs no such question. Through an aggregator, "Qwen via
+        OpenRouter" is not a documented model version: the same name can be
+        served by different hosts at different weight precisions. This records
+        the host, the upstream id and the quantization per call, so the paper
+        can name what it actually measured.
+        """
+        if self.provider != "openrouter" or not turn.generation_id:
+            return
+        try:
+            response = await self._http.get("/generation", params={"id": turn.generation_id})
+            if response.status_code != 200:
+                return
+            data = (response.json() or {}).get("data") or {}
+        except Exception:
+            return
+        turn.served_by = data.get("provider_name") or turn.served_by
+        turn.upstream_id = data.get("upstream_id") or data.get("id") or ""
+        turn.resolved_model = data.get("model") or turn.resolved_model
+        turn.quantization = data.get("quantization") or self._pinned_quantization
 
     async def next_turn(self, tools: list[ToolSpec]) -> ModelTurn:
         body = self._body(tools)
@@ -355,9 +438,14 @@ class OpenAICompatibleSession(ModelSession):
             else:
                 latency_ms = (time.perf_counter() - clock) * 1000
                 if response.status_code == 200:
-                    return self._parse(response.json(), latency_ms, wait_ms, attempt)
+                    turn = self._parse(response.json(), latency_ms, wait_ms, attempt)
+                    await self._enrich_identity(turn)
+                    return turn
                 last_error = f"HTTP {response.status_code}: {response.text[:400]}"
                 wait_ms += latency_ms
+                lowered = response.text.lower()
+                if response.status_code == 402 or any(m in lowered for m in QUOTA_MARKERS):
+                    raise ProviderQuotaError(f"{self.route.label}: {last_error}")
                 if response.status_code not in self.RETRY_STATUS:
                     break
             if attempt < self.MAX_ATTEMPTS:
@@ -398,7 +486,11 @@ class OpenAICompatibleSession(ModelSession):
         usage = payload.get("usage") or {}
         details = usage.get("completion_tokens_details") or {}
         prompt_details = usage.get("prompt_tokens_details") or {}
+        provider_meta = payload.get("provider") or ""
         return ModelTurn(
+            resolved_model=payload.get("model") or self._wire_model,
+            generation_id=payload.get("id") or "",
+            served_by=provider_meta if isinstance(provider_meta, str) else "",
             text=message.get("content") or "",
             tool_calls=calls,
             finish_reason=choice.get("finish_reason") or "",
@@ -422,14 +514,43 @@ class OpenAICompatibleSession(ModelSession):
 WIRES: dict[str, type[ModelSession]] = {"openai": OpenAICompatibleSession}
 
 
+async def list_openrouter_endpoints(model: str, api_key: str = "", timeout_s: float = 30.0) -> list[dict]:
+    """Which hosts serve this model on OpenRouter, and what each supports.
+
+    Needed because **tool-calling support varies by serving endpoint, not just
+    by model**: the same model name is tool-capable on one host and tool-blind
+    on another. Pick a host from this list and pin it (``endpoint_only``), or a
+    run can score a capable model as incapable.
+    """
+    slug = model if "/" in model else model
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    async with httpx.AsyncClient(timeout=timeout_s) as http:
+        response = await http.get(f"https://openrouter.ai/api/v1/models/{slug}/endpoints", headers=headers)
+        response.raise_for_status()
+        data = (response.json() or {}).get("data") or {}
+    return [
+        {
+            "provider_name": e.get("provider_name") or e.get("name"),
+            "tag": e.get("tag") or e.get("provider_name"),
+            "quantization": e.get("quantization") or "unknown",
+            "supports_tools": "tools" in (e.get("supported_parameters") or []),
+            "context_length": e.get("context_length"),
+        }
+        for e in (data.get("endpoints") or [])
+    ]
+
+
 def open_session(spec: str, *, env: dict | None = None, **options) -> ModelSession:
     """Open a conversation with the model named by ``spec``.
 
     ``spec`` is ``"provider:model"`` or a bare model name (see
     :func:`resolve_model`).
     """
+    from droneserver.llm.spend import check_not_retired
+
     env = env if env is not None else dict(os.environ)
     route = resolve_model(spec, env)
+    check_not_retired(route.requested_model)
     session_class = WIRES.get(route.provider.wire)
     if session_class is None:
         raise ProviderError(
