@@ -32,4 +32,24 @@ jobs:
         run: uv run mypy
 
       - name: Unit tests (no SITL)
-        run: uv run pytest
+        run: uv run pytest --cov=src/droneserver --cov-report=term-missing --cov-report=xml
+
+      - name: Coverage summary
+        if: always()
+        run: |
+          uv run python - <<'PY'
+          import xml.etree.ElementTree as ET, pathlib
+          f = pathlib.Path("coverage.xml")
+          if f.exists():
+              rate = float(ET.parse(f).getroot().get("line-rate", 0)) * 100
+              print(f"Line coverage: {rate:.1f}%")
+              pathlib.Path("coverage-summary.txt").write_text(f"{rate:.1f}")
+          PY
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.xml
+          if-no-files-found: ignore

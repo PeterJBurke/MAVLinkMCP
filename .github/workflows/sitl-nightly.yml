@@ -1,0 +1,43 @@
+name: SITL integration (nightly)
+
+# The SITL suite needs docker and takes ~15 minutes, so it does not run on
+# every push. It uses the LOCAL docker ArduPilot SITL - GitHub runners cannot
+# reach the project's tailnet, so the persistent simulators are not targets here.
+on:
+  schedule:
+    - cron: "0 3 * * *"  # 03:00 UTC nightly
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  sitl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Build the pinned ArduPilot SITL image
+        run: docker build -t droneserver-sitl-arducopter:4.5.7 docker/ardupilot-sitl
+
+      - name: SITL integration suite
+        # The >10-minute demonstration mission is excluded deliberately; it is
+        # a documented artifact run on demand, not a gate.
+        run: uv run pytest -m "sitl and not longmission" tests/integration -q
+
+      - name: Upload generated artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sitl-artifacts
+          path: |
+            docs/adversarial_results.md
+          if-no-files-found: ignore
