@@ -99,6 +99,37 @@ the first three were found and documented. That is worth stating in the paper
 as a systematic hazard of drone APIs exposed to language models, not as a
 one-off mistake.
 
+## A second defect the staging deployment exposed: two servers, one aircraft
+
+Running the local test suite **while the staging service was up** made 32 tests
+fail, and none of the failures were in the code under test.
+
+MavSDK (the drone library) does not talk to the aircraft directly. It starts a
+helper process, `mavsdk_server`, and talks to that over a local network port —
+and it defaults **every** instance to the same port, 50051. The staging service
+had claimed that port, pointed at the simulator in Irvine. When each test
+started its own server, MavSDK found the port already in use and attached to
+the *existing* helper. The result: the entire local test suite was flying a
+simulator 8,000 km away. It reported the wrong home position and failed flights
+that were, from its point of view, perfectly reasonable.
+
+**Why this matters beyond the test suite.** Two droneserver instances on one
+machine will silently share an aircraft. That is a deployment hazard: a staging
+server and a production server on the same host would fly the same drone while
+each believed it had its own, and neither would report anything unusual.
+
+Fixed in the server rather than in the tests: the helper port is now
+`MAVSDK_SERVER_PORT` (default 50051, unchanged for the ordinary single-server
+case) and is logged at connection time next to the drone's address, so the
+binding is visible rather than implicit. The staging service uses 50060, and
+every test fixture picks a free port. Verified by re-running the full suite
+with the staging service still running.
+
+**Operational rule that follows:** give every droneserver instance on a shared
+host its own `MAVSDK_SERVER_PORT`, and check the startup log line that names
+both the aircraft address and the helper port before trusting which drone you
+are talking to.
+
 ## Reproducing this
 
 ```bash
