@@ -27,6 +27,60 @@ def _fail(error: str) -> dict:
     return result
 
 
+def _validate_imported_mission(mission_items) -> dict | None:
+    """Check imported mission items against the SERVER-side geofence.
+
+    Returns a rejection dict, or None when every item is inside the fence.
+    """
+    from droneserver.safety.config import get_safety_settings
+    from droneserver.safety.geofence import Geofence, check_mission, parse_polygon
+    from droneserver.safety.middleware import LAYER
+
+    safety = get_safety_settings()
+    if not safety.enabled or not safety.geofence_enabled:
+        return None
+    try:
+        polygon = parse_polygon(safety.geofence_polygon)
+    except ValueError:
+        polygon = ()
+    fence = Geofence(
+        polygon=polygon,
+        max_altitude_m=safety.geofence_max_altitude_m,
+        max_radius_m=safety.geofence_max_radius_m,
+        home=LAYER.state_tracker.state.home,
+    )
+    if not fence.active:
+        return None
+
+    waypoints = [
+        {
+            "latitude_deg": item.x / 1e7,
+            "longitude_deg": item.y / 1e7,
+            "altitude_m": item.z,
+        }
+        for item in mission_items
+        # skip non-positional items (RTL, jumps) and the home placeholder
+        if item.command in (16, 21, 22, 82) and (item.x or item.y)
+    ]
+    violations = check_mission(fence, waypoints)
+    if not violations:
+        return None
+    idx, first = violations[0]
+    return {
+        "status": "rejected",
+        "error": (
+            f"imported plan item {idx} violates the server geofence: {first.detail} "
+            f"({len(violations)} of {len(waypoints)} positional items violate it)"
+        ),
+        "rule": f"{first.rule}.imported_plan",
+        "remedy": (
+            "Edit the plan so every waypoint is inside the geofence and import again. "
+            "Nothing was uploaded to the drone."
+        ),
+        "safety_layer": "droneserver.safety",
+    }
+
+
 def _ok(**payload) -> dict:
     result = {"status": "success", **payload}
     log_tool_output(result)
@@ -92,8 +146,23 @@ async def import_qgc_mission(
         "geofence_items": len(imported.geofence_items),
         "rally_items": len(imported.rally_items),
     }
+
+    # B5: the imported plan used to go straight to the drone unvalidated - the
+    # only tool that could fly an LLM-supplied route past the server-side
+    # geofence. Validate every item here, on the same fence the managed-mission
+    # path uses, BEFORE anything is uploaded.
+    violation = _validate_imported_mission(imported.mission_items)
+    if violation is not None:
+        log_tool_output(violation)
+        return violation
     uploaded: dict = {}
     if upload:
+        if imported.geofence_items:
+            logger.warning(
+                "QGC plan carries %d geofence item(s): uploading it REPLACES the drone's "
+                "firmware fence. The server-side fence is unaffected.",
+                len(imported.geofence_items),
+            )
         try:
             if imported.mission_items:
                 log_mavlink_cmd("drone.mission_raw.upload_mission", items=counts["mission_items"])
@@ -110,7 +179,13 @@ async def import_qgc_mission(
         except Exception as e:
             logger.error(f"Plan upload failed: {e}")
             return _fail(f"Plan imported ({counts}) but upload failed: {e}")
-    return _ok(imported=counts, uploaded=uploaded or "not requested")
+    result = _ok(imported=counts, uploaded=uploaded or "not requested")
+    if imported.geofence_items and upload:
+        result["warning"] = (
+            f"This plan replaced the drone's firmware geofence with {len(imported.geofence_items)} "
+            "item(s). The independent server-side geofence still applies and was not changed."
+        )
+    return result
 
 
 @mcp.tool()
