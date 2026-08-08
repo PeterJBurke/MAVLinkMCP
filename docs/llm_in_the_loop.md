@@ -512,33 +512,80 @@ several. Drone APIs are full of quantities that are meaningless without saying
 what they are relative to, and code — human-written or model-written — gets
 them wrong repeatedly.
 
-### The one the model kept getting wrong, and why it is our fault
+### The one the model kept getting wrong — and what fixing the words did
 
-T5 failed three times out of three, always the same way. The model armed, took
-off, commanded a 60 metre move north — and then, in the very next turn, called
-return-to-launch. The aircraft had travelled 5 m, 22 m and 8 m on the three
-attempts before being turned around. Each time the model reported
+This is the clearest single result in the document, because it was run as a
+controlled before-and-after with exactly one variable.
+
+**Before.** T5 failed three times out of three, always identically. The model
+armed, took off, commanded a 60 metre move north — and then, in the very next
+turn, called return-to-launch. The aircraft had travelled **5 m, 22 m and 8 m**
+on the three attempts before being turned around. Each time the model reported
 `MISSION COMPLETE`.
 
-It is tempting to file this as a model error, and in one sense it is: the same
-model polled `check_arrival` diligently in T2 and T3, so it clearly knows how.
-But look at what the interface tells it. `takeoff` says, in capital letters:
+It is tempting to file that as a model error, and the same model polled
+`check_arrival` diligently in T2 and T3, so it clearly knows how. But look at
+what the interface told it. `takeoff` says, in capitals:
 
 > **IMPORTANT:** By default, this function waits until the drone reaches the
 > target altitude before returning.
 
-`move_to_relative` says nothing whatever about when it returns. A reader who
+`move_to_relative` said nothing whatever about when it returned. A reader who
 has just been told that one motion command blocks until it finishes will
 reasonably assume the next one does too. **It does not: it returns as soon as
 the command is accepted, while the aircraft is still flying.**
 
-This is an asynchronous command documented as though it were synchronous, and
-it is exactly the kind of defect that only shows up when something reads the
-documentation literally and acts on it. The fix belongs in the tool
-description — every non-blocking motion command should say so, and name the
-tool to poll — but it has deliberately **not** been applied yet, because
-changing the interface after measuring it would invalidate the measurement.
-Fix it, then re-run T5, and the change in behaviour is itself a result.
+**The change.** One tool description, and nothing else. It now states plainly
+that the call returns immediately and does not wait for arrival, names
+`check_arrival` as the way to find out when the drone has got there, warns
+against issuing a landing or an RTL before arrival is confirmed, and explicitly
+contrasts itself with `takeoff`. No code, no prompt, no model and no mission
+changed.
+
+**After.**
+
+| | Trials | Result | Distance flown of the 60 m leg |
+|---|---|---|---|
+| Before the description fix | 3 | **0 / 3 passed** | 5 m, 22 m, 8 m |
+| After the description fix | 3 | **3 / 3 passed** | 60 m, 60 m, 61 m |
+
+The transcripts show the mechanism, not merely the outcome. Before, the call
+sequence ran `move_to_relative` then straight to `return_to_launch`. After, it
+runs `move_to_relative`, then `check_arrival` three times until it reports
+`arrived`, then `return_to_launch`. The model inserted exactly the polling loop
+the description told it about.
+
+**The finding, stated for the paper:** *the precision of a tool description is a
+measurable driver of LLM control reliability.* A mission success rate moved from
+0% to 100% with no change to the model, the prompt, or a single line of
+executable code — only to the prose the model reads about when a command
+returns. For an interface whose whole purpose is to be operated by something
+that reads documentation literally, an under-specified description is not a
+documentation debt. It is a defect, and it flies the aircraft to the wrong
+place.
+
+### The same defect is still present in six other tools
+
+`move_to_relative` was fixed alone, deliberately, so the experiment above had
+one variable. These carry the same silent asynchrony and are **left unfixed on
+purpose**, for a later sweep:
+
+| Tool | What its description omits |
+|---|---|
+| `reposition` | returns immediately; the drone is still flying to the target |
+| `set_yaw` | returns immediately; the drone is still rotating |
+| `do_orbit` | returns immediately; the orbit then continues indefinitely |
+| `return_to_launch` | returns immediately; the flight home takes minutes |
+| `vtol_transition` | returns immediately; the transition takes seconds |
+| `land` | returns immediately; the descent is still in progress |
+
+Several of them say *"Waits for connection if not ready"* — a sentence about the
+**link** that a reader can easily take as a promise about the **manoeuvre**.
+`go_to_location` is the one tool that already got this right (*"Returns
+immediately - drone flies autonomously"*), which shows how small the fix is.
+
+The sweep should be run as its own before-and-after, on the missions that touch
+those tools, so the effect is measured a second time rather than assumed.
 
 ## Limits of what this shows
 
