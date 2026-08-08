@@ -84,6 +84,22 @@ def main() -> int:
     parser.add_argument("--audit-log", default="", help="server audit.jsonl, to join server-side latency")
     parser.add_argument("--target-label", default="", help="what the server is flying (for the report)")
     parser.add_argument("--include-slow", action="store_true", help="include T10 (>10 minutes)")
+
+    maps = parser.add_argument_group(
+        "T6 (Google Maps): a second, hosted MCP server the model can query for real-world "
+        "coordinates, attached alongside the drone server for T6 only"
+    )
+    maps.add_argument(
+        "--maps-url",
+        default="",
+        help="streamable-HTTP MCP endpoint of the Maps server, e.g. https://mapstools.googleapis.com/mcp. "
+        "Empty leaves T6 skipped; setting it un-skips T6 and wires the server in for that mission",
+    )
+    maps.add_argument(
+        "--maps-api-key",
+        default=os.environ.get("GOOGLE_MAPS_API_KEY", ""),
+        help="Maps API key ($GOOGLE_MAPS_API_KEY). Sent as the X-Goog-Api-Key header, never logged",
+    )
     parser.add_argument(
         "--max-turns",
         type=int,
@@ -253,6 +269,8 @@ def main() -> int:
         provider_name=route.provider.name,
         link_recovery_command=args.link_recovery_command,
         link_retries=args.link_retries,
+        maps_url=args.maps_url,
+        maps_api_key=args.maps_api_key,
     )
 
     print(f"model:    {route.requested_model} via {route.provider.name} ({route.routing})")
@@ -266,6 +284,8 @@ def main() -> int:
         f"recorder: {'own telemetry-scope key' if args.recorder_api_key else 'SHARING the model key - see --recorder-api-key'}"
     )
     print(f"missions: {', '.join(missions)} x{args.trials}")
+    if args.maps_url:
+        print(f"maps:     {args.maps_url} (attached for T6 only, {'keyed' if args.maps_api_key else 'NO KEY'})")
     print(f"output:   {out_dir}")
     if args.dry_run:
         print("dry run: nothing was flown")

@@ -37,6 +37,7 @@ from datetime import timedelta
 import mcp.types as mcp_types
 from mcp import ClientSession
 from mcp.client.sse import sse_client
+from mcp.client.streamable_http import streamablehttp_client
 
 from droneserver.llm.providers import ToolSpec
 
@@ -85,11 +86,26 @@ class LiveMCPSession:
     than smoothed away.
     """
 
-    def __init__(self, url: str, api_key: str = "", client_name: str = AGENT_CLIENT_NAME, client_version: str = "2"):
+    def __init__(
+        self,
+        url: str,
+        api_key: str = "",
+        client_name: str = AGENT_CLIENT_NAME,
+        client_version: str = "2",
+        transport: str = "sse",
+        auth_header: str = "X-API-Key",
+    ):
         self.url = url
         self.api_key = api_key
         self.client_name = client_name
         self.client_version = client_version
+        #: ``sse`` for the drone server; ``http`` (streamable HTTP) for hosted
+        #: MCP servers such as Google Maps, which speak the newer transport.
+        self.transport = transport
+        #: The header the key travels in. The drone server reads ``X-API-Key``;
+        #: Google Maps wants ``X-Goog-Api-Key``. Kept explicit so a second
+        #: server can authenticate its own way without touching the first.
+        self.auth_header = auth_header
         self._session: ClientSession | None = None
         self._stack: contextlib.AsyncExitStack | None = None
         self.reconnects = 0
@@ -101,7 +117,7 @@ class LiveMCPSession:
 
     @property
     def headers(self) -> dict:
-        return {"X-API-Key": self.api_key} if self.api_key else {}
+        return {self.auth_header: self.api_key} if self.api_key else {}
 
     async def __aenter__(self) -> LiveMCPSession:
         await self._connect()
@@ -112,7 +128,12 @@ class LiveMCPSession:
 
     async def _connect(self) -> None:
         stack = contextlib.AsyncExitStack()
-        read, write = await stack.enter_async_context(sse_client(self.url, headers=self.headers))
+        if self.transport == "http":
+            # streamablehttp_client yields a third element (a session-id getter)
+            # the drone SSE transport does not; ignore it.
+            read, write, *_ = await stack.enter_async_context(streamablehttp_client(self.url, headers=self.headers))
+        else:
+            read, write = await stack.enter_async_context(sse_client(self.url, headers=self.headers))
         session = await stack.enter_async_context(
             ClientSession(
                 read,
@@ -209,6 +230,66 @@ class LiveMCPSession:
                 pass
             await asyncio.sleep(3)
         return False
+
+
+class MultiServerSession:
+    """One MCP client face over several servers at once.
+
+    The model is handed a single merged tool list and never learns that more
+    than one server exists behind it. Each call is routed to whichever server
+    advertised the tool, timed exactly as a single-server call is, so the
+    resulting ``CallRecord`` is uniform whatever answered it.
+
+    This is how mission T6 gets both the drone server's flight tools and a
+    hosted Google Maps server's ``search_places``/``compute_routes`` in the same
+    trial: the model can look a place up and then fly there, without any code
+    telling it that the coordinates and the aircraft live on different servers.
+
+    **Name collisions go to the primary (drone) server**, and are dropped from
+    the extra server rather than shadowing a flight tool. The drone server owns
+    the aircraft; nothing a third party advertises may take a flight-tool name.
+    """
+
+    def __init__(self, primary: "LiveMCPSession", extras: list[tuple[str, "LiveMCPSession"]]):
+        self.primary = primary
+        #: ``[(label, session), ...]`` - the label is for logging only.
+        self.extras = extras
+        self._owner: dict[str, LiveMCPSession] = {}
+        #: Which server ended up owning each tool name, for the run record.
+        self.tool_origin: dict[str, str] = {}
+        self.reconnects = 0
+
+    async def __aenter__(self) -> "MultiServerSession":
+        await self.primary.__aenter__()
+        for _, session in self.extras:
+            await session.__aenter__()
+        return self
+
+    async def __aexit__(self, *exc) -> None:
+        await self.aclose()
+
+    async def aclose(self) -> None:
+        for _, session in self.extras:
+            await session.aclose()
+        await self.primary.aclose()
+
+    async def list_tools(self) -> list[ToolSpec]:
+        primary_tools = await self.primary.list_tools()
+        self._owner = {t.name: self.primary for t in primary_tools}
+        self.tool_origin = {t.name: "drone" for t in primary_tools}
+        merged = list(primary_tools)
+        for label, session in self.extras:
+            for tool in await session.list_tools():
+                if tool.name in self._owner:
+                    continue  # the drone server keeps its name; skip the clash
+                self._owner[tool.name] = session
+                self.tool_origin[tool.name] = label
+                merged.append(tool)
+        return merged
+
+    async def call(self, tool: str, arguments: dict, *, turn: int = 0, seq: int = 0, timeout_s: float = 300.0):
+        session = self._owner.get(tool, self.primary)
+        return await session.call(tool, arguments, turn=turn, seq=seq, timeout_s=timeout_s)
 
 
 def _parse(tool: str, result) -> dict:

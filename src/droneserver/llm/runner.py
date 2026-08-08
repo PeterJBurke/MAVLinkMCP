@@ -59,7 +59,13 @@ from pathlib import Path
 
 from droneserver.benchmark.missions import DEFAULT_CONTEXT
 from droneserver.llm.agent import AgentRun, Limits, run_agent, transcript_lines
-from droneserver.llm.mcp_session import AGENT_CLIENT_NAME, CallRecord, LiveMCPSession, TelemetryRecorder
+from droneserver.llm.mcp_session import (
+    AGENT_CLIENT_NAME,
+    CallRecord,
+    LiveMCPSession,
+    MultiServerSession,
+    TelemetryRecorder,
+)
 from droneserver.llm.prompts import SYSTEM_PROMPT, mission_prompts
 from droneserver.llm.providers import ToolSpec, open_session, resolve_model
 from droneserver.llm.spend import BudgetExceeded, Price, SpendLedger, project_trial_cost_usd
@@ -93,7 +99,7 @@ SLOW_MISSIONS = {"T10"}
 #: aircraft left hovering is recorded loudly there but does not overturn the
 #: safety finding - those are two different results and merging them would
 #: hide the one the mission exists to produce.
-LANDING_IS_PART_OF_THE_TASK = {"T1", "T2", "T3", "T4", "T5", "T10"}
+LANDING_IS_PART_OF_THE_TASK = {"T1", "T2", "T3", "T4", "T5", "T6", "T10"}
 
 #: What a model that got the mission RIGHT should say about itself at the end.
 #: For most missions that is "complete". T8 and T9 pass by being refused, so
@@ -108,7 +114,7 @@ def _claim_agrees(mission_id: str, claim: str, passed: bool) -> bool:
     return (claim == expected) == passed
 
 
-SKIPPED = {"T6": "needs an external Google-Maps MCP server; not configured for this deployment"}
+SKIPPED = {"T6": "needs an external Google-Maps MCP server; pass --maps-url to wire one in and run it"}
 
 
 @dataclass
@@ -177,6 +183,13 @@ class SuiteConfig:
     link_recovery_command: str = ""
     #: How many times one trial may be retried after a link failure.
     link_retries: int = 1
+    #: A second, hosted MCP server (Google Maps) to attach *only* for T6, so a
+    #: model asked to fly to the nearest hospital can look the place up and then
+    #: command the drone. Empty leaves T6 skipped. It is attached for T6 alone
+    #: on purpose: adding map tools to every mission would change the tool
+    #: surface the other missions are measured against, which is a confound.
+    maps_url: str = ""
+    maps_api_key: str = ""
 
 
 # ------------------------------------------------------------------- helpers
@@ -428,7 +441,8 @@ async def run_llm_suite(config: SuiteConfig, log=print) -> list[TrialResult]:
             )
 
         for mission_id in config.missions:
-            if mission_id in SKIPPED:
+            # T6 is skipped unless a Maps server has been wired in for it.
+            if mission_id in SKIPPED and not (mission_id == "T6" and config.maps_url):
                 results.append(TrialResult(mission_id, 1, True, SKIPPED[mission_id], skipped=True))
                 continue
             if mission_id in SLOW_MISSIONS and not config.include_slow:
@@ -523,16 +537,29 @@ async def _run_trial(
     await recorder.start()
 
     agent_mcp = LiveMCPSession(config.url, config.api_key, AGENT_CLIENT_NAME, agent_version)
+    # T6, and only T6, also gets a hosted Google Maps MCP server, merged behind
+    # a single tool list. See MultiServerSession and SuiteConfig.maps_url.
+    session = agent_mcp
+    if config.maps_url and mission_id == "T6":
+        maps = LiveMCPSession(
+            config.maps_url,
+            config.maps_api_key,
+            client_name=f"{AGENT_CLIENT_NAME}-maps",
+            client_version="2",
+            transport="http",
+            auth_header="X-Goog-Api-Key",
+        )
+        session = MultiServerSession(agent_mcp, [("google-maps", maps)])
     model = None
     started = time.time()
     clock = time.perf_counter()
     try:
-        await agent_mcp.__aenter__()
-        tools: list[ToolSpec] = await agent_mcp.list_tools()
+        await session.__aenter__()
+        tools: list[ToolSpec] = await session.list_tools()
         model = open_session(config.model_spec, **config.model_options)
         run = await run_agent(
             model=model,
-            mcp=agent_mcp,
+            mcp=session,
             tools=tools,
             system_prompt=SYSTEM_PROMPT,
             user_prompt=prompt,
@@ -545,7 +572,7 @@ async def _run_trial(
         if model is not None:
             with contextlib.suppress(Exception):
                 await model.aclose()
-        await agent_mcp.aclose()
+        await session.aclose()
         with contextlib.suppress(Exception):
             await recorder.sample_once(full=True)
         await recorder.stop()
@@ -845,6 +872,14 @@ def _write_outputs(
                 "tool_calls",
                 "finish_reason",
                 "text_chars",
+                # Provenance of what actually answered each turn. Empty for a
+                # direct API; on an aggregator these say which upstream host
+                # served the call and at what weight precision - two hosts
+                # running the same weights at different precisions are two
+                # different systems, so the column records which was measured.
+                "resolved_model",
+                "served_by",
+                "quantization",
             ]
         )
         for r in results:
@@ -864,6 +899,9 @@ def _write_outputs(
                         " ".join(turn.tool_calls),
                         turn.finish_reason,
                         len(turn.text),
+                        turn.resolved_model,
+                        turn.served_by,
+                        turn.quantization,
                     ]
                 )
 
