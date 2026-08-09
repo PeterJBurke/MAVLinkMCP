@@ -16,6 +16,8 @@ import contextlib
 import time
 from dataclasses import dataclass, field
 
+from droneserver.telemetry.home import read_home
+
 
 @dataclass
 class FlightState:
@@ -130,7 +132,10 @@ class StateTracker:
             if self.state.home is None and (time.monotonic() - self._home_attempted_at) > 30.0:
                 self._home_attempted_at = time.monotonic()
                 try:
-                    home = await _first(drone.telemetry.home(), timeout_s)
+                    # read_home re-requests the topic if the subscription is
+                    # silent - _ensure_rates asks once per connection, and an
+                    # autopilot that reconnected since then has forgotten it.
+                    home = await read_home(drone, timeout_s)
                     self.state.home = (home.latitude_deg, home.longitude_deg)
                     self.state.home_altitude_m = home.absolute_altitude_m
                 except Exception:

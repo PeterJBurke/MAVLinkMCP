@@ -15,6 +15,7 @@ from mcp.server.fastmcp import Context
 from droneserver.app import mcp
 from droneserver.convert import to_jsonable
 from droneserver.telemetry.flight_log import LogColors, log_tool_call, log_tool_output, logger
+from droneserver.telemetry.home import read_home
 from droneserver.tools._common import CONN_ERROR, first_stream_item, get_drone
 
 READ_TIMEOUT_S = 10.0
@@ -281,9 +282,17 @@ async def get_home_position(ctx: Context) -> dict:
     if drone is None:
         return dict(CONN_ERROR)
     try:
-        home = await first_stream_item(drone.telemetry.home(), READ_TIMEOUT_S)
+        # Not a plain subscription read: ArduPilot only emits HOME_POSITION on
+        # request, so read_home asks for the stream before giving up. See
+        # droneserver.telemetry.home.
+        home = await read_home(drone, READ_TIMEOUT_S)
     except TimeoutError:
-        return _no_data("home")
+        return {
+            "status": "failed",
+            "error": "No home telemetry received, including after requesting the topic "
+            f"(waited {READ_TIMEOUT_S:.0f}s) - the vehicle most likely has no home set yet "
+            "(it is set on first arm, or on GPS lock)",
+        }
     except Exception as e:
         return _read_error("home position", e)
     home_data = {
