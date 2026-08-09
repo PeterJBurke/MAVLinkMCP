@@ -55,22 +55,22 @@ from xml.sax.saxutils import escape
 # mission green, holds cyan/purple. Any mode not listed falls back to DEFAULT.
 # ---------------------------------------------------------------------------
 MODE_COLORS: dict[str, str] = {
-    "GUIDED":     "ffff7800",  # azure blue   - the mode the LLM flies in
-    "AUTO":       "ff32c832",  # green        - running a stored mission
-    "RTL":        "ff0000ff",  # red          - return-to-launch
-    "SMART_RTL":  "ff0060ff",  # orange-red   - smart return-to-launch
-    "LAND":       "ff0090ff",  # orange       - descending to land
-    "TAKEOFF":    "ff00d7ff",  # amber        - auto take-off climb
-    "LOITER":     "ffff9900",  # cyan-blue    - GPS position hold w/ stick
-    "POSHOLD":    "ffffcc00",  # cyan         - pilot-assisted position hold
-    "ALT_HOLD":   "ffcccc00",  # teal         - altitude hold only
-    "BRAKE":      "ff8080ff",  # salmon       - emergency stop
-    "CIRCLE":     "ffff00cc",  # magenta      - orbit a point
-    "STABILIZE":  "ff909090",  # grey         - manual, self-levelling
-    "ACRO":       "ff606060",  # dark grey    - manual, rate
-    "DRIFT":      "ffcc66ff",  # pink-purple  - coordinated-turn manual
-    "FOLLOW":     "ffccff00",  # spring       - follow-me
-    "GUIDED_NOGPS": "ffffaa44", # lighter blue - guided without GPS
+    "GUIDED": "ffff7800",  # azure blue   - the mode the LLM flies in
+    "AUTO": "ff32c832",  # green        - running a stored mission
+    "RTL": "ff0000ff",  # red          - return-to-launch
+    "SMART_RTL": "ff0060ff",  # orange-red   - smart return-to-launch
+    "LAND": "ff0090ff",  # orange       - descending to land
+    "TAKEOFF": "ff00d7ff",  # amber        - auto take-off climb
+    "LOITER": "ffff9900",  # cyan-blue    - GPS position hold w/ stick
+    "POSHOLD": "ffffcc00",  # cyan         - pilot-assisted position hold
+    "ALT_HOLD": "ffcccc00",  # teal         - altitude hold only
+    "BRAKE": "ff8080ff",  # salmon       - emergency stop
+    "CIRCLE": "ffff00cc",  # magenta      - orbit a point
+    "STABILIZE": "ff909090",  # grey         - manual, self-levelling
+    "ACRO": "ff606060",  # dark grey    - manual, rate
+    "DRIFT": "ffcc66ff",  # pink-purple  - coordinated-turn manual
+    "FOLLOW": "ffccff00",  # spring       - follow-me
+    "GUIDED_NOGPS": "ffffaa44",  # lighter blue - guided without GPS
 }
 DEFAULT_COLOR = "ffffffff"  # opaque white for any unrecognised mode
 
@@ -240,7 +240,7 @@ def _style_block(mode: str) -> str:
         f"      <color>{color}</color><scale>1.1</scale>\n"
         f"      <Icon><href>{escape(ARROW_ICON_HREF)}</href></Icon>\n"
         f"    </IconStyle>\n"
-        f'    <LabelStyle><scale>0.8</scale></LabelStyle>\n'
+        f"    <LabelStyle><scale>0.8</scale></LabelStyle>\n"
         f"  </Style>\n"
     )
 
@@ -252,9 +252,7 @@ def _style_id(mode: str) -> str:
 
 def _track_placemark(mode: str, run: list[_Fix]) -> str:
     whens = "".join(f"      <when>{_iso_utc(f.t)}</when>\n" for f in run)
-    coords = "".join(
-        f"      <gx:coord>{f.lon:.8f} {f.lat:.8f} {f.alt:.3f}</gx:coord>\n" for f in run
-    )
+    coords = "".join(f"      <gx:coord>{f.lon:.8f} {f.lat:.8f} {f.alt:.3f}</gx:coord>\n" for f in run)
     return (
         f"    <Placemark>\n"
         f"      <name>{escape(mode)}</name>\n"
@@ -273,13 +271,9 @@ def _command_placemark(row: dict, lat: float, lon: float, alt: float, mode: str)
     label = tool if not verdict else f"{tool} [{verdict}]"
     ts = (row.get("ts") or "").strip()
     detail = "".join(
-        f"      <li><b>{escape(str(k))}</b>: {escape(str(v))}</li>\n"
-        for k, v in row.items() if v not in (None, "")
+        f"      <li><b>{escape(str(k))}</b>: {escape(str(v))}</li>\n" for k, v in row.items() if v not in (None, "")
     )
-    desc = (
-        f"<![CDATA[<b>{escape(tool)}</b> at {escape(ts)}<br/>"
-        f"mode <b>{escape(mode)}</b><ul>{detail.strip()}</ul>]]>"
-    )
+    desc = f"<![CDATA[<b>{escape(tool)}</b> at {escape(ts)}<br/>mode <b>{escape(mode)}</b><ul>{detail.strip()}</ul>]]>"
     return (
         f"    <Placemark>\n"
         f"      <name>{escape(label)}</name>\n"
@@ -356,8 +350,7 @@ def _build_kml(name: str, fixes: list[_Fix], audit_rows: list[dict]) -> str:
 
     parts = [
         '<?xml version="1.0" encoding="UTF-8"?>\n',
-        '<kml xmlns="http://www.opengis.net/kml/2.2" '
-        'xmlns:gx="http://www.google.com/kml/ext/2.2">\n',
+        '<kml xmlns="http://www.opengis.net/kml/2.2" xmlns:gx="http://www.google.com/kml/ext/2.2">\n',
         "<Document>\n",
         f"  <name>{escape(name)}</name>\n",
         f"  <description>{_legend_description(modes_present, len(command_blocks))}</description>\n",
@@ -417,17 +410,25 @@ def telemetry_to_kml(
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Build a Google Earth 3D KML/KMZ flight track (mode-coloured) "
-        "with an arrow at every LLM command.",
+        description="Build a Google Earth 3D KML/KMZ flight track (mode-coloured) with an arrow at every LLM command.",
     )
-    parser.add_argument("--telemetry", required=True, type=Path,
-                        help="Plan-19 telemetry.csv (t_iso, lat_deg, lon_deg, abs_alt_m, flight_mode)")
-    parser.add_argument("--audit", type=Path, default=None,
-                        help="optional Plan-19 audit_slice.csv (ts, tool, verdict) - one arrow per row")
+    parser.add_argument(
+        "--telemetry",
+        required=True,
+        type=Path,
+        help="Plan-19 telemetry.csv (t_iso, lat_deg, lon_deg, abs_alt_m, flight_mode)",
+    )
+    parser.add_argument(
+        "--audit",
+        type=Path,
+        default=None,
+        help="optional Plan-19 audit_slice.csv (ts, tool, verdict) - one arrow per row",
+    )
     parser.add_argument("--out", required=True, type=Path, help="output .kmz (or .kml with --no-kmz)")
     parser.add_argument("--name", default="flight", help="document name shown in Google Earth")
-    parser.add_argument("--no-kmz", dest="kmz", action="store_false",
-                        help="write a plain doc.kml instead of a zipped .kmz")
+    parser.add_argument(
+        "--no-kmz", dest="kmz", action="store_false", help="write a plain doc.kml instead of a zipped .kmz"
+    )
     args = parser.parse_args()
 
     if not args.telemetry.exists():

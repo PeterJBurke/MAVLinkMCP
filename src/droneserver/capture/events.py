@@ -213,17 +213,13 @@ def _read_audit(path: pathlib.Path) -> list:
             verdict = (row.get("verdict") or "").strip()
             rule = row.get("rule") or ""
             # Every call -> a "command" event.
-            events.append(
-                _mk(ts, None, "command", f"{tool} {verdict}".strip(), "audit", call_id)
-            )
+            events.append(_mk(ts, None, "command", f"{tool} {verdict}".strip(), "audit", call_id))
             # Verdict-specific flags, in addition to the command event.
             if verdict == "rejected":
                 detail = f"{tool} {rule}".strip()
                 events.append(_mk(ts, None, "rejection", detail, "audit", call_id))
             elif verdict == "confirmation_required":
-                events.append(
-                    _mk(ts, None, "confirmation_required", tool, "audit", call_id)
-                )
+                events.append(_mk(ts, None, "confirmation_required", tool, "audit", call_id))
             elif verdict == "allowed_safety_disabled":
                 events.append(_mk(ts, None, "safety_disabled", tool, "audit", call_id))
             elif verdict == "error":
@@ -283,10 +279,7 @@ def _read_mavlink(path: pathlib.Path) -> list:
                         last_custom_mode = key
                     elif key != last_custom_mode:
                         last_custom_mode = key
-                        events.append(
-                            _mk(ts, t_rel, "mode_change", _resolve_mode(custom_mode),
-                                "mavlink")
-                        )
+                        events.append(_mk(ts, t_rel, "mode_change", _resolve_mode(custom_mode), "mavlink"))
                 base_mode = _to_int(fields.get("base_mode"))
                 if base_mode is not None:
                     armed = bool(base_mode & MAV_MODE_FLAG_SAFETY_ARMED)
@@ -300,22 +293,15 @@ def _read_mavlink(path: pathlib.Path) -> list:
             elif msg_type == "COMMAND_ACK":
                 cmd = fields.get("command")
                 result = fields.get("result")
-                events.append(
-                    _mk(ts, t_rel, "command_ack", f"command={cmd} result={result}",
-                        "mavlink")
-                )
+                events.append(_mk(ts, t_rel, "command_ack", f"command={cmd} result={result}", "mavlink"))
 
             elif msg_type == "MISSION_ITEM_REACHED":
                 seq = fields.get("seq")
-                events.append(
-                    _mk(ts, t_rel, "mission_item_reached", f"seq={seq}", "mavlink")
-                )
+                events.append(_mk(ts, t_rel, "mission_item_reached", f"seq={seq}", "mavlink"))
 
             elif msg_type == "STATUSTEXT":
                 text = str(fields.get("text", "")).strip()
-                events.append(
-                    _mk(ts, t_rel, _statustext_category(text), text, "mavlink")
-                )
+                events.append(_mk(ts, t_rel, _statustext_category(text), text, "mavlink"))
 
             elif msg_type == "HOME_POSITION":
                 # HOME_POSITION streams once a second on ArduPilot (the server
@@ -325,9 +311,7 @@ def _read_mavlink(path: pathlib.Path) -> list:
                 lon = fields.get("longitude")
                 if (lat, lon) != last_home:
                     last_home = (lat, lon)
-                    events.append(
-                        _mk(ts, t_rel, "home_set", f"lat={lat} lon={lon}", "mavlink")
-                    )
+                    events.append(_mk(ts, t_rel, "home_set", f"lat={lat} lon={lon}", "mavlink"))
     return events
 
 
@@ -360,19 +344,14 @@ def _read_telemetry(path: pathlib.Path, mavlink_present: bool) -> list:
                     last_mode = mode
                 elif mode != last_mode:
                     last_mode = mode
-                    events.append(
-                        _mk(ts, t_rel, "mode_change", str(mode), "telemetry")
-                    )
+                    events.append(_mk(ts, t_rel, "mode_change", str(mode), "telemetry"))
 
             # Telemetry gap proxy for client connect/disconnect.
             if t_rel is not None:
                 if last_t_rel is not None:
                     gap = t_rel - last_t_rel
                     if gap > GAP_THRESHOLD_S:
-                        events.append(
-                            _mk(ts, t_rel, "telemetry_gap",
-                                f"gap={round(gap, 3)}s", "telemetry")
-                        )
+                        events.append(_mk(ts, t_rel, "telemetry_gap", f"gap={round(gap, 3)}s", "telemetry"))
                 last_t_rel = t_rel
     return events
 

@@ -19,6 +19,7 @@ from droneserver.capture.telemetry_recorder import COLUMNS, TelemetryRecorder
 
 # --- scripted MavSDK telemetry sample objects -----------------------------
 
+
 class _Position:
     latitude_deg = 47.3977419
     longitude_deg = 8.5455938

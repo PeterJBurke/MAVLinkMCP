@@ -23,8 +23,11 @@ def test_small_conversation_roundtrips(tmp_path):
         "assistant",
         "I'll take off now.",
         tool_calls=[
-            {"call_id": "c1", "tool": "takeoff",
-             "args": {"altitude": 10, "api_key": "sk-SECRET", "confirm_token": "tok-XYZ"}}
+            {
+                "call_id": "c1",
+                "tool": "takeoff",
+                "args": {"altitude": 10, "api_key": "sk-SECRET", "confirm_token": "tok-XYZ"},
+            }
         ],
         model="test-model",
         params={"temperature": 0.0, "top_p": 1.0, "seed": 42, "max_tokens": 256},

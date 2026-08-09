@@ -47,20 +47,39 @@ def _heartbeat(mav) -> "mavutil.mavlink.MAVLink_message":
     return mav.heartbeat_encode(
         mavutil.mavlink.MAV_TYPE_QUADROTOR,
         mavutil.mavlink.MAV_AUTOPILOT_ARDUPILOTMEGA,
-        0, 0, mavutil.mavlink.MAV_STATE_ACTIVE,
+        0,
+        0,
+        mavutil.mavlink.MAV_STATE_ACTIVE,
     )
 
 
 def _command_long(mav) -> "mavutil.mavlink.MAVLink_message":
     return mav.command_long_encode(
-        1, 1, mavutil.mavlink.MAV_CMD_NAV_TAKEOFF, 0,
-        0, 0, 0, 0, 0, 0, 10.0,
+        1,
+        1,
+        mavutil.mavlink.MAV_CMD_NAV_TAKEOFF,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        10.0,
     )
 
 
 def _global_position_int(mav) -> "mavutil.mavlink.MAVLink_message":
     return mav.global_position_int_encode(
-        12345, -353632620, 1491652370, 584090, 10000, 0, 0, 0, 65535,
+        12345,
+        -353632620,
+        1491652370,
+        584090,
+        10000,
+        0,
+        0,
+        0,
+        65535,
     )
 
 
@@ -75,9 +94,10 @@ def _stamp(msg, mav) -> "mavutil.mavlink.MAVLink_message":
 # Pure decode / serialize (no socket) - always run
 # --------------------------------------------------------------------------
 
+
 def test_direction_heuristic():
-    assert direction_for(1) == "recv"          # vehicle -> server
-    assert direction_for(255) == "sent"        # GCS/commander -> vehicle
+    assert direction_for(1) == "recv"  # vehicle -> server
+    assert direction_for(255) == "sent"  # GCS/commander -> vehicle
     assert direction_for(2) == "sent"
     # overridable vehicle sysid
     assert direction_for(7, vehicle_sysid=7) == "recv"
@@ -99,24 +119,33 @@ def test_decode_message_schema_and_fields():
     obj = json.loads(rec.to_json())
 
     assert set(obj) == {
-        "ts", "t_rel_s", "direction", "msg_type",
-        "sysid", "compid", "seq", "fields",
+        "ts",
+        "t_rel_s",
+        "direction",
+        "msg_type",
+        "sysid",
+        "compid",
+        "seq",
+        "fields",
     }
     assert obj["msg_type"] == "GLOBAL_POSITION_INT"
     assert obj["direction"] == "recv"
     assert obj["sysid"] == 1
     assert obj["compid"] == 1
-    assert obj["ts"].endswith("+00:00")            # UTC ISO-8601
-    assert obj["t_rel_s"] == pytest.approx(0.5)    # from the monotonic clock
-    assert "mavpackettype" not in obj["fields"]    # dropped per spec
-    assert obj["fields"]["lat"] == -353632620      # decoded payload preserved
+    assert obj["ts"].endswith("+00:00")  # UTC ISO-8601
+    assert obj["t_rel_s"] == pytest.approx(0.5)  # from the monotonic clock
+    assert "mavpackettype" not in obj["fields"]  # dropped per spec
+    assert obj["fields"]["lat"] == -353632620  # decoded payload preserved
 
 
 def test_decode_uses_wall_clock_when_no_monotonic():
     mav = _make_mav(sysid=255)
     msg = _stamp(_heartbeat(mav), mav)
     rec = decode_message(
-        msg, wall_time=1_000_002.0, t0=1_000_000.0, t0_monotonic=0.0,
+        msg,
+        wall_time=1_000_002.0,
+        t0=1_000_000.0,
+        t0_monotonic=0.0,
     )
     assert rec.t_rel_s == pytest.approx(2.0)
     assert rec.direction == "sent"
@@ -129,7 +158,7 @@ def test_tlog_frame_is_replayable(tmp_path: Path):
 
     tlog = tmp_path / "one.tlog"
     tlog.write_bytes(frame)
-    assert tlog.stat().st_size > 8              # timestamp prefix + payload
+    assert tlog.stat().st_size > 8  # timestamp prefix + payload
 
     replay = mavutil.mavlink_connection(str(tlog))
     got = replay.recv_match(blocking=True)
@@ -148,6 +177,7 @@ def test_documented_type_lists_are_disjoint_and_populated():
 # --------------------------------------------------------------------------
 # Loopback: real udpin tap fed by a udpout sender in-process
 # --------------------------------------------------------------------------
+
 
 def _drain_until(predicate, timeout=3.0, interval=0.05):
     deadline = time.monotonic() + timeout
@@ -186,9 +216,7 @@ def test_loopback_capture(tmp_path: Path):
         sender.mav.srcComponent = 190
         sender.mav.send(_command_long(gcs))
 
-        assert _drain_until(lambda: tap.message_count >= 3), (
-            f"tap saw only {tap.message_count} msgs"
-        )
+        assert _drain_until(lambda: tap.message_count >= 3), f"tap saw only {tap.message_count} msgs"
     finally:
         sender.close()
         tap.stop()

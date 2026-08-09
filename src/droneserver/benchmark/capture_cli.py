@@ -33,13 +33,15 @@ def git_commit(repo: Path | None = None) -> str:
     """
     repo = Path(repo or _REPO_ROOT)
     try:
-        sha = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
-                             capture_output=True, text=True, timeout=10, check=False)
+        sha = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True, timeout=10, check=False
+        )
         if sha.returncode != 0:
             return ""
         commit = sha.stdout.strip()
-        dirty = subprocess.run(["git", "-C", str(repo), "status", "--porcelain"],
-                               capture_output=True, text=True, timeout=10, check=False)
+        dirty = subprocess.run(
+            ["git", "-C", str(repo), "status", "--porcelain"], capture_output=True, text=True, timeout=10, check=False
+        )
         return f"{commit}-dirty" if dirty.stdout.strip() else commit
     except (OSError, subprocess.SubprocessError):
         return ""
@@ -56,60 +58,90 @@ def add_capture_arguments(parser, *, model_provenance: bool = True) -> None:
     cap = parser.add_argument_group(
         "capture (Plan 19)",
         "Opt-in per-trial artifact capture. Nothing below has any effect, and no "
-        "capture code (pymavlink/mavsdk) is imported, unless --capture is passed.")
-    cap.add_argument("--capture", action="store_true",
-                     help="enable the per-trial capture layer (MAVLink tap + telemetry "
-                          "recorder + dataflash retention + manifest + events)")
-    cap.add_argument("--mavlink-endpoint", default="udpin:127.0.0.1:14650",
-                     help="passive pymavlink listener for the MAVLink wire tap; SITL / "
-                          "mavlink-router must forward a COPY of the stream here. It has to "
-                          "be fed from INSIDE the link (see scripts/mavlink_relay.py): a "
-                          "plain MAVProxy --out forward carries the vehicle's telemetry and "
-                          "none of the server's commands (default: %(default)s)")
-    cap.add_argument("--telemetry-address", default="udp://:14540",
-                     help="MavSDK system address for the telemetry recorder. Defaults to "
-                          "the same MAVLink address/port the server uses (MAVLINK_PORT "
-                          "14540); in practice point it at its OWN forwarded endpoint "
-                          "(mavlink-router --out) so it does not contend with the server "
-                          "for the socket (default: %(default)s)")
-    cap.add_argument("--dataflash-dir", default="",
-                     help="directory where SITL writes its .BIN/.ulg logs; the newest is "
-                          "retained per trial (empty: skip dataflash retention)")
-    cap.add_argument("--dataflash-remote", default="",
-                     help="host:/path of the log directory when the simulator runs on "
-                          "ANOTHER machine (the usual SITL case), fetched per trial over "
-                          "ssh/scp; only a log written during the trial is kept. Takes "
-                          "precedence over --dataflash-dir")
-    cap.add_argument("--vehicle-sysid", type=int, default=1,
-                     help="MAVLink sysid of the autopilot, for the tap's direction "
-                          "heuristic (default: %(default)s)")
-    cap.add_argument("--telemetry-rate", type=float, default=10.0,
-                     help="telemetry.csv sample rate in Hz (default: %(default)s)")
-    cap.add_argument("--min-telemetry-rows", type=int, default=DEFAULT_MIN_TELEMETRY_ROWS,
-                     help="ceiling on the telemetry.csv row floor. The floor actually applied "
-                          "is this or one row per second of trial, whichever is SMALLER - a "
-                          "two-second parameter read cannot produce ten rows however healthy "
-                          "the recorder is. Long trials are additionally checked for coverage: "
-                          "the recording must reach the end of the trial (default: %(default)s)")
-    cap.add_argument("--require-complete-capture", action="store_true",
-                     help="exit non-zero if ANY trial's bundle is degraded. What the N=5 "
-                          "campaign runs with: a green exit code should mean the evidence "
-                          "exists, not merely that the flights happened")
+        "capture code (pymavlink/mavsdk) is imported, unless --capture is passed.",
+    )
+    cap.add_argument(
+        "--capture",
+        action="store_true",
+        help="enable the per-trial capture layer (MAVLink tap + telemetry "
+        "recorder + dataflash retention + manifest + events)",
+    )
+    cap.add_argument(
+        "--mavlink-endpoint",
+        default="udpin:127.0.0.1:14650",
+        help="passive pymavlink listener for the MAVLink wire tap; SITL / "
+        "mavlink-router must forward a COPY of the stream here. It has to "
+        "be fed from INSIDE the link (see scripts/mavlink_relay.py): a "
+        "plain MAVProxy --out forward carries the vehicle's telemetry and "
+        "none of the server's commands (default: %(default)s)",
+    )
+    cap.add_argument(
+        "--telemetry-address",
+        default="udp://:14540",
+        help="MavSDK system address for the telemetry recorder. Defaults to "
+        "the same MAVLink address/port the server uses (MAVLINK_PORT "
+        "14540); in practice point it at its OWN forwarded endpoint "
+        "(mavlink-router --out) so it does not contend with the server "
+        "for the socket (default: %(default)s)",
+    )
+    cap.add_argument(
+        "--dataflash-dir",
+        default="",
+        help="directory where SITL writes its .BIN/.ulg logs; the newest is "
+        "retained per trial (empty: skip dataflash retention)",
+    )
+    cap.add_argument(
+        "--dataflash-remote",
+        default="",
+        help="host:/path of the log directory when the simulator runs on "
+        "ANOTHER machine (the usual SITL case), fetched per trial over "
+        "ssh/scp; only a log written during the trial is kept. Takes "
+        "precedence over --dataflash-dir",
+    )
+    cap.add_argument(
+        "--vehicle-sysid",
+        type=int,
+        default=1,
+        help="MAVLink sysid of the autopilot, for the tap's direction heuristic (default: %(default)s)",
+    )
+    cap.add_argument(
+        "--telemetry-rate", type=float, default=10.0, help="telemetry.csv sample rate in Hz (default: %(default)s)"
+    )
+    cap.add_argument(
+        "--min-telemetry-rows",
+        type=int,
+        default=DEFAULT_MIN_TELEMETRY_ROWS,
+        help="ceiling on the telemetry.csv row floor. The floor actually applied "
+        "is this or one row per second of trial, whichever is SMALLER - a "
+        "two-second parameter read cannot produce ten rows however healthy "
+        "the recorder is. Long trials are additionally checked for coverage: "
+        "the recording must reach the end of the trial (default: %(default)s)",
+    )
+    cap.add_argument(
+        "--require-complete-capture",
+        action="store_true",
+        help="exit non-zero if ANY trial's bundle is degraded. What the N=5 "
+        "campaign runs with: a green exit code should mean the evidence "
+        "exists, not merely that the flights happened",
+    )
 
     # Manifest provenance (§6). Free-form; may be empty. JSON where noted.
     if model_provenance:
         cap.add_argument("--model", default="", help="LLM model id for the manifest provenance")
         cap.add_argument("--provider", default="", help="LLM provider (e.g. anthropic, openai)")
-        cap.add_argument("--decoding", default="",
-                         help="decoding settings as JSON, e.g. '{\"temperature\":0,\"seed\":1}'")
+        cap.add_argument(
+            "--decoding", default="", help='decoding settings as JSON, e.g. \'{"temperature":0,"seed":1}\''
+        )
     cap.add_argument("--firmware", default="", help="autopilot firmware family (e.g. ArduCopter, PX4)")
     cap.add_argument("--firmware-version", default="", help="autopilot firmware version string")
-    cap.add_argument("--sitl-host", default="",
-                     help="hostname/address of the machine running the simulator, for the "
-                          "manifest. Set it whenever the link goes through a local relay or "
-                          "forward, where the endpoints no longer name the sim's machine")
-    cap.add_argument("--sim-params", default="",
-                     help="simulator params as JSON, e.g. '{\"frame\":\"quad\",\"wind\":0}'")
+    cap.add_argument(
+        "--sitl-host",
+        default="",
+        help="hostname/address of the machine running the simulator, for the "
+        "manifest. Set it whenever the link goes through a local relay or "
+        "forward, where the endpoints no longer name the sim's machine",
+    )
+    cap.add_argument("--sim-params", default="", help='simulator params as JSON, e.g. \'{"frame":"quad","wind":0}\'')
 
 
 def build_capture_config(args, *, error, model=None, provider=None, decoding=None):
@@ -125,8 +157,10 @@ def build_capture_config(args, *, error, model=None, provider=None, decoding=Non
         if getattr(args, "require_complete_capture", False):
             # Otherwise the two flags together are a trap: a run that captured
             # nothing at all would satisfy "no bundle is degraded" and exit 0.
-            error("--require-complete-capture has no meaning without --capture: "
-                  "a run with no capture at all has no bundle to be complete")
+            error(
+                "--require-complete-capture has no meaning without --capture: "
+                "a run with no capture at all has no bundle to be complete"
+            )
         return None
 
     from droneserver.benchmark.capture_session import CaptureConfig
@@ -182,8 +216,10 @@ def report_capture(statuses, *, require_complete: bool, out=print) -> bool:
     if not captured:
         return False
     degraded = [s for s in captured if not s.startswith("complete")]
-    out(f"capture: {len(degraded)}/{len(captured)} trial(s) degraded"
-        f"{' - every bundle is complete' if not degraded else ''}")
+    out(
+        f"capture: {len(degraded)}/{len(captured)} trial(s) degraded"
+        f"{' - every bundle is complete' if not degraded else ''}"
+    )
     for status in degraded:
         out(f"  {status}")
     if degraded and require_complete:

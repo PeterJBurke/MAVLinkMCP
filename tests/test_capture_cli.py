@@ -37,11 +37,7 @@ EXPECTED_FLAGS = {
 
 
 def _flags_of(script_module_argv_parser) -> set[str]:
-    return {
-        option
-        for action in script_module_argv_parser._actions
-        for option in action.option_strings
-    }
+    return {option for action in script_module_argv_parser._actions for option in action.option_strings}
 
 
 def _parser(**kwargs) -> argparse.ArgumentParser:
@@ -67,22 +63,37 @@ def test_no_capture_means_no_config_and_no_capture_import():
 
 
 def test_flags_map_onto_the_config():
-    args = _parser().parse_args([
-        "--capture",
-        "--mavlink-endpoint", "udpin:127.0.0.1:14655",
-        "--telemetry-address", "udp://:14540",
-        "--dataflash-remote", "llmuavsitl:/home/dronepilot/ardupilot/ArduCopter/logs",
-        "--vehicle-sysid", "1",
-        "--telemetry-rate", "10",
-        "--min-telemetry-rows", "25",
-        "--firmware", "ArduCopter",
-        "--firmware-version", "4.5.7 (SITL)",
-        "--sitl-host", "llmuavsitl",
-        "--sim-params", '{"frame":"quad"}',
-        "--model", "gpt-5.2",
-        "--provider", "openai",
-        "--decoding", '{"temperature":0}',
-    ])
+    args = _parser().parse_args(
+        [
+            "--capture",
+            "--mavlink-endpoint",
+            "udpin:127.0.0.1:14655",
+            "--telemetry-address",
+            "udp://:14540",
+            "--dataflash-remote",
+            "llmuavsitl:/home/dronepilot/ardupilot/ArduCopter/logs",
+            "--vehicle-sysid",
+            "1",
+            "--telemetry-rate",
+            "10",
+            "--min-telemetry-rows",
+            "25",
+            "--firmware",
+            "ArduCopter",
+            "--firmware-version",
+            "4.5.7 (SITL)",
+            "--sitl-host",
+            "llmuavsitl",
+            "--sim-params",
+            '{"frame":"quad"}',
+            "--model",
+            "gpt-5.2",
+            "--provider",
+            "openai",
+            "--decoding",
+            '{"temperature":0}',
+        ]
+    )
     cfg = build_capture_config(args, error=pytest.fail)
     assert cfg.mavlink_endpoint == "udpin:127.0.0.1:14655"
     assert cfg.dataflash_remote.endswith("/ArduCopter/logs")
@@ -96,8 +107,9 @@ def test_flags_map_onto_the_config():
 def test_the_caller_can_override_the_provenance():
     """The LLM harness knows the resolved route; a typed flag is only a claim."""
     args = _parser(model_provenance=False).parse_args(["--capture"])
-    cfg = build_capture_config(args, error=pytest.fail, model="gemini-3.5-flash-lite",
-                               provider="google", decoding={"tool_choice": "auto"})
+    cfg = build_capture_config(
+        args, error=pytest.fail, model="gemini-3.5-flash-lite", provider="google", decoding={"tool_choice": "auto"}
+    )
     assert cfg.model == "gemini-3.5-flash-lite"
     assert cfg.provider == "google"
     assert cfg.decoding == {"tool_choice": "auto"}
@@ -122,7 +134,7 @@ def test_requiring_complete_capture_without_capture_is_refused():
 
 
 def test_the_summary_line_is_printed_even_when_everything_is_fine():
-    """"0 of 9 degraded" is what makes the absence of a warning mean something."""
+    """ "0 of 9 degraded" is what makes the absence of a warning mean something."""
     out = []
     failed = report_capture(["complete"] * 9, require_complete=True, out=out.append)
     assert failed is False
@@ -140,8 +152,7 @@ def test_degraded_bundles_are_named_and_can_fail_the_run():
 
 def test_degraded_bundles_alone_do_not_fail_a_run_that_did_not_ask():
     out = []
-    assert report_capture(["degraded[telemetry.csv: 0 rows]"], require_complete=False,
-                          out=out.append) is False
+    assert report_capture(["degraded[telemetry.csv: 0 rows]"], require_complete=False, out=out.append) is False
     assert out[0] == "capture: 1/1 trial(s) degraded"
 
 

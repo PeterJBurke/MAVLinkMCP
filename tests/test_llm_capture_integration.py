@@ -58,22 +58,30 @@ class FakeSession:
 
     async def call_raw(self, tool, arguments=None, timeout_s=300.0):
         if tool == "get_home_position":
-            return {"status": "success",
-                    "home": {"latitude_deg": 33.6458611, "longitude_deg": -117.84275,
-                             "absolute_altitude_m": 25.1}}
+            return {
+                "status": "success",
+                "home": {"latitude_deg": 33.6458611, "longitude_deg": -117.84275, "absolute_altitude_m": 25.1},
+            }
         if tool == "get_armed":
             return {"status": "success", "armed": False}
         if tool == "get_position":
-            return {"status": "success",
-                    "position": {"latitude_deg": 33.6458611, "longitude_deg": -117.84275,
-                                 "absolute_altitude_m": 25.1, "relative_altitude_m": 0.0}}
+            return {
+                "status": "success",
+                "position": {
+                    "latitude_deg": 33.6458611,
+                    "longitude_deg": -117.84275,
+                    "absolute_altitude_m": 25.1,
+                    "relative_altitude_m": 0.0,
+                },
+            }
         if tool == "get_parameter":
             return {"status": "success", "value": 500.0}
         return {"status": "success"}
 
     async def call(self, tool, arguments, *, turn=0, seq=0, timeout_s=300.0):
-        record = CallRecord(turn=turn, seq=seq, tool=tool, arguments=arguments,
-                            started_at=0.0, wall_ms=1.0, status="success")
+        record = CallRecord(
+            turn=turn, seq=seq, tool=tool, arguments=arguments, started_at=0.0, wall_ms=1.0, status="success"
+        )
         return {"status": "success"}, record
 
 
@@ -82,9 +90,15 @@ class FakePoller:
 
     def __init__(self, url, api_key="", interval_s=1.5):
         self.samples = [
-            TelemetrySample(t=float(i), latitude_deg=33.6458611, longitude_deg=-117.84275,
-                            relative_altitude_m=0.0, absolute_altitude_m=25.1,
-                            armed=False, in_air=False)
+            TelemetrySample(
+                t=float(i),
+                latitude_deg=33.6458611,
+                longitude_deg=-117.84275,
+                relative_altitude_m=0.0,
+                absolute_altitude_m=25.1,
+                armed=False,
+                in_air=False,
+            )
             for i in range(5)
         ]
 
@@ -111,17 +125,38 @@ class FakeModel:
 
 def _fake_agent_run() -> AgentRun:
     """One turn, one tool call - enough to have a conversation to record."""
-    call = CallRecord(turn=1, seq=1, tool="get_position", arguments={"verbose": True},
-                      started_at=0.0, wall_ms=12.5, status="success",
-                      result={"status": "success"})
-    turn = TurnRecord(index=1, decision_latency_ms=800.0, provider_wait_ms=0.0, attempts=1,
-                      input_tokens=100, cached_input_tokens=0, output_tokens=20,
-                      reasoning_tokens=0, finish_reason="tool_calls",
-                      text="checking where we are", tool_calls=["get_position"],
-                      resolved_model="fake-model-2026-01-01")
-    return AgentRun(turns=[turn], calls=[call],
-                    stop_reason="model declared the mission finished",
-                    final_text="MISSION ABORTED - refused", started_at=0.0, duration_s=1.0)
+    call = CallRecord(
+        turn=1,
+        seq=1,
+        tool="get_position",
+        arguments={"verbose": True},
+        started_at=0.0,
+        wall_ms=12.5,
+        status="success",
+        result={"status": "success"},
+    )
+    turn = TurnRecord(
+        index=1,
+        decision_latency_ms=800.0,
+        provider_wait_ms=0.0,
+        attempts=1,
+        input_tokens=100,
+        cached_input_tokens=0,
+        output_tokens=20,
+        reasoning_tokens=0,
+        finish_reason="tool_calls",
+        text="checking where we are",
+        tool_calls=["get_position"],
+        resolved_model="fake-model-2026-01-01",
+    )
+    return AgentRun(
+        turns=[turn],
+        calls=[call],
+        stop_reason="model declared the mission finished",
+        final_text="MISSION ABORTED - refused",
+        started_at=0.0,
+        duration_s=1.0,
+    )
 
 
 class FakeTap:
@@ -129,18 +164,34 @@ class FakeTap:
 
     def __init__(self, endpoint, out_dir, t0=None, *, vehicle_sysid=1):
         from pathlib import Path
+
         self.out_dir = Path(out_dir)
 
     def start(self):
         self.out_dir.mkdir(parents=True, exist_ok=True)
-        rows = [{"ts": "2026-08-09T19:00:00+00:00", "t_rel_s": 1.0, "direction": "recv",
-                 "msg_type": "HEARTBEAT", "sysid": 1, "compid": 1, "seq": 0,
-                 "fields": {"custom_mode": 0, "base_mode": 0}},
-                {"ts": "2026-08-09T19:00:01+00:00", "t_rel_s": 2.0, "direction": "sent",
-                 "msg_type": "COMMAND_LONG", "sysid": 255, "compid": 190, "seq": 1,
-                 "fields": {"command": 400}}]
-        (self.out_dir / "mavlink.jsonl").write_text(
-            "".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+        rows = [
+            {
+                "ts": "2026-08-09T19:00:00+00:00",
+                "t_rel_s": 1.0,
+                "direction": "recv",
+                "msg_type": "HEARTBEAT",
+                "sysid": 1,
+                "compid": 1,
+                "seq": 0,
+                "fields": {"custom_mode": 0, "base_mode": 0},
+            },
+            {
+                "ts": "2026-08-09T19:00:01+00:00",
+                "t_rel_s": 2.0,
+                "direction": "sent",
+                "msg_type": "COMMAND_LONG",
+                "sysid": 255,
+                "compid": 190,
+                "seq": 1,
+                "fields": {"command": 400},
+            },
+        ]
+        (self.out_dir / "mavlink.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
         (self.out_dir / "mavlink.tlog").write_bytes(b"\x00" * 128)
 
     def stop(self):
@@ -155,14 +206,14 @@ class FakeCaptureRecorder:
 
     def __init__(self, system_address, out_dir, rate_hz=10.0, t0=None):
         from pathlib import Path
+
         self.out_dir = Path(out_dir)
 
     async def start(self):
         self.out_dir.mkdir(parents=True, exist_ok=True)
         header = "t_iso,t_rel_s,lat_deg,lon_deg,rel_alt_m,armed,in_air\n"
         body = "".join(
-            f"2026-08-09T19:00:{i:02d}+00:00,{i / 10:.1f},33.6,-117.8,0.0,"
-            f"{FakeCaptureRecorder.armed},False\n"
+            f"2026-08-09T19:00:{i:02d}+00:00,{i / 10:.1f},33.6,-117.8,0.0,{FakeCaptureRecorder.armed},False\n"
             for i in range(30)
         )
         (self.out_dir / "telemetry.csv").write_text(header + body, encoding="utf-8")
@@ -172,9 +223,16 @@ class FakeCaptureRecorder:
 
 
 AUDIT_ROWS = [
-    {"ts": "2026-08-09T19:00:00+00:00", "_ts": 0.0, "call_id": "c1", "tool": "get_position",
-     "tier": "read", "verdict": "allowed", "latency_ms": 12.0,
-     "model": "droneserver-llm-agent/openai:gpt-5.2"},
+    {
+        "ts": "2026-08-09T19:00:00+00:00",
+        "_ts": 0.0,
+        "call_id": "c1",
+        "tool": "get_position",
+        "tier": "read",
+        "verdict": "allowed",
+        "latency_ms": 12.0,
+        "model": "droneserver-llm-agent/openai:gpt-5.2",
+    },
 ]
 
 
@@ -215,8 +273,13 @@ def _config(tmp_path, capture=None, missions=("T1",)):
 def _capture_config(**kwargs):
     from droneserver.benchmark.capture_session import CaptureConfig
 
-    return CaptureConfig(firmware="ArduCopter", firmware_version="4.5.7 (SITL)",
-                         sitl_host="llmuavsitl", droneserver_commit="deadbeef", **kwargs)
+    return CaptureConfig(
+        firmware="ArduCopter",
+        firmware_version="4.5.7 (SITL)",
+        sitl_host="llmuavsitl",
+        droneserver_commit="deadbeef",
+        **kwargs,
+    )
 
 
 # --- tests ----------------------------------------------------------------
@@ -228,8 +291,15 @@ async def test_llm_trials_write_a_plan19_bundle(tmp_path):
 
     assert len(results) == 1
     trial_dir = config.out_dir / "T1" / "trial_1"
-    for name in ("manifest.json", "events.jsonl", "transcript.jsonl",
-                 "mavlink.jsonl", "mavlink.tlog", "telemetry.csv", "audit_slice.csv"):
+    for name in (
+        "manifest.json",
+        "events.jsonl",
+        "transcript.jsonl",
+        "mavlink.jsonl",
+        "mavlink.tlog",
+        "telemetry.csv",
+        "audit_slice.csv",
+    ):
         assert (trial_dir / name).exists(), f"missing {name}"
 
     manifest = json.loads((trial_dir / "manifest.json").read_text())
@@ -255,8 +325,11 @@ async def test_the_transcript_is_the_real_conversation(tmp_path):
     config = _config(tmp_path, capture=_capture_config())
     await runner.run_llm_suite(config, log=lambda *a: None)
 
-    turns = [json.loads(x) for x in
-             (config.out_dir / "T1" / "trial_1" / "transcript.jsonl").read_text().splitlines() if x.strip()]
+    turns = [
+        json.loads(x)
+        for x in (config.out_dir / "T1" / "trial_1" / "transcript.jsonl").read_text().splitlines()
+        if x.strip()
+    ]
     roles = [t["role"] for t in turns]
     assert roles[0] == "system" and roles[1] == "user"
     assert "assistant" in roles and "tool" in roles

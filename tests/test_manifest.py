@@ -100,8 +100,7 @@ def _sample_meta():
         "mavsdk_version": "2.0.0",
         "droneserver_commit": "4113f9e",
         "sim": "ArduPilot SITL",
-        "sim_params": {"home": [-35.36, 149.16, 584.0], "wind": 0.0,
-                       "frame": "quad", "speedup": 1.0},
+        "sim_params": {"home": [-35.36, 149.16, 584.0], "wind": 0.0, "frame": "quad", "speedup": 1.0},
         "host": "llmuavdev",
         "sitl_host": "llmuavsitl",
         "clock_offset_ms": 12.5,
@@ -163,6 +162,7 @@ def test_write_manifest_recurses_subdirs(tmp_path):
 
 def test_sha256_file_matches_hashlib(tmp_path):
     import hashlib
+
     p = tmp_path / "blob"
     data = b"the quick brown fox" * 100
     p.write_bytes(data)

@@ -36,22 +36,30 @@ _MODE_SEQUENCE = (["GUIDED"] * 7) + (["AUTO"] * 7) + (["RTL"] * 6)
 def _write_telemetry(path: Path) -> None:
     with path.open("w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
-        w.writerow(["t_iso", "t_rel_s", "lat_deg", "lon_deg", "abs_alt_m",
-                    "rel_alt_m", "flight_mode", "armed"])
+        w.writerow(["t_iso", "t_rel_s", "lat_deg", "lon_deg", "abs_alt_m", "rel_alt_m", "flight_mode", "armed"])
         for i, mode in enumerate(_MODE_SEQUENCE):
             t = _T0 + timedelta(seconds=0.5 * i)
             lat = 33.6400 + i * 0.0001
             lon = -117.8400 + i * 0.0001
             abs_alt = 100.0 + i  # climbing
-            w.writerow([t.isoformat().replace("+00:00", "Z"), 0.5 * i,
-                        f"{lat:.6f}", f"{lon:.6f}", f"{abs_alt:.1f}",
-                        f"{abs_alt - 100.0:.1f}", mode, "True"])
+            w.writerow(
+                [
+                    t.isoformat().replace("+00:00", "Z"),
+                    0.5 * i,
+                    f"{lat:.6f}",
+                    f"{lon:.6f}",
+                    f"{abs_alt:.1f}",
+                    f"{abs_alt - 100.0:.1f}",
+                    mode,
+                    "True",
+                ]
+            )
 
 
 def _write_audit(path: Path) -> None:
     # Three commands, each timestamp within the telemetry span, one per mode.
     stamps = [
-        (_T0 + timedelta(seconds=1.0), "arm_drone", "allowed"),   # GUIDED
+        (_T0 + timedelta(seconds=1.0), "arm_drone", "allowed"),  # GUIDED
         (_T0 + timedelta(seconds=4.5), "start_mission", "allowed"),  # AUTO
         (_T0 + timedelta(seconds=8.0), "return_to_launch", "confirmation_required"),  # RTL
     ]
@@ -111,8 +119,7 @@ def test_track_placemarks_named_by_mode(flight, tmp_path):
             track_folder = folder
             break
     assert track_folder is not None
-    names = {pm.findtext(f"{{{KML_NS}}}name")
-             for pm in track_folder.findall(f"{{{KML_NS}}}Placemark")}
+    names = {pm.findtext(f"{{{KML_NS}}}name") for pm in track_folder.findall(f"{{{KML_NS}}}Placemark")}
     assert {"GUIDED", "AUTO", "RTL"} <= names
 
 
@@ -204,8 +211,7 @@ def test_nan_and_blank_rows_are_skipped(tmp_path):
     tel = tmp_path / "telemetry.csv"
     with tel.open("w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
-        w.writerow(["t_iso", "t_rel_s", "lat_deg", "lon_deg", "abs_alt_m",
-                    "rel_alt_m", "flight_mode", "armed"])
+        w.writerow(["t_iso", "t_rel_s", "lat_deg", "lon_deg", "abs_alt_m", "rel_alt_m", "flight_mode", "armed"])
         base = _T0
         w.writerow([base.isoformat(), 0, "33.64", "-117.84", "100", "0", "GUIDED", "True"])
         # blank lat, NaN alt, empty timestamp - all must be dropped, no crash.

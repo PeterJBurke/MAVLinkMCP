@@ -151,8 +151,7 @@ class TranscriptWriter:
             except (TypeError, ValueError):
                 # Last-resort: coerce everything through str() so we still log.
                 line = json.dumps(
-                    {**record, "content": str(content), "tool_calls": None,
-                     "tool_result": None, "params": None},
+                    {**record, "content": str(content), "tool_calls": None, "tool_result": None, "params": None},
                     default=str,
                 )
             try:

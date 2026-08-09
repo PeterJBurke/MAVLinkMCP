@@ -29,34 +29,61 @@ VEHICLE_SYSID = 1
 def _write_mavlink(trial_dir, *, recv=5, sent=2):
     lines = []
     for i in range(recv):
-        lines.append({"ts": "2026-08-09T19:00:00+00:00", "t_rel_s": float(i), "direction": "recv",
-                      "msg_type": "GLOBAL_POSITION_INT", "sysid": VEHICLE_SYSID, "compid": 1,
-                      "seq": i, "fields": {}})
+        lines.append(
+            {
+                "ts": "2026-08-09T19:00:00+00:00",
+                "t_rel_s": float(i),
+                "direction": "recv",
+                "msg_type": "GLOBAL_POSITION_INT",
+                "sysid": VEHICLE_SYSID,
+                "compid": 1,
+                "seq": i,
+                "fields": {},
+            }
+        )
     for i in range(sent):
-        lines.append({"ts": "2026-08-09T19:00:01+00:00", "t_rel_s": float(i), "direction": "sent",
-                      "msg_type": "COMMAND_LONG", "sysid": 255, "compid": 190,
-                      "seq": i, "fields": {"command": 22}})
-    (trial_dir / "mavlink.jsonl").write_text(
-        "\n".join(json.dumps(x) for x in lines) + "\n", encoding="utf-8")
+        lines.append(
+            {
+                "ts": "2026-08-09T19:00:01+00:00",
+                "t_rel_s": float(i),
+                "direction": "sent",
+                "msg_type": "COMMAND_LONG",
+                "sysid": 255,
+                "compid": 190,
+                "seq": i,
+                "fields": {"command": 22},
+            }
+        )
+    (trial_dir / "mavlink.jsonl").write_text("\n".join(json.dumps(x) for x in lines) + "\n", encoding="utf-8")
     (trial_dir / "mavlink.tlog").write_bytes(b"\x00" * 64 * (recv + sent))
 
 
 def _write_telemetry(trial_dir, rows=20, armed=True, step_s=1.0):
     header = "t_iso,t_rel_s,lat_deg,lon_deg,rel_alt_m,armed,in_air\n"
     body = "".join(
-        f"2026-08-09T19:00:{i:02d}+00:00,{i * step_s:.1f},33.6,-117.8,{i}.0,{armed},{armed}\n"
-        for i in range(rows)
+        f"2026-08-09T19:00:{i:02d}+00:00,{i * step_s:.1f},33.6,-117.8,{i}.0,{armed},{armed}\n" for i in range(rows)
     )
     (trial_dir / "telemetry.csv").write_text(header + body, encoding="utf-8")
 
 
 def _write_events(trial_dir, rows=3):
     (trial_dir / "events.jsonl").write_text(
-        "".join(json.dumps({"ts": "2026-08-09T19:00:00+00:00", "t_rel_s": float(i),
-                            "category": "command", "detail": "takeoff allowed",
-                            "source": "audit", "call_id": None}) + "\n"
-                for i in range(rows)),
-        encoding="utf-8")
+        "".join(
+            json.dumps(
+                {
+                    "ts": "2026-08-09T19:00:00+00:00",
+                    "t_rel_s": float(i),
+                    "category": "command",
+                    "detail": "takeoff allowed",
+                    "source": "audit",
+                    "call_id": None,
+                }
+            )
+            + "\n"
+            for i in range(rows)
+        ),
+        encoding="utf-8",
+    )
 
 
 def _write_audit_slice(trial_dir, rows=2):
@@ -72,12 +99,20 @@ def _write_transcript(trial_dir):
         {"role": "assistant", "content": "taking off", "turn_idx": 2},
         {"role": "tool", "tool_result": {"status": "success"}, "turn_idx": 3},
     ]
-    (trial_dir / "transcript.jsonl").write_text(
-        "".join(json.dumps(t) + "\n" for t in turns), encoding="utf-8")
+    (trial_dir / "transcript.jsonl").write_text("".join(json.dumps(t) + "\n" for t in turns), encoding="utf-8")
 
 
-def complete_bundle(tmp_path, *, armed=True, dataflash=True, transcript=True,
-                    telemetry_rows=20, telemetry_step_s=1.0, trial_seconds=20.0, **mavlink):
+def complete_bundle(
+    tmp_path,
+    *,
+    armed=True,
+    dataflash=True,
+    transcript=True,
+    telemetry_rows=20,
+    telemetry_step_s=1.0,
+    trial_seconds=20.0,
+    **mavlink,
+):
     """A trial directory with everything Plan 19 §8 asks for."""
     trial_dir = tmp_path / "T1" / "trial_1"
     trial_dir.mkdir(parents=True)
@@ -90,11 +125,16 @@ def complete_bundle(tmp_path, *, armed=True, dataflash=True, transcript=True,
     if dataflash:
         (trial_dir / "T1_t1.BIN").write_bytes(b"ArduPilot" * 1000)
     started = datetime(2026, 8, 9, 19, 0, 0, tzinfo=timezone.utc)
-    write_manifest(trial_dir, {
-        "run_id": "test", "mission_id": "T1", "trial_idx": 1,
-        "started_ts": started.isoformat(),
-        "ended_ts": (started + timedelta(seconds=trial_seconds)).isoformat(),
-    })
+    write_manifest(
+        trial_dir,
+        {
+            "run_id": "test",
+            "mission_id": "T1",
+            "trial_idx": 1,
+            "started_ts": started.isoformat(),
+            "ended_ts": (started + timedelta(seconds=trial_seconds)).isoformat(),
+        },
+    )
     return trial_dir
 
 
@@ -163,15 +203,17 @@ def test_a_two_second_mission_is_not_degraded_for_having_few_rows(tmp_path):
     noise. The floor is now one row per second of trial, capped at the
     configured value.
     """
-    trial_dir = complete_bundle(tmp_path, telemetry_rows=9, telemetry_step_s=0.2,
-                                trial_seconds=2.0, armed=False, dataflash=False)
+    trial_dir = complete_bundle(
+        tmp_path, telemetry_rows=9, telemetry_step_s=0.2, trial_seconds=2.0, armed=False, dataflash=False
+    )
     check = verify_bundle(trial_dir, min_telemetry_rows=10)
     assert check.complete, check.problems
 
 
 def test_a_long_trial_with_a_handful_of_rows_is_still_degraded(tmp_path):
-    trial_dir = complete_bundle(tmp_path, telemetry_rows=4, telemetry_step_s=0.1,
-                                trial_seconds=600.0, armed=False, dataflash=False)
+    trial_dir = complete_bundle(
+        tmp_path, telemetry_rows=4, telemetry_step_s=0.1, trial_seconds=600.0, armed=False, dataflash=False
+    )
     check = verify_bundle(trial_dir, min_telemetry_rows=10)
     assert not check.complete
     assert any("below the floor of 10 for a 600s trial" in p for p in check.problems)
@@ -183,8 +225,9 @@ def test_a_recorder_that_died_mid_trial_is_degraded(tmp_path):
     600 rows is not a suspicious number for a ten-minute flight — but they all
     fall in the first minute, so the last nine minutes were never recorded.
     """
-    trial_dir = complete_bundle(tmp_path, telemetry_rows=600, telemetry_step_s=0.1,
-                                trial_seconds=600.0, armed=False, dataflash=False)
+    trial_dir = complete_bundle(
+        tmp_path, telemetry_rows=600, telemetry_step_s=0.1, trial_seconds=600.0, armed=False, dataflash=False
+    )
     check = verify_bundle(trial_dir)
     assert not check.complete
     assert any("the recorder died mid-trial" in p for p in check.problems)
@@ -192,8 +235,9 @@ def test_a_recorder_that_died_mid_trial_is_degraded(tmp_path):
 
 
 def test_a_recording_that_reaches_the_end_is_complete(tmp_path):
-    trial_dir = complete_bundle(tmp_path, telemetry_rows=6000, telemetry_step_s=0.1,
-                                trial_seconds=600.0, armed=False, dataflash=False)
+    trial_dir = complete_bundle(
+        tmp_path, telemetry_rows=6000, telemetry_step_s=0.1, trial_seconds=600.0, armed=False, dataflash=False
+    )
     check = verify_bundle(trial_dir)
     assert check.complete, check.problems
     detail = next(c.detail for c in check.checks if c.name == "telemetry.csv")

@@ -122,8 +122,10 @@ class Relay:
         server.bind(self.listen)
         server.listen(1)
         server.settimeout(1.0)
-        self._log(f"listening on {self.listen[0]}:{self.listen[1]} -> "
-                  f"{self.upstream[0]}:{self.upstream[1]}, mirroring to {self.mirror.address}")
+        self._log(
+            f"listening on {self.listen[0]}:{self.listen[1]} -> "
+            f"{self.upstream[0]}:{self.upstream[1]}, mirroring to {self.mirror.address}"
+        )
         try:
             while not self._stop.is_set():
                 try:
@@ -133,8 +135,10 @@ class Relay:
                 self.sessions += 1
                 self._log(f"client {peer[0]}:{peer[1]} connected (session {self.sessions})")
                 self._session(client)
-                self._log(f"session ended; up={self.bytes_up} down={self.bytes_down} "
-                          f"mirrored={self.mirror.bytes_sent} mirror_errors={self.mirror.errors}")
+                self._log(
+                    f"session ended; up={self.bytes_up} down={self.bytes_down} "
+                    f"mirrored={self.mirror.bytes_sent} mirror_errors={self.mirror.errors}"
+                )
         except KeyboardInterrupt:
             pass
         finally:
@@ -197,12 +201,13 @@ class Relay:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument("--listen", default="127.0.0.1:5679",
-                        help="host:port the MCP server connects to (default 127.0.0.1:5679)")
-    parser.add_argument("--upstream", required=True,
-                        help="host:port of the autopilot/MAVProxy TCP endpoint")
-    parser.add_argument("--mirror", default="127.0.0.1:14650",
-                        help="UDP host:port to copy both directions to (default 127.0.0.1:14650)")
+    parser.add_argument(
+        "--listen", default="127.0.0.1:5679", help="host:port the MCP server connects to (default 127.0.0.1:5679)"
+    )
+    parser.add_argument("--upstream", required=True, help="host:port of the autopilot/MAVProxy TCP endpoint")
+    parser.add_argument(
+        "--mirror", default="127.0.0.1:14650", help="UDP host:port to copy both directions to (default 127.0.0.1:14650)"
+    )
     args = parser.parse_args(argv)
 
     relay = Relay(

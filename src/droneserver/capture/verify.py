@@ -283,14 +283,20 @@ def _check_telemetry(trial_dir: Path, min_rows: int) -> tuple[Check, bool]:
         detail += f", spanning {last_t:.0f}s of a {duration:.0f}s trial"
 
     if rows < floor:
-        return Check("telemetry.csv", False,
-                     f"{rows} row(s), below the floor of {floor} for a "
-                     f"{duration:.0f}s trial" if duration is not None
-                     else f"{rows} row(s), below the floor of {floor}"), armed
+        return Check(
+            "telemetry.csv",
+            False,
+            f"{rows} row(s), below the floor of {floor} for a {duration:.0f}s trial"
+            if duration is not None
+            else f"{rows} row(s), below the floor of {floor}",
+        ), armed
     if duration is not None and duration >= COVERAGE_MIN_TRIAL_S and last_t < MIN_TELEMETRY_COVERAGE * duration:
-        return Check("telemetry.csv", False,
-                     f"the recording stops {duration - last_t:.0f}s before the trial ends "
-                     f"({detail}) - the recorder died mid-trial"), armed
+        return Check(
+            "telemetry.csv",
+            False,
+            f"the recording stops {duration - last_t:.0f}s before the trial ends "
+            f"({detail}) - the recorder died mid-trial",
+        ), armed
     return Check("telemetry.csv", True, detail), armed
 
 

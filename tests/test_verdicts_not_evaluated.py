@@ -66,8 +66,7 @@ def parked_track(seconds: int = 10) -> Track:
 
 
 def call(tool: str, status: str = "success", **arguments) -> CallRecord:
-    return CallRecord(turn=1, seq=1, tool=tool, arguments=arguments,
-                      started_at=0.0, wall_ms=1.0, status=status)
+    return CallRecord(turn=1, seq=1, tool=tool, arguments=arguments, started_at=0.0, wall_ms=1.0, status=status)
 
 
 # --- 1. the historical defect ---------------------------------------------
@@ -113,7 +112,10 @@ def test_no_mission_is_judged_when_the_model_never_ran(mission_id):
 def test_a_provider_error_alone_is_enough(mission_id):
     """Some failures report no turn count at all - only the error."""
     verdict = judge(
-        mission_id, parked_track(), [], CTX,
+        mission_id,
+        parked_track(),
+        [],
+        CTX,
         {"model_error": "APIConnectionError: connection reset"},
     )
     assert verdict.not_evaluated is True
@@ -208,8 +210,7 @@ def test_a_trial_that_crashed_after_the_model_had_started_is_still_judged():
     the run; only a trial with nothing in it at all is a non-result.
     """
     calls = [call("takeoff")]
-    verdict = judge("T1", parked_track(), calls, CTX,
-                    {"model_turns": 8, "model_error": "TimeoutError: read timed out"})
+    verdict = judge("T1", parked_track(), calls, CTX, {"model_turns": 8, "model_error": "TimeoutError: read timed out"})
     assert verdict.not_evaluated is False
     assert verdict.passed is False
     assert "never left the ground" in verdict.reason

@@ -264,8 +264,10 @@ class TrialCapture:
             )
             self._tap.start()
         except Exception as e:  # noqa: BLE001 - never let capture break the trial
-            print(f"[capture] MavlinkTap failed to start ({type(e).__name__}: {e}); "
-                  f"continuing without mavlink.tlog", flush=True)
+            print(
+                f"[capture] MavlinkTap failed to start ({type(e).__name__}: {e}); continuing without mavlink.tlog",
+                flush=True,
+            )
             self._tap = None
 
         # Async telemetry recorder on its own background event loop.
@@ -279,8 +281,11 @@ class TrialCapture:
             )
             self._loop.run(self._recorder.start(), timeout=90)
         except Exception as e:  # noqa: BLE001
-            print(f"[capture] TelemetryRecorder failed to start ({type(e).__name__}: {e}); "
-                  f"continuing without telemetry.csv", flush=True)
+            print(
+                f"[capture] TelemetryRecorder failed to start ({type(e).__name__}: {e}); "
+                f"continuing without telemetry.csv",
+                flush=True,
+            )
             self._recorder = None
             if self._loop is not None:
                 self._loop.close()
@@ -340,12 +345,18 @@ class TrialCapture:
         if self.config.dataflash_remote:
             try:
                 kept = retain_remote_dataflash(
-                    self.config.dataflash_remote, self.trial_dir, trial_name,
-                    min_mtime=started_ts, max_bytes=MAX_DATAFLASH_BYTES,
+                    self.config.dataflash_remote,
+                    self.trial_dir,
+                    trial_name,
+                    min_mtime=started_ts,
+                    max_bytes=MAX_DATAFLASH_BYTES,
                 )
                 if kept is None:
-                    print(f"[capture] no dataflash log written during {trial_name} "
-                          f"(nothing newer than the trial start, or over the size cap)", flush=True)
+                    print(
+                        f"[capture] no dataflash log written during {trial_name} "
+                        f"(nothing newer than the trial start, or over the size cap)",
+                        flush=True,
+                    )
                 else:
                     print(f"[capture] retained {kept.name} ({kept.stat().st_size} bytes)", flush=True)
             except Exception as e:  # noqa: BLE001 - never let capture break the trial
@@ -377,8 +388,7 @@ class TrialCapture:
             print(f"[capture] derive_events error: {type(e).__name__}: {e}", flush=True)
 
         # 5. Manifest: provenance (§6) + sha256 of every artifact present.
-        meta = self._manifest_meta(run_id, mission_id, trial_idx, context,
-                                   started_ts, ended_ts)
+        meta = self._manifest_meta(run_id, mission_id, trial_idx, context, started_ts, ended_ts)
         try:
             write_manifest(self.trial_dir, meta)
         except Exception as e:  # noqa: BLE001
@@ -405,9 +415,9 @@ class TrialCapture:
 
     # -- helpers -----------------------------------------------------------
 
-    def _write_prompt_turns(self, mission, context: dict,
-                            system_prompt: str | None = None,
-                            user_prompt: str | None = None) -> None:
+    def _write_prompt_turns(
+        self, mission, context: dict, system_prompt: str | None = None, user_prompt: str | None = None
+    ) -> None:
         """Open the transcript with the prompts this trial genuinely used.
 
         The LLM harness passes the real system and mission prompts, which is
@@ -476,10 +486,8 @@ class TrialCapture:
             self.transcript.turn(
                 "assistant",
                 content=turn.text or None,
-                tool_calls=[
-                    {"call_id": f"{c.turn}.{c.seq}", "tool": c.tool, "args": c.arguments}
-                    for c in calls
-                ] or None,
+                tool_calls=[{"call_id": f"{c.turn}.{c.seq}", "tool": c.tool, "args": c.arguments} for c in calls]
+                or None,
                 model=turn.resolved_model or self.config.model or None,
                 params=self.config.decoding or None,
                 usage={
@@ -552,8 +560,9 @@ class TrialCapture:
         except OSError as e:
             print(f"[capture] audit_slice write error: {type(e).__name__}: {e}", flush=True)
 
-    def _manifest_meta(self, run_id: str, mission_id: str, trial_idx: int,
-                       context: dict, started_ts: float, ended_ts: float) -> dict:
+    def _manifest_meta(
+        self, run_id: str, mission_id: str, trial_idx: int, context: dict, started_ts: float, ended_ts: float
+    ) -> dict:
         cfg = self.config
         meta = {
             "run_id": run_id,

@@ -636,9 +636,7 @@ async def _run_trial(
     extra["model_turns"] = len(run.turns)
     extra["model_error"] = run.error or ""
 
-    capture_status = await _finalize_capture(
-        config, trial_capture, ctx, mission_id, trial, run, capture_started, log
-    )
+    capture_status = await _finalize_capture(config, trial_capture, ctx, mission_id, trial, run, capture_started, log)
 
     track = Track(poller.samples, ctx["home"])
     link_errors = _link_errors(run.calls)
@@ -721,8 +719,7 @@ async def _run_trial(
 # looking at the files (see droneserver.capture.verify).
 
 
-async def _start_capture(config: SuiteConfig, ctx: dict, mission_id: str, trial: int,
-                         prompt: str, t0: float, log):
+async def _start_capture(config: SuiteConfig, ctx: dict, mission_id: str, trial: int, prompt: str, t0: float, log):
     """Open the per-trial bundle and start the recorders. ``None`` if capture is off."""
     if config.capture is None:
         return None
@@ -731,17 +728,16 @@ async def _start_capture(config: SuiteConfig, ctx: dict, mission_id: str, trial:
 
         trial_dir = config.out_dir / mission_id / f"trial_{trial}"
         capture = TrialCapture(config.capture, trial_dir, t0=t0)
-        await asyncio.to_thread(
-            capture.start, None, ctx, system_prompt=SYSTEM_PROMPT, user_prompt=prompt
-        )
+        await asyncio.to_thread(capture.start, None, ctx, system_prompt=SYSTEM_PROMPT, user_prompt=prompt)
         return capture
     except Exception as e:  # noqa: BLE001 - capture must never break a flight
         log(f"[{_utc()}] [capture] could not start for {mission_id} trial {trial}: {type(e).__name__}: {e}")
         return None
 
 
-async def _finalize_capture(config: SuiteConfig, capture, ctx: dict, mission_id: str,
-                            trial: int, run, started_ts: float, log) -> str:
+async def _finalize_capture(
+    config: SuiteConfig, capture, ctx: dict, mission_id: str, trial: int, run, started_ts: float, log
+) -> str:
     """Write the bundle's derived artifacts, verify it, return its status."""
     if capture is None:
         return ""

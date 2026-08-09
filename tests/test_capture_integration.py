@@ -23,6 +23,7 @@ from droneserver.benchmark.missions import Mission
 
 # --- fakes ----------------------------------------------------------------
 
+
 class FakeClient:
     """Minimal stand-in for BenchmarkClient: records CallRecords, no network."""
 
@@ -31,11 +32,13 @@ class FakeClient:
 
     def call(self, tool, timeout=120.0, **arguments):
         import time
+
         self.calls.append(CallRecord(tool, time.time(), 1.0, "success"))
         if tool == "get_home_position":
-            return {"status": "success",
-                    "home": {"latitude_deg": 47.397, "longitude_deg": 8.545,
-                             "absolute_altitude_m": 488.0}}
+            return {
+                "status": "success",
+                "home": {"latitude_deg": 47.397, "longitude_deg": 8.545, "absolute_altitude_m": 488.0},
+            }
         if tool == "get_armed":
             return {"status": "success", "armed": False}
         return {"status": "success"}
@@ -51,12 +54,18 @@ class _FakeTap:
 
     def __init__(self, endpoint, out_dir, t0=None, *, vehicle_sysid=1):
         from pathlib import Path
+
         self.out_dir = Path(out_dir)
 
     def start(self):
         self.out_dir.mkdir(parents=True, exist_ok=True)
-        line = {"ts": "2026-08-08T00:00:01+00:00", "t_rel_s": 1.0, "direction": "recv",
-                "msg_type": "HEARTBEAT", "fields": {"custom_mode": 0, "base_mode": 0}}
+        line = {
+            "ts": "2026-08-08T00:00:01+00:00",
+            "t_rel_s": 1.0,
+            "direction": "recv",
+            "msg_type": "HEARTBEAT",
+            "fields": {"custom_mode": 0, "base_mode": 0},
+        }
         (self.out_dir / "mavlink.jsonl").write_text(json.dumps(line) + "\n", encoding="utf-8")
 
     def stop(self):
@@ -68,12 +77,14 @@ class _FakeRecorder:
 
     def __init__(self, system_address, out_dir, rate_hz=10.0, t0=None):
         from pathlib import Path
+
         self.out_dir = Path(out_dir)
 
     async def start(self):
         self.out_dir.mkdir(parents=True, exist_ok=True)
         (self.out_dir / "telemetry.csv").write_text(
-            "t_iso,t_rel_s,in_air\n2026-08-08T00:00:01+00:00,1.0,False\n", encoding="utf-8")
+            "t_iso,t_rel_s,in_air\n2026-08-08T00:00:01+00:00,1.0,False\n", encoding="utf-8"
+        )
 
     async def stop(self):
         pass
@@ -81,6 +92,7 @@ class _FakeRecorder:
 
 def _install_fakes(monkeypatch):
     import droneserver.benchmark.capture_session as cs
+
     monkeypatch.setattr(cs, "MavlinkTap", _FakeTap)
     monkeypatch.setattr(cs, "TelemetryRecorder", _FakeRecorder)
 
@@ -92,19 +104,31 @@ def _install_fake_mission(monkeypatch):
 
 # --- tests ----------------------------------------------------------------
 
+
 def test_capture_enabled_writes_per_trial_artifacts(tmp_path, monkeypatch):
     _install_fakes(monkeypatch)
     _install_fake_mission(monkeypatch)
     from droneserver.benchmark.capture_session import CaptureConfig
 
     out_dir = tmp_path / "run1"
-    cfg = CaptureConfig(model="claude-test", provider="anthropic",
-                        decoding={"temperature": 0}, firmware="ArduCopter",
-                        firmware_version="4.5.7", sim_params={"frame": "quad"})
+    cfg = CaptureConfig(
+        model="claude-test",
+        provider="anthropic",
+        decoding={"temperature": 0},
+        firmware="ArduCopter",
+        firmware_version="4.5.7",
+        sim_params={"frame": "quad"},
+    )
 
     results = runner.run_suite(
-        client=FakeClient(), mission_ids=["T1"], trials=2, out_dir=out_dir,
-        context={"target_label": "fake"}, audit_log=None, capture=cfg)
+        client=FakeClient(),
+        mission_ids=["T1"],
+        trials=2,
+        out_dir=out_dir,
+        context={"target_label": "fake"},
+        audit_log=None,
+        capture=cfg,
+    )
 
     assert len(results) == 2
 
@@ -140,8 +164,7 @@ def test_capture_enabled_writes_per_trial_artifacts(tmp_path, monkeypatch):
         assert "manifest.json" not in names  # never hashes itself
 
         # transcript has the system + user prompt turns and the tool turn.
-        turns = [json.loads(x) for x in
-                 (trial_dir / "transcript.jsonl").read_text().splitlines() if x.strip()]
+        turns = [json.loads(x) for x in (trial_dir / "transcript.jsonl").read_text().splitlines() if x.strip()]
         roles = [t["role"] for t in turns]
         assert roles[0] == "system"
         assert roles[1] == "user"
@@ -153,8 +176,13 @@ def test_capture_disabled_is_unchanged(tmp_path, monkeypatch):
 
     out_dir = tmp_path / "run_nocap"
     results = runner.run_suite(
-        client=FakeClient(), mission_ids=["T1"], trials=1, out_dir=out_dir,
-        context={"target_label": "fake"}, audit_log=None)  # no capture=
+        client=FakeClient(),
+        mission_ids=["T1"],
+        trials=1,
+        out_dir=out_dir,
+        context={"target_label": "fake"},
+        audit_log=None,
+    )  # no capture=
 
     assert len(results) == 1
     # run-level outputs unchanged...

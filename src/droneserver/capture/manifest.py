@@ -99,10 +99,7 @@ def retain_dataflash(src_log_dir: Path, out_dir: Path, trial_name: str) -> Path 
     if not src_log_dir.is_dir():
         return None
 
-    candidates = [
-        p for p in src_log_dir.iterdir()
-        if p.is_file() and p.suffix.lower() in _LOG_SUFFIXES
-    ]
+    candidates = [p for p in src_log_dir.iterdir() if p.is_file() and p.suffix.lower() in _LOG_SUFFIXES]
     if not candidates:
         return None
 
@@ -186,7 +183,10 @@ def retain_remote_dataflash(
     try:
         proc = subprocess.run(
             [ssh, "-o", "BatchMode=yes", target, listing_cmd],
-            capture_output=True, text=True, timeout=timeout_s, check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+            check=False,
         )
     except (OSError, subprocess.SubprocessError) as e:
         raise RemoteDataflashError(f"listing {spec} failed: {type(e).__name__}: {e}") from e
@@ -218,7 +218,10 @@ def retain_remote_dataflash(
     try:
         copy = subprocess.run(
             ["scp", "-q", "-o", "BatchMode=yes", f"{target}:{remote_path}", str(dest)],
-            capture_output=True, text=True, timeout=timeout_s, check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+            check=False,
         )
     except (OSError, subprocess.SubprocessError) as e:
         raise RemoteDataflashError(f"copying {remote_path} failed: {type(e).__name__}: {e}") from e
@@ -246,11 +249,13 @@ def write_manifest(out_dir: Path, meta: dict) -> Path:
         if path == manifest_path:
             continue
         rel = path.relative_to(out_dir).as_posix()
-        artifacts.append({
-            "name": rel,
-            "sha256": sha256_file(path),
-            "bytes": path.stat().st_size,
-        })
+        artifacts.append(
+            {
+                "name": rel,
+                "sha256": sha256_file(path),
+                "bytes": path.stat().st_size,
+            }
+        )
 
     document = {
         "schema": SCHEMA,

@@ -321,9 +321,7 @@ def main() -> int:
         return 0
 
     results = asyncio.run(run_llm_suite(config))
-    flown = [
-        r for r in results if not r.skipped and not r.link_failure and not r.budget_stop and not r.not_evaluated
-    ]
+    flown = [r for r in results if not r.skipped and not r.link_failure and not r.budget_stop and not r.not_evaluated]
     failed = [r for r in flown if not r.passed]
     lost = [r for r in results if r.link_failure]
     stopped = [r for r in results if r.budget_stop]
@@ -335,12 +333,8 @@ def main() -> int:
     if stopped:
         print(f"{len(stopped)} trial(s) not run because of the spending cap; rerun to resume")
     if void:
-        print(
-            f"{len(void)} trial(s) NOT EVALUATED - the model never ran, so they count as neither "
-            f"passes nor failures"
-        )
-    capture_failed = report_capture([r.capture_status for r in results],
-                                    require_complete=args.require_complete_capture)
+        print(f"{len(void)} trial(s) NOT EVALUATED - the model never ran, so they count as neither passes nor failures")
+    capture_failed = report_capture([r.capture_status for r in results], require_complete=args.require_complete_capture)
     print(f"spend on {key}: ${ledger.spent_by(key):.2f} of ${args.budget_usd:.2f}")
     if failed:
         return 1

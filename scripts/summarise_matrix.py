@@ -216,8 +216,7 @@ def main() -> int:
         ]
         for e in proxied:
             lines.append(
-                f"| `{e['model']}` | {e['resolved'] or '?'} | {e['served_by'] or '?'} | "
-                f"{e['quantization'] or '?'} |"
+                f"| `{e['model']}` | {e['resolved'] or '?'} | {e['served_by'] or '?'} | {e['quantization'] or '?'} |"
             )
 
     lines += [

@@ -75,8 +75,11 @@ def run_suite(
             ctx["home_amsl_m"] = home_info["home"]["absolute_altitude_m"]
             ctx["home"] = (home_info["home"]["latitude_deg"], home_info["home"]["longitude_deg"])
             ctx["home_amsl_resolved"] = True
-            print(f"[{_utc()}] home: {ctx['home'][0]:.6f},{ctx['home'][1]:.6f} "
-                  f"at {ctx['home_amsl_m']:.1f} m above sea level", flush=True)
+            print(
+                f"[{_utc()}] home: {ctx['home'][0]:.6f},{ctx['home'][1]:.6f} "
+                f"at {ctx['home_amsl_m']:.1f} m above sea level",
+                flush=True,
+            )
             break
         time.sleep(3)
     else:
@@ -89,9 +92,17 @@ def run_suite(
     for mission_id in mission_ids:
         mission = SUITE_BY_ID[mission_id]
         if mission.slow and not include_slow:
-            results.append(MissionResult(mission.mission_id, mission.name, True,
-                                         "skipped (slow; pass --include-slow)", time.time(), 0.0,
-                                         skipped=True))
+            results.append(
+                MissionResult(
+                    mission.mission_id,
+                    mission.name,
+                    True,
+                    "skipped (slow; pass --include-slow)",
+                    time.time(),
+                    0.0,
+                    skipped=True,
+                )
+            )
             continue
         for trial in range(1, trials + 1):
             # Single shared t0 for the trial: the wall-clock trial-start time is
@@ -124,8 +135,9 @@ def run_suite(
 
             ended = time.time()
             duration = time.perf_counter() - clock
-            result = MissionResult(mission.mission_id, mission.name, passed, reason,
-                                   started, round(duration, 1), skipped, detail)
+            result = MissionResult(
+                mission.mission_id, mission.name, passed, reason, started, round(duration, 1), skipped, detail
+            )
             results.append(result)
             verdict = "SKIP" if skipped else ("PASS" if passed else "FAIL")
             print(f"[{_utc()}] {verdict} {label} in {duration:.0f}s - {reason}", flush=True)
@@ -192,33 +204,57 @@ def _read_audit(audit_log: Path, window_start: float, window_end: float | None =
     return rows
 
 
-def _write_outputs(client: BenchmarkClient, results: list[MissionResult], out_dir: Path,
-                   ctx: dict, audit_log: Path | None) -> None:
+def _write_outputs(
+    client: BenchmarkClient, results: list[MissionResult], out_dir: Path, ctx: dict, audit_log: Path | None
+) -> None:
     with (out_dir / "missions.csv").open("w", newline="") as fh:
         w = csv.writer(fh)
-        w.writerow(["mission_id", "name", "verdict", "reason", "duration_s", "started_utc",
-                    "capture_status", "detail"])
+        w.writerow(["mission_id", "name", "verdict", "reason", "duration_s", "started_utc", "capture_status", "detail"])
         for r in results:
             verdict = "SKIP" if r.skipped else ("PASS" if r.passed else "FAIL")
-            w.writerow([r.mission_id, r.name, verdict, r.reason, r.duration_s,
-                        datetime.fromtimestamp(r.started_at, timezone.utc).isoformat(),
-                        r.capture_status,
-                        json.dumps(r.detail, default=str)])
+            w.writerow(
+                [
+                    r.mission_id,
+                    r.name,
+                    verdict,
+                    r.reason,
+                    r.duration_s,
+                    datetime.fromtimestamp(r.started_at, timezone.utc).isoformat(),
+                    r.capture_status,
+                    json.dumps(r.detail, default=str),
+                ]
+            )
 
     with (out_dir / "tool_calls.csv").open("w", newline="") as fh:
         w = csv.writer(fh)
         w.writerow(["tool", "started_utc", "client_wall_ms", "status", "rule", "confirmation_required"])
         for call in client.calls:
-            w.writerow([call.tool,
-                        datetime.fromtimestamp(call.started_at, timezone.utc).isoformat(),
-                        round(call.wall_ms, 2), call.status, call.rule or "",
-                        int(call.confirmation_required)])
+            w.writerow(
+                [
+                    call.tool,
+                    datetime.fromtimestamp(call.started_at, timezone.utc).isoformat(),
+                    round(call.wall_ms, 2),
+                    call.status,
+                    call.rule or "",
+                    int(call.confirmation_required),
+                ]
+            )
 
     window_start = min((r.started_at for r in results), default=time.time())
     audit_rows = _read_audit(audit_log, window_start) if audit_log else []
     if audit_rows:
-        fields = ["ts", "tool", "tier", "verdict", "rule", "latency_ms", "safety_ms",
-                  "audit_write_ms", "client_id", "outcome_status"]
+        fields = [
+            "ts",
+            "tool",
+            "tier",
+            "verdict",
+            "rule",
+            "latency_ms",
+            "safety_ms",
+            "audit_write_ms",
+            "client_id",
+            "outcome_status",
+        ]
         with (out_dir / "audit_slice.csv").open("w", newline="") as fh:
             w = csv.writer(fh)
             w.writerow(fields)
@@ -228,8 +264,9 @@ def _write_outputs(client: BenchmarkClient, results: list[MissionResult], out_di
     _write_summary(client, results, out_dir, ctx, audit_rows)
 
 
-def _write_summary(client: BenchmarkClient, results: list[MissionResult], out_dir: Path,
-                   ctx: dict, audit_rows: list[dict]) -> None:
+def _write_summary(
+    client: BenchmarkClient, results: list[MissionResult], out_dir: Path, ctx: dict, audit_rows: list[dict]
+) -> None:
     ran = [r for r in results if not r.skipped]
     passed = [r for r in ran if r.passed]
     client_ms = [c.wall_ms for c in client.calls] or [0.0]
@@ -311,8 +348,10 @@ def _write_summary(client: BenchmarkClient, results: list[MissionResult], out_di
 def _latency_row(label: str, values: list[float]) -> str:
     ordered = sorted(values)
     p95 = ordered[min(int(len(ordered) * 0.95), len(ordered) - 1)] if ordered else 0.0
-    return (f"| {label} | {len(values)} | {statistics.mean(values):.1f} | "
-            f"{statistics.median(values):.1f} | {p95:.1f} | {max(values):.1f} |")
+    return (
+        f"| {label} | {len(values)} | {statistics.mean(values):.1f} | "
+        f"{statistics.median(values):.1f} | {p95:.1f} | {max(values):.1f} |"
+    )
 
 
 def default_mission_ids() -> list[str]:

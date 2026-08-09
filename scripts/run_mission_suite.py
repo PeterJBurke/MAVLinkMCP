@@ -32,8 +32,11 @@ from droneserver.benchmark.runner import default_mission_ids, run_suite
 def main() -> int:
     parser = argparse.ArgumentParser(description="droneserver mission suite T1-T10")
     parser.add_argument("--url", default="http://127.0.0.1:8080/sse", help="MCP SSE endpoint")
-    parser.add_argument("--api-key", default=os.environ.get("DRONESERVER_API_KEY", ""),
-                        help="API key (defaults to $DRONESERVER_API_KEY)")
+    parser.add_argument(
+        "--api-key",
+        default=os.environ.get("DRONESERVER_API_KEY", ""),
+        help="API key (defaults to $DRONESERVER_API_KEY)",
+    )
     parser.add_argument("--missions", default="", help="comma-separated ids, e.g. T1,T2,T8 (default: all)")
     parser.add_argument("--trials", type=int, default=1, help="trials per mission")
     parser.add_argument("--out", default="benchmark_runs", help="output directory root")
@@ -93,8 +96,7 @@ def main() -> int:
     failed = [r for r in ran if not r.passed]
     print(f"\nwrote {out_dir}/summary.md")
     print(f"{len(ran) - len(failed)}/{len(ran)} missions passed")
-    capture_failed = report_capture([r.capture_status for r in results],
-                                    require_complete=args.require_complete_capture)
+    capture_failed = report_capture([r.capture_status for r in results], require_complete=args.require_complete_capture)
     if failed:
         return 1
     return 4 if capture_failed else 0
