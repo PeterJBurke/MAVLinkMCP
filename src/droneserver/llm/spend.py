@@ -172,6 +172,15 @@ class Price:
     #: ``0.0`` means "not published for this model", and is not the same as
     #: "free": :meth:`cost_usd` then charges them at the base input rate, which
     #: is what every provider that publishes no premium does.
+    #:
+    #: It is only ever applied to a cache-write token count the provider
+    #: actually reports, which today means Anthropic alone. That matters
+    #: because the catalogue this rate is read from lists *something* in this
+    #: field for several vendors whose meaning is not a per-token write premium
+    #: at all - Google's is a cache **storage** price, quoted per token-hour.
+    #: Those vendors report no cache-write count, so their number here is
+    #: inert. If one ever starts reporting one, check what its published rate
+    #: actually measures before trusting this column for it.
     cache_write: float = 0.0
 
     def cost_usd(

@@ -331,10 +331,20 @@ def main() -> int:
     print(f"model:    {route.requested_model} via {route.provider.name} ({route.routing})")
     print(f"protocol: parallel_tool_calls={args.parallel_tool_calls}, tool_choice={args.tool_choice}", end="")
     print(f", endpoint pinned to {args.endpoint_only}" if args.endpoint_only else "")
+    # Only the Anthropic wire format reports a cache-WRITE token count, so on
+    # every other provider the write rate is inert and printing a number for it
+    # would invite someone to reason about a charge that cannot occur - the
+    # more so because the catalogue lists a cache *storage* price (per
+    # token-hour) in that field for some vendors, which is not this quantity.
+    if route.provider.wire == "anthropic":
+        cache_write_note = f"${price.cache_write or price.input:.3f}/M cache-write"
+        if not price.cache_write:
+            cache_write_note += " (no published premium: base input rate)"
+    else:
+        cache_write_note = "cache-write n/a (this provider reports no cache-write tokens)"
     print(
-        f"price:    ${price.input:.2f}/M in, ${price.output:.2f}/M out, ${price.cached_input:.3f}/M cache-read, "
-        f"${price.cache_write or price.input:.3f}/M cache-write"
-        f"{'' if price.cache_write else ' (no published premium: base input rate)'}"
+        f"price:    ${price.input:.2f}/M in, ${price.output:.2f}/M out, "
+        f"${price.cached_input:.3f}/M cache-read, {cache_write_note}"
     )
     print(f"          ({price_age})")
     print(f"budget:   ${already:.2f} of ${args.budget_usd:.2f} already spent on key {key}")
