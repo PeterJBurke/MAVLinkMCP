@@ -336,7 +336,6 @@ def _read_telemetry(path: pathlib.Path, mavlink_present: bool) -> list:
     last_in_air = None
     last_mode = None
     last_t_rel = None
-    last_ts = None
     with open(path, newline="", encoding="utf-8") as fh:
         reader = csv.DictReader(fh)
         has_in_air = reader.fieldnames is not None and "in_air" in reader.fieldnames
@@ -375,7 +374,6 @@ def _read_telemetry(path: pathlib.Path, mavlink_present: bool) -> list:
                                 f"gap={round(gap, 3)}s", "telemetry")
                         )
                 last_t_rel = t_rel
-            last_ts = ts
     return events
 
 

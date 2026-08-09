@@ -16,7 +16,6 @@ import time
 from pathlib import Path
 
 import pytest
-
 from pymavlink import mavutil
 
 from droneserver.capture.mavlink_tap import (

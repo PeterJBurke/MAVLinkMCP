@@ -17,7 +17,6 @@ import csv
 from droneserver.capture import telemetry_recorder as tr
 from droneserver.capture.telemetry_recorder import COLUMNS, TelemetryRecorder
 
-
 # --- scripted MavSDK telemetry sample objects -----------------------------
 
 class _Position:
