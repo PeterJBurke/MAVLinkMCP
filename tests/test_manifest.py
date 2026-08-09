@@ -212,7 +212,7 @@ def test_remote_spec_must_name_a_host():
 
 
 def test_retain_remote_copies_the_newest_log(tmp_path, monkeypatch):
-    _fake_subprocess(monkeypatch, "1786000000.5 4096 /logs/00000007.BIN\n")
+    _fake_subprocess(monkeypatch, "1786000000.0 1786000000.5 4096 /logs/00000007.BIN\n")
     dest = retain_remote_dataflash("sitl:/logs", tmp_path, "T1_t1", min_mtime=1785999999.0)
     assert dest is not None and dest.name == "T1_t1.BIN"
     assert dest.read_bytes() == b"BIN-CONTENT"
@@ -222,14 +222,14 @@ def test_retain_remote_refuses_a_log_older_than_the_trial(tmp_path, monkeypatch)
     """The dangerous failure: a mission that never armed inheriting the
     previous flight's log, with the manifest vouching for it."""
     calls = []
-    _fake_subprocess(monkeypatch, "1786000000.0 4096 /logs/00000007.BIN\n", calls=calls)
+    _fake_subprocess(monkeypatch, "1786000000.0 1786000000.0 4096 /logs/00000007.BIN\n", calls=calls)
     dest = retain_remote_dataflash("sitl:/logs", tmp_path, "T1_t1", min_mtime=1786000060.0)
     assert dest is None
     assert not any(c[0] == "scp" for c in calls), "must not copy a pre-trial log"
 
 
 def test_retain_remote_skips_an_oversized_log(tmp_path, monkeypatch):
-    _fake_subprocess(monkeypatch, "1786000000.0 999999999 /logs/00000007.BIN\n")
+    _fake_subprocess(monkeypatch, "1786000000.0 1786000000.0 999999999 /logs/00000007.BIN\n")
     assert retain_remote_dataflash("sitl:/logs", tmp_path, "T1_t1", max_bytes=1024) is None
 
 
@@ -242,12 +242,29 @@ def test_retain_remote_raises_when_the_copy_fails(tmp_path, monkeypatch):
     """A broken capture setup must be loud, not silently log-less."""
     import pytest
 
-    _fake_subprocess(monkeypatch, "1786000000.0 4096 /logs/7.BIN\n", scp_rc=1)
+    _fake_subprocess(monkeypatch, "1786000000.0 1786000000.0 4096 /logs/7.BIN\n", scp_rc=1)
     with pytest.raises(RemoteDataflashError):
         retain_remote_dataflash("sitl:/logs", tmp_path, "T1_t1")
 
 
 def test_retain_remote_keeps_the_px4_suffix(tmp_path, monkeypatch):
-    _fake_subprocess(monkeypatch, "1786000000.0 4096 /logs/log001.ulg\n")
+    _fake_subprocess(monkeypatch, "1786000000.0 1786000000.0 4096 /logs/log001.ulg\n")
     dest = retain_remote_dataflash("sitl:/logs", tmp_path, "T2_t1")
     assert dest is not None and dest.name == "T2_t1.ulg"
+
+
+def test_retain_remote_refuses_a_log_that_only_grew_during_the_trial(tmp_path, monkeypatch):
+    """The autopilot keeps its log open past disarm, so a still-growing file
+    from an earlier flight has a fresh mtime. Birth time is what settles it."""
+    calls = []
+    _fake_subprocess(monkeypatch, "1786000000.0 1786000300.0 4096 /logs/00000007.BIN\n", calls=calls)
+    dest = retain_remote_dataflash("sitl:/logs", tmp_path, "T8_t1", min_mtime=1786000200.0)
+    assert dest is None, "a log born before the trial is not this trial's log"
+    assert not any(c[0] == "scp" for c in calls)
+
+
+def test_retain_remote_falls_back_to_mtime_without_a_birth_time(tmp_path, monkeypatch):
+    """Filesystems that report birth 0 still get the weaker mtime test."""
+    _fake_subprocess(monkeypatch, "0 1786000300.0 4096 /logs/00000007.BIN\n")
+    dest = retain_remote_dataflash("sitl:/logs", tmp_path, "T1_t1", min_mtime=1786000200.0)
+    assert dest is not None and dest.name == "T1_t1.BIN"

@@ -154,10 +154,14 @@ def retain_remote_dataflash(
     instead. It is deliberately conservative, because the failure mode that
     matters is not "no log" but "the wrong log, silently":
 
-    - ``min_mtime`` (normally the trial start time) rejects a log that was not
-      written during this trial. Without it, a mission that never armed would
-      be handed the previous flight's ``.BIN`` and the manifest would swear to
-      it. **This is why a mission that does not arm correctly retains nothing.**
+    - ``min_mtime`` (normally the trial start time) rejects a log that does not
+      belong to this trial. Where the filesystem records a birth time the log
+      must have been *created* during the trial; otherwise it must at least
+      have been *written* during it. The stricter birth-time test matters
+      because the autopilot keeps its log file open past disarm: a mission that
+      never armed would otherwise be handed the previous flight's still-growing
+      ``.BIN``, with the manifest swearing to it. **A mission that does not arm
+      correctly retains nothing.**
     - ``max_bytes`` rejects an implausibly large log rather than spending
       minutes copying, e.g., a continuously-logging session's multi-gigabyte
       file.
@@ -170,11 +174,14 @@ def retain_remote_dataflash(
     import subprocess
 
     target, directory = parse_remote_spec(spec)
-    # One round trip: newest matching file with its mtime and size.
+    # One round trip: the newest matching file as "birth mtime size path".
+    # stat rather than find -printf, because find's %B@ is unsupported on many
+    # builds (it returns -1) while stat's %W works wherever the filesystem
+    # records a birth time, and reports 0 where it does not.
     listing_cmd = (
         f"find {directory} -maxdepth 1 -type f "
-        r"\( -iname '*.BIN' -o -iname '*.ulg' \) "
-        r"-printf '%T@ %s %p\n' | sort -rn | head -1"
+        r"\( -iname '*.BIN' -o -iname '*.ulg' \) -print0 "
+        r"| xargs -0 -r stat -c '%W %Y %s %n' | sort -k2 -rn | head -1"
     )
     try:
         proc = subprocess.run(
@@ -190,13 +197,17 @@ def retain_remote_dataflash(
     if not line:
         return None
     try:
-        mtime_s, size_s, remote_path = line.split(None, 2)
-        mtime, size = float(mtime_s), int(size_s)
+        birth_s, mtime_s, size_s, remote_path = line.split(None, 3)
+        birth, mtime, size = float(birth_s), float(mtime_s), int(size_s)
     except ValueError as e:
         raise RemoteDataflashError(f"unparsable listing from {spec}: {line!r}") from e
 
-    if min_mtime is not None and mtime < min_mtime:
-        return None
+    if min_mtime is not None:
+        # birth <= 0 means the filesystem does not record one; fall back to the
+        # weaker "written during the trial" test rather than refusing outright.
+        stamp = birth if birth > 0 else mtime
+        if stamp < min_mtime:
+            return None
     if max_bytes is not None and size > max_bytes:
         return None
 
