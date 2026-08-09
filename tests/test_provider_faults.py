@@ -74,6 +74,13 @@ def test_a_rejected_key_is_fatal_and_is_not_a_quota_error(status, body):
     [
         (429, "Rate limit reached for requests"),
         (403, "rate_limit_exceeded: too many requests, slow down"),
+        # Google's PER-MINUTE throttle. It says "Quota exceeded", and it is a
+        # rate limit: abandoning a run over it would be the opposite mistake.
+        (
+            429,
+            "{'error': {'code': 429, 'message': \"Quota exceeded for quota metric "
+            "'Generate Content API requests per minute'\", 'status': 'RESOURCE_EXHAUSTED'}}",
+        ),
         (500, "internal server error"),
         (529, "overloaded_error"),
         (503, "service unavailable"),

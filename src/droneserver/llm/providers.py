@@ -100,11 +100,15 @@ QUOTA_MARKERS = (
     # Google, xAI, Mistral and OpenRouter phrasings seen in the wild.
     "out of credit",
     "insufficient funds",
-    "billing account",
-    "quota exceeded for quota metric",
+    "billing account",  # Google: "The billing account ... is disabled"
     "exceeded your monthly",
     "no credits",
 )
+# NOT a quota marker, deliberately: Google answers a PER-MINUTE throttle with
+# 429 RESOURCE_EXHAUSTED and the words "Quota exceeded for quota metric
+# 'Generate Content API requests per minute'". That is a rate limit. Treating
+# it as out-of-credit would abandon a whole model's run over a blip - the
+# opposite mistake, and a more expensive one, than the bug this list fixes.
 
 #: Substrings that mean "this key will never work", as opposed to "this key is
 #: being throttled". Deliberately narrow: an over-broad entry here would turn a
