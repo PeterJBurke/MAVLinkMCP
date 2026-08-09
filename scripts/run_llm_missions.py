@@ -33,6 +33,20 @@ is enforced here, not by the provider: every trial is priced and written to
 ``docs/benchmark_runs/spend_ledger.csv``, and a trial that could cross the cap
 is refused before it starts. The harness will not fly a model it has no price
 for, because a budget it cannot compute is a budget it cannot honour.
+
+**Exit codes.** A campaign loop runs this script once per model and needs to
+tell the outcomes apart without reading prose:
+
+=====  =====================================================================
+``0``  every mission that was judged, passed
+``1``  at least one mission failed on telemetry evidence
+``2``  the run was not startable (bad model, unpinned aggregator, no price)
+``3``  the provider would not serve this key, so the model's remaining
+       trials were abandoned - out of credit, or the key was rejected. Move
+       on to the next model; nothing here is a result about the model
+``4``  the missions ran but a Plan 19 capture bundle came out degraded
+       (only with ``--require-complete-capture``)
+=====  =====================================================================
 """
 
 import argparse
@@ -63,6 +77,7 @@ from droneserver.llm.spend import (
     key_id,
     load_prices,
     price_for,
+    with_cache_write_rate,
 )
 
 
@@ -153,6 +168,14 @@ def main() -> int:
     money.add_argument("--price-input", type=float, default=None, help="override: USD per million input tokens")
     money.add_argument("--price-output", type=float, default=None, help="override: USD per million output tokens")
     money.add_argument("--price-cached-input", type=float, default=None, help="override: USD per million cached tokens")
+    money.add_argument(
+        "--price-cache-write",
+        type=float,
+        default=None,
+        help="override: USD per million tokens WRITTEN into the prompt cache. Left unset, a known "
+        "family's published premium is applied (Anthropic charges 1.25x base input for the 5-minute "
+        "ephemeral cache this harness requests); an unknown family bills them at the base input rate",
+    )
     money.add_argument("--max-trial-cost-usd", type=float, default=5.0, help="stop a single trial at this cost")
 
     recovery = parser.add_argument_group("recovering from a dead drone link")
@@ -225,7 +248,18 @@ def main() -> int:
 
     # ---- price, without which the cap cannot be enforced --------------------
     if args.price_input is not None and args.price_output is not None:
-        price = Price(args.price_input, args.price_output, args.price_cached_input or 0.0)
+        # A hand-typed price still gets the family's cache-write premium filled
+        # in, so overriding the table cannot silently reintroduce the
+        # under-billing the table was fixed for.
+        price = with_cache_write_rate(
+            Price(
+                args.price_input,
+                args.price_output,
+                args.price_cached_input or 0.0,
+                args.price_cache_write or 0.0,
+            ),
+            route.requested_model,
+        )
         price_age = "supplied on the command line"
     else:
         table, fetched = load_prices(Path(args.prices))
@@ -297,7 +331,11 @@ def main() -> int:
     print(f"model:    {route.requested_model} via {route.provider.name} ({route.routing})")
     print(f"protocol: parallel_tool_calls={args.parallel_tool_calls}, tool_choice={args.tool_choice}", end="")
     print(f", endpoint pinned to {args.endpoint_only}" if args.endpoint_only else "")
-    print(f"price:    ${price.input:.2f}/M in, ${price.output:.2f}/M out, ${price.cached_input:.3f}/M cached")
+    print(
+        f"price:    ${price.input:.2f}/M in, ${price.output:.2f}/M out, ${price.cached_input:.3f}/M cache-read, "
+        f"${price.cache_write or price.input:.3f}/M cache-write"
+        f"{'' if price.cache_write else ' (no published premium: base input rate)'}"
+    )
     print(f"          ({price_age})")
     print(f"budget:   ${already:.2f} of ${args.budget_usd:.2f} already spent on key {key}")
     print(f"server:   {args.url} ({'authenticated' if args.api_key else 'ANONYMOUS - telemetry scope only'})")
@@ -326,6 +364,7 @@ def main() -> int:
     lost = [r for r in results if r.link_failure]
     stopped = [r for r in results if r.budget_stop]
     void = [r for r in results if r.not_evaluated]
+    provider_stop = next((r.provider_stop for r in results if r.provider_stop), "")
     print(f"\nwrote {out_dir}/summary.md")
     print(f"{len(flown) - len(failed)}/{len(flown)} missions passed on telemetry evidence")
     if lost:
@@ -336,6 +375,16 @@ def main() -> int:
         print(f"{len(void)} trial(s) NOT EVALUATED - the model never ran, so they count as neither passes nor failures")
     capture_failed = report_capture([r.capture_status for r in results], require_complete=args.require_complete_capture)
     print(f"spend on {key}: ${ledger.spent_by(key):.2f} of ${args.budget_usd:.2f}")
+    if provider_stop:
+        # Exit 3 = "this model's run was abandoned because the provider would
+        # not serve the key". Its own code, above the mission-failure code,
+        # because a campaign loop must be able to tell "the model flew badly"
+        # from "the model never flew" without parsing prose - and must move on
+        # to the next model rather than spending hours rediscovering a dead key
+        # once per trial.
+        print(f"PROVIDER STOP: {provider_stop}", file=sys.stderr)
+        print(f"the remaining trials for {route.requested_model} were not run.", file=sys.stderr)
+        return 3
     if failed:
         return 1
     return 4 if capture_failed else 0

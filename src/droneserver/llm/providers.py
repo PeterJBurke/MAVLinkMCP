@@ -66,8 +66,26 @@ class ProviderQuotaError(ProviderError):
     """
 
 
+class ProviderAuthError(ProviderError):
+    """The key was rejected: missing, revoked, wrong, or not entitled.
+
+    Like :class:`ProviderQuotaError` and unlike a rate limit or a 5xx, this
+    cannot come right by waiting, so it is never retried and it aborts the
+    model's run rather than being recorded once per trial. A run that met this
+    on trial 1 will meet it on trial 45.
+    """
+
+
 #: Substrings that mean "out of credit", across providers that all phrase it
 #: differently and none of which use a dedicated status code consistently.
+#:
+#: The Anthropic and Google phrasings were added on 2026-08-09, after a
+#: campaign in which Anthropic's real message - HTTP 400, ``"Your credit
+#: balance is too low to access the Anthropic API"`` - matched none of the
+#: markers below and was therefore classified as an ordinary provider error.
+#: The harness dutifully retried it, recorded the trial as VOID, and went on to
+#: do the same thing eighty more times. Matching is on lower-cased response
+#: text, so every entry here must be lower case.
 QUOTA_MARKERS = (
     "insufficient_quota",
     "insufficient credit",
@@ -76,7 +94,58 @@ QUOTA_MARKERS = (
     "billing_hard_limit_reached",
     "requires more credits",
     "payment required",
+    # Anthropic (HTTP 400, type invalid_request_error - not 402, not 429).
+    "credit balance is too low",
+    "credit balance too low",
+    # Google, xAI, Mistral and OpenRouter phrasings seen in the wild.
+    "out of credit",
+    "insufficient funds",
+    "billing account",
+    "quota exceeded for quota metric",
+    "exceeded your monthly",
+    "no credits",
 )
+
+#: Substrings that mean "this key will never work", as opposed to "this key is
+#: being throttled". Deliberately narrow: an over-broad entry here would turn a
+#: transient blip into an aborted run. Anything not matched keeps the ordinary
+#: retry-then-fail path.
+AUTH_MARKERS = (
+    "invalid api key",
+    "invalid_api_key",
+    "invalid x-api-key",
+    "incorrect api key",
+    "authentication_error",
+    "authentication error",
+    "unauthorized",
+    "api key not valid",
+    "api_key_invalid",
+    "no auth credentials",
+    "permission_denied",
+)
+
+
+def fatal_provider_error(status_code: int, body: str, where: str) -> ProviderError | None:
+    """Classify a failed response as *fatal for this key*, or not.
+
+    Returns the exception to raise for a failure that cannot come right by
+    waiting - out of credit, or a key the provider will not accept - and
+    ``None`` for everything else, which stays on the retry path. Keeping this
+    in one function is the point: the two session classes must agree about what
+    ends a run, and the campaign's cost of getting it wrong is measured in
+    hours of flying time.
+    """
+    lowered = body.lower()
+    if status_code == 402 or any(marker in lowered for marker in QUOTA_MARKERS):
+        return ProviderQuotaError(f"{where}: out of credit / over quota - HTTP {status_code}: {body[:400]}")
+    if status_code in (401, 403) or any(marker in lowered for marker in AUTH_MARKERS):
+        # Some providers answer a per-minute throttle with 403. That is
+        # transient, and aborting a run over it would be worse than the bug
+        # this function exists to prevent - so it stays on the retry path.
+        if any(t in lowered for t in ("rate limit", "rate_limit", "too many requests")):
+            return None
+        return ProviderAuthError(f"{where}: the API key was rejected - HTTP {status_code}: {body[:400]}")
+    return None
 
 
 # --------------------------------------------------------------- data carriers
@@ -125,10 +194,25 @@ class ModelTurn:
     decision_latency_ms: float
     provider_wait_ms: float = 0.0
     attempts: int = 1
+    #: Everything that went in, whatever rate it was billed at: fresh tokens,
+    #: cache reads and cache writes together.
     input_tokens: int = 0
+    #: The part of ``input_tokens`` served from the provider's prompt cache,
+    #: billed at a discount.
     cached_input_tokens: int = 0
+    #: The part of ``input_tokens`` **written into** the prompt cache. Anthropic
+    #: bills these at 1.25x the base input rate for the 5-minute ``ephemeral``
+    #: cache this harness requests, so they are counted separately rather than
+    #: folded into the fresh tokens - folding them in under-read the meter by
+    #: ~15% on Anthropic and exhausted a key mid-campaign with no warning.
+    #: Zero on providers that do not report the quantity.
+    cache_write_tokens: int = 0
     output_tokens: int = 0
     reasoning_tokens: int = 0
+    #: Reasoning tokens the provider did **not** include in ``output_tokens``.
+    #: They are billed as output, so leaving them out prices them at zero. See
+    #: :func:`uncounted_reasoning` for how this is decided.
+    uncounted_reasoning_tokens: int = 0
     error: str | None = None
     #: Exactly which model answered, as the provider reported it - e.g.
     #: "gpt-5.2-2025-12-11" rather than the alias we asked for. Reviewers
@@ -282,17 +366,76 @@ def resolve_model(spec: str, env: dict | None = None) -> Route:
 # ------------------------------------------------------------------- sessions
 
 
+#: Providers proven to report reasoning tokens *outside* ``output_tokens``.
+#:
+#: ``xai``: nine rows of the project's own spend ledger carry
+#: ``reasoning_tokens > output_tokens``, which is arithmetically impossible if
+#: the two overlap. Since a provider does not vary this per request, the whole
+#: provider is treated as reporting them disjointly.
+#:
+#: Not listed: OpenAI and Google, which include reasoning in
+#: ``completion_tokens`` (and whose ledger rows never show the impossible
+#: inequality); and OpenRouter, which passes through whatever the upstream host
+#: says and therefore differs row by row - those are caught per turn by the
+#: arithmetic test in :func:`uncounted_reasoning` instead of by a blanket rule.
+REASONING_REPORTED_SEPARATELY = frozenset({"xai"})
+
+
+def uncounted_reasoning(provider: str, output_tokens: int, reasoning_tokens: int) -> int:
+    """Reasoning tokens that ``output_tokens`` does not already include.
+
+    Two tests, both conservative:
+
+    1. the provider is known to report them separately
+       (:data:`REASONING_REPORTED_SEPARATELY`); or
+    2. ``reasoning_tokens > output_tokens`` - which *cannot* happen if
+       reasoning is a subset of output, so the two are certainly disjoint.
+
+    Anything else returns 0. That leaves a known residual: an aggregator turn
+    whose upstream excludes reasoning but happens to report fewer reasoning
+    than output tokens is still priced low. Bounded at about $1.42 across the
+    whole ledger to date (Plan 12), and disclosed rather than guessed at.
+    """
+    if reasoning_tokens <= 0:
+        return 0
+    if provider in REASONING_REPORTED_SEPARATELY or reasoning_tokens > output_tokens:
+        return reasoning_tokens
+    return 0
+
+
 class ModelSession:
     """A running conversation with one model.
 
     The session owns the message history in whatever shape its provider wants.
     The agent loop only ever calls the four methods below, which is what makes
     swapping providers a one-line change.
+
+    **The constructor is part of the contract**, not just the methods:
+    :func:`open_session` looks a class up in :data:`WIRES` and calls it with a
+    route, a key and the protocol options, so every adapter must accept that
+    signature. It is declared here so a subclass that drifts from it is caught
+    by the type checker rather than by a run that dies on its first trial.
     """
 
     provider: str
     model: str
     route: Route
+
+    def __init__(
+        self,
+        route: Route,
+        api_key: str,
+        *,
+        temperature: float | None = None,
+        reasoning_effort: str | None = None,
+        max_output_tokens: int | None = None,
+        timeout_s: float = 240.0,
+        parallel_tool_calls: bool | None = True,
+        tool_choice: str | None = "auto",
+        endpoint_only: list[str] | None = None,
+        pinned_quantization: str = "",
+    ) -> None:
+        raise NotImplementedError
 
     def start(self, system_prompt: str, user_prompt: str) -> None:
         raise NotImplementedError
@@ -469,9 +612,9 @@ class OpenAICompatibleSession(ModelSession):
                     return turn
                 last_error = f"HTTP {response.status_code}: {response.text[:400]}"
                 wait_ms += latency_ms
-                lowered = response.text.lower()
-                if response.status_code == 402 or any(m in lowered for m in QUOTA_MARKERS):
-                    raise ProviderQuotaError(f"{self.route.label}: {last_error}")
+                fatal = fatal_provider_error(response.status_code, response.text, self.route.label)
+                if fatal is not None:
+                    raise fatal
                 if response.status_code not in self.RETRY_STATUS:
                     break
             if attempt < self.MAX_ATTEMPTS:
@@ -513,6 +656,14 @@ class OpenAICompatibleSession(ModelSession):
         details = usage.get("completion_tokens_details") or {}
         prompt_details = usage.get("prompt_tokens_details") or {}
         provider_meta = payload.get("provider") or ""
+        output_tokens = int(usage.get("completion_tokens") or 0)
+        reasoning_tokens = int(details.get("reasoning_tokens") or 0)
+        # No cache-WRITE quantity exists on this wire format: the OpenAI shape
+        # reports only prompt_tokens_details.cached_tokens, which is a
+        # discounted READ. Providers speaking it (OpenAI, Google, xAI, Mistral,
+        # DeepSeek, OpenRouter) cache implicitly and charge writes at the base
+        # input rate, so cache_write_tokens stays 0 and the base rate applies -
+        # which is correct, not a placeholder.
         return ModelTurn(
             resolved_model=payload.get("model") or self._wire_model,
             generation_id=payload.get("id") or "",
@@ -525,8 +676,9 @@ class OpenAICompatibleSession(ModelSession):
             attempts=attempts,
             input_tokens=int(usage.get("prompt_tokens") or 0),
             cached_input_tokens=int(prompt_details.get("cached_tokens") or 0),
-            output_tokens=int(usage.get("completion_tokens") or 0),
-            reasoning_tokens=int(details.get("reasoning_tokens") or 0),
+            output_tokens=output_tokens,
+            reasoning_tokens=reasoning_tokens,
+            uncounted_reasoning_tokens=uncounted_reasoning(self.provider, output_tokens, reasoning_tokens),
         )
 
     async def aclose(self) -> None:
@@ -666,9 +818,9 @@ class AnthropicSession(ModelSession):
                     return self._parse(response.json(), latency_ms, wait_ms, attempt)
                 last_error = f"HTTP {response.status_code}: {response.text[:400]}"
                 wait_ms += latency_ms
-                lowered = response.text.lower()
-                if response.status_code == 402 or any(m in lowered for m in QUOTA_MARKERS):
-                    raise ProviderQuotaError(f"{self.route.label}: {last_error}")
+                fatal = fatal_provider_error(response.status_code, response.text, self.route.label)
+                if fatal is not None:
+                    raise fatal
                 if response.status_code not in self.RETRY_STATUS:
                     break
             if attempt < self.MAX_ATTEMPTS:
@@ -682,7 +834,8 @@ class AnthropicSession(ModelSession):
         # Verbatim, blocks and all - see point 3 in the class docstring.
         self._messages.append({"role": "assistant", "content": blocks})
 
-        text_parts, calls = [], []
+        text_parts: list[str] = []
+        calls: list[ToolCall] = []
         for block in blocks:
             if block.get("type") == "text":
                 text_parts.append(block.get("text") or "")
@@ -709,9 +862,15 @@ class AnthropicSession(ModelSession):
             provider_wait_ms=wait_ms,
             attempts=attempts,
             # Anthropic reports fresh, cache-read and cache-write separately;
-            # the harness's "input_tokens" means everything that went in.
+            # the harness's "input_tokens" means everything that went in. The
+            # split is kept alongside it because the three are billed at three
+            # different rates - a cache WRITE costs 1.25x the base input rate
+            # for the 5-minute ephemeral cache requested in _body(), so a
+            # written token charged as a fresh one is 25% missing from the
+            # meter. That is the defect that quietly overran a $50 balance.
             input_tokens=int(usage.get("input_tokens") or 0) + cached + written,
             cached_input_tokens=cached,
+            cache_write_tokens=written,
             output_tokens=int(usage.get("output_tokens") or 0),
             resolved_model=payload.get("model") or self._wire_model,
             generation_id=payload.get("id") or "",

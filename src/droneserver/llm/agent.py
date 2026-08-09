@@ -36,8 +36,14 @@ import json
 import time
 from dataclasses import dataclass, field
 
-from droneserver.llm.mcp_session import CallRecord, LiveMCPSession
-from droneserver.llm.providers import ModelSession, ModelTurn, ProviderQuotaError, ToolSpec
+from droneserver.llm.mcp_session import CallRecord, ToolSession
+from droneserver.llm.providers import (
+    ModelSession,
+    ModelTurn,
+    ProviderAuthError,
+    ProviderQuotaError,
+    ToolSpec,
+)
 
 
 @dataclass
@@ -78,6 +84,11 @@ class TurnRecord:
     served_by: str = ""
     upstream_id: str = ""
     quantization: str = ""
+    #: The parts of the token counts above that are billed at their own rate:
+    #: cache writes at the provider's write rate, and reasoning tokens the
+    #: provider left out of ``output_tokens``. See providers.ModelTurn.
+    cache_write_tokens: int = 0
+    uncounted_reasoning_tokens: int = 0
 
 
 @dataclass
@@ -92,6 +103,11 @@ class AgentRun:
     #: Set when the run stopped because the account ran out of credit. That is
     #: not a result about the model, and nothing downstream may treat it as one.
     out_of_credit: bool = False
+    #: Set when the provider refused the KEY rather than the request - out of
+    #: credit, revoked, or not entitled to this model. Waiting cannot fix it,
+    #: so the runner abandons the model's remaining trials instead of
+    #: rediscovering it once per trial. Holds the reason, for the log.
+    provider_unusable: str = ""
 
     # -- roll-ups the report and the CSVs both need -------------------------
 
@@ -114,6 +130,14 @@ class AgentRun:
     @property
     def cached_input_tokens(self) -> int:
         return sum(t.cached_input_tokens for t in self.turns)
+
+    @property
+    def cache_write_tokens(self) -> int:
+        return sum(t.cache_write_tokens for t in self.turns)
+
+    @property
+    def uncounted_reasoning_tokens(self) -> int:
+        return sum(t.uncounted_reasoning_tokens for t in self.turns)
 
     @property
     def output_tokens(self) -> int:
@@ -152,7 +176,7 @@ class AgentRun:
 
 async def run_agent(
     model: ModelSession,
-    mcp: LiveMCPSession,
+    mcp: ToolSession,
     tools: list[ToolSpec],
     system_prompt: str,
     user_prompt: str,
@@ -202,8 +226,10 @@ async def run_agent(
                 attempts=turn.attempts,
                 input_tokens=turn.input_tokens,
                 cached_input_tokens=turn.cached_input_tokens,
+                cache_write_tokens=turn.cache_write_tokens,
                 output_tokens=turn.output_tokens,
                 reasoning_tokens=turn.reasoning_tokens,
+                uncounted_reasoning_tokens=turn.uncounted_reasoning_tokens,
                 finish_reason=turn.finish_reason,
                 text=turn.text,
                 tool_calls=[c.name for c in turn.tool_calls],
@@ -260,8 +286,15 @@ async def run_agent(
         # Out of credit is not a result about the model. Record it, mark it,
         # and let the runner stop the suite cleanly so it can be resumed.
         run.out_of_credit = True
+        run.provider_unusable = f"the account is out of credit ({e})"
         run.error = f"{type(e).__name__}: {e}"
         run.stop_reason = "the account ran out of credit"
+    except ProviderAuthError as e:
+        # The key itself was refused. Retrying the next 44 trials would refuse
+        # them all the same way; stop the model's run instead.
+        run.provider_unusable = f"the provider rejected the API key ({e})"
+        run.error = f"{type(e).__name__}: {e}"
+        run.stop_reason = "the provider rejected the API key"
     except Exception as e:  # a crashed trial is a failed trial, and it says why
         run.error = f"{type(e).__name__}: {e}"
         run.stop_reason = f"harness error: {run.error}"

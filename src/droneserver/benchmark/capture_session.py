@@ -493,8 +493,15 @@ class TrialCapture:
                 usage={
                     "prompt_tokens": turn.input_tokens,
                     "cached_prompt_tokens": turn.cached_input_tokens,
+                    # The reproducibility bundle must carry every quantity the
+                    # cost figures are computed from, or the cost cannot be
+                    # rederived from the bundle. Cache writes and reasoning
+                    # tokens the provider left out of completion_tokens are two
+                    # of them (see droneserver.llm.spend.Price).
+                    "cache_write_tokens": turn.cache_write_tokens,
                     "completion_tokens": turn.output_tokens,
                     "reasoning_tokens": turn.reasoning_tokens,
+                    "uncounted_reasoning_tokens": turn.uncounted_reasoning_tokens,
                     "decision_latency_ms": round(turn.decision_latency_ms, 1),
                     "finish_reason": turn.finish_reason,
                     "served_by": turn.served_by,

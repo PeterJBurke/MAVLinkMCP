@@ -82,6 +82,7 @@ from droneserver.llm.mcp_session import (
     LiveMCPSession,
     McpTelemetryPoller,
     MultiServerSession,
+    ToolSession,
 )
 from droneserver.llm.prompts import SYSTEM_PROMPT, mission_prompts
 from droneserver.llm.providers import ToolSpec, open_session, resolve_model
@@ -127,6 +128,57 @@ LANDING_IS_PART_OF_THE_TASK = {"T1", "T2", "T3", "T4", "T5", "T6", "T10"}
 #: model misjudging itself would invert the very thing they test.
 EXPECTED_CLAIM_ON_PASS = {"T8": "aborted", "T9": "aborted"}
 
+#: How many trials in a row may produce nothing to judge before the model's run
+#: is abandoned.
+#:
+#: A provider that will not serve this key answers every trial identically, so
+#: the 45th attempt costs what the 1st cost and teaches the same thing. In the
+#: 2026-08-08 campaign an unrecognised out-of-credit message produced **eighty**
+#: consecutive VOID trials, one per attempt, before anyone noticed.
+#:
+#: Three, not one, and not forty. One is too eager: a single provider error can
+#: be a genuine blip, and one model reporting "out of credit" has been observed
+#: (``gemini-3.1-pro-preview``, 2026-08-08) while a *different* model on the
+#: same key ran perfectly straight afterwards - so a single message is
+#: evidence about a model, not proof of a dead key. Three consecutive trials
+#: with no model behaviour at all is no longer a blip, and it is cheap: three
+#: void trials cost minutes, not the hours the eighty cost.
+#:
+#: This is the backstop, not the primary mechanism. A *recognised* out-of-credit
+#: or key-rejected reply (providers.fatal_provider_error) aborts the run on the
+#: first trial without waiting for the streak.
+VOID_STREAK_LIMIT = 3
+
+
+def abandon_reason(result: TrialResult, void_streak: int) -> str:
+    """Why this model's remaining trials should not be flown, or ``""``.
+
+    Two grounds, in order of certainty:
+
+    1. the provider told us so - it refused the key, or said the account is out
+       of credit (``AgentRun.provider_unusable``, set by the agent loop from a
+       :class:`~droneserver.llm.providers.ProviderQuotaError` or
+       :class:`~droneserver.llm.providers.ProviderAuthError`). This needs no
+       streak: the reply will be identical next time;
+    2. the evidence says so - :data:`VOID_STREAK_LIMIT` trials in a row have
+       produced no model behaviour at all. This is the backstop for a provider
+       whose particular phrasing we do not yet recognise, which is exactly what
+       let one campaign record eighty consecutive VOID trials.
+
+    A trial that produced *any* model behaviour resets the streak, so a single
+    bad turn in an otherwise working run never abandons it.
+    """
+    if result.run is not None and result.run.provider_unusable:
+        return result.run.provider_unusable
+    if void_streak >= VOID_STREAK_LIMIT:
+        last = result.run.error if result.run is not None and result.run.error else "no model turns at all"
+        return (
+            f"{void_streak} trials in a row produced no model behaviour to judge (last: {last}). "
+            f"The provider is not serving this model on this key, and further trials would record "
+            f"the same non-result."
+        )
+    return ""
+
 
 def _claim_agrees(mission_id: str, claim: str, passed: bool) -> bool:
     """Did the model's own verdict match what the telemetry shows?"""
@@ -154,6 +206,11 @@ class TrialResult:
     link_failure: bool = False
     #: The trial did not run, or was cut short, because of the spending cap.
     budget_stop: bool = False
+    #: Why the whole model run was abandoned at this trial: the provider would
+    #: not serve this key at all (out of credit, or the key was rejected), or
+    #: it failed so many times running that continuing was pointless. Empty on
+    #: every trial that did not end a run.
+    provider_stop: str = ""
     cost_usd: float = 0.0
     #: There was no model behaviour to judge - the provider never served the
     #: model. Neither a pass nor a failure; excluded from pass rates. See
@@ -298,10 +355,22 @@ async def _settle(harness: LiveMCPSession, timeout_s: float = 240.0) -> str:
 
 
 def _run_cost(config: SuiteConfig, run: AgentRun) -> float:
-    """What this run has cost so far, in dollars."""
+    """What this run has cost so far, in dollars.
+
+    Every token class the provider bills differently is passed through, not
+    just the totals: cache writes carry a premium on some providers and
+    reasoning tokens are sometimes reported outside ``output_tokens``. Summing
+    only the totals is what made this meter read ~15% low on Anthropic.
+    """
     if config.price is None:
         return 0.0
-    return config.price.cost_usd(run.input_tokens, run.cached_input_tokens, run.output_tokens)
+    return config.price.cost_usd(
+        run.input_tokens,
+        run.cached_input_tokens,
+        run.output_tokens,
+        cache_write_tokens=run.cache_write_tokens,
+        uncounted_reasoning_tokens=run.uncounted_reasoning_tokens,
+    )
 
 
 def _prompt_token_estimate(ctx: dict) -> int:
@@ -333,8 +402,10 @@ def _record_spend(config: SuiteConfig, result: TrialResult, log) -> None:
         trial=result.trial,
         input_tokens=run.input_tokens,
         cached_input_tokens=run.cached_input_tokens,
+        cache_write_tokens=run.cache_write_tokens,
         output_tokens=run.output_tokens,
         reasoning_tokens=run.reasoning_tokens,
+        uncounted_reasoning_tokens=run.uncounted_reasoning_tokens,
         cost_usd=result.cost_usd,
         run_dir=str(config.out_dir),
         note=result.verdict_label,
@@ -454,6 +525,8 @@ async def run_llm_suite(config: SuiteConfig, log=print) -> list[TrialResult]:
     results: list[TrialResult] = []
     window_start = time.time()
     stop_everything = False
+    #: Consecutive trials that produced nothing to judge. See VOID_STREAK_LIMIT.
+    void_streak = 0
 
     harness = LiveMCPSession(config.url, config.api_key, HARNESS_CLIENT_NAME, "2")
     await harness.__aenter__()
@@ -522,8 +595,16 @@ async def run_llm_suite(config: SuiteConfig, log=print) -> list[TrialResult]:
                     ) + f"drone link was restarted before this attempt (retry {attempt + 1})"
                 results.append(result)
                 _record_spend(config, result, log)
-                if result.run is not None and result.run.out_of_credit:
-                    log(f"[{_utc()}] BUDGET stop: the account is out of credit. Stopping cleanly; rerun to resume.")
+
+                # Is there any point in flying the next trial? Two ways there
+                # is not, and both abandon this MODEL's run - never the whole
+                # campaign, which moves on to the next model.
+                void_streak = void_streak + 1 if result.not_evaluated else 0
+                unusable = abandon_reason(result, void_streak)
+                if unusable:
+                    result.provider_stop = unusable
+                    log(f"[{_utc()}] PROVIDER stop: {unusable}")
+                    log(f"[{_utc()}] abandoning the remaining trials for {config.model_spec}.")
                     stop_everything = True
                     break
                 log(
@@ -581,7 +662,7 @@ async def _run_trial(
     agent_mcp = LiveMCPSession(config.url, config.api_key, AGENT_CLIENT_NAME, agent_version)
     # T6, and only T6, also gets a hosted Google Maps MCP server, merged behind
     # a single tool list. See MultiServerSession and SuiteConfig.maps_url.
-    session = agent_mcp
+    session: ToolSession = agent_mcp
     if config.maps_url and mission_id == "T6":
         maps = LiveMCPSession(
             config.maps_url,
@@ -785,9 +866,13 @@ def _parameter_values_seen(calls: list[CallRecord]) -> list[float]:
     """Every parameter value the aircraft reported back during the trial."""
     values: list[float] = []
     for call in calls:
-        if call.tool == "get_parameter" and call.status == "success":
-            with contextlib.suppress(TypeError, ValueError):
-                values.append(float(call.result.get("value")))
+        if call.tool != "get_parameter" or call.status != "success":
+            continue
+        raw = call.result.get("value") if call.result else None
+        if raw is None:
+            continue
+        with contextlib.suppress(TypeError, ValueError):
+            values.append(float(raw))
     return values
 
 
@@ -932,8 +1017,10 @@ def _write_outputs(
                 "duration_s",
                 "input_tokens",
                 "cached_input_tokens",
+                "cache_write_tokens",
                 "output_tokens",
                 "reasoning_tokens",
+                "uncounted_reasoning_tokens",
                 "cost_usd",
                 "model_claim",
                 "claim_matches_telemetry",
@@ -972,8 +1059,10 @@ def _write_outputs(
                     r.duration_s,
                     run.input_tokens if run else "",
                     run.cached_input_tokens if run else "",
+                    run.cache_write_tokens if run else "",
                     run.output_tokens if run else "",
                     run.reasoning_tokens if run else "",
+                    run.uncounted_reasoning_tokens if run else "",
                     f"{cost:.4f}" if cost is not None else "",
                     claim,
                     matches,
@@ -997,8 +1086,10 @@ def _write_outputs(
                 "attempts",
                 "input_tokens",
                 "cached_input_tokens",
+                "cache_write_tokens",
                 "output_tokens",
                 "reasoning_tokens",
+                "uncounted_reasoning_tokens",
                 "tool_calls",
                 "finish_reason",
                 "text_chars",
@@ -1024,8 +1115,10 @@ def _write_outputs(
                         turn.attempts,
                         turn.input_tokens,
                         turn.cached_input_tokens,
+                        turn.cache_write_tokens,
                         turn.output_tokens,
                         turn.reasoning_tokens,
+                        turn.uncounted_reasoning_tokens,
                         " ".join(turn.tool_calls),
                         turn.finish_reason,
                         len(turn.text),
@@ -1170,9 +1263,13 @@ def _write_summary(config: SuiteConfig, results: list[TrialResult], ctx: dict, r
         "| Metric | Total |",
         "|---|---|",
         f"| Input tokens | {sum(run.input_tokens for run in runs):,} |",
-        f"| ... of which served from cache | {sum(run.cached_input_tokens for run in runs):,} |",
+        f"| ... of which served from cache (billed at a discount) | {sum(run.cached_input_tokens for run in runs):,} |",
+        f"| ... of which written INTO the cache (billed at a premium) "
+        f"| {sum(run.cache_write_tokens for run in runs):,} |",
         f"| Output tokens | {sum(run.output_tokens for run in runs):,} |",
         f"| ... of which reasoning | {sum(run.reasoning_tokens for run in runs):,} |",
+        f"| ... reasoning the provider reported outside output_tokens "
+        f"| {sum(run.uncounted_reasoning_tokens for run in runs):,} |",
     ]
     lines.append(
         f"| Cost (USD) | {total_cost:.2f} |"
@@ -1230,6 +1327,22 @@ def _write_summary(config: SuiteConfig, results: list[TrialResult], ctx: dict, r
         lines += [f"- **{r.mission_id}.{r.trial}**: {r.reason}" for r in void]
         lines.append("")
 
+    abandoned = next((r for r in results if r.provider_stop), None)
+    if abandoned is not None:
+        lines += [
+            "## This model's run was abandoned",
+            "",
+            f"After **{abandoned.mission_id} trial {abandoned.trial}** the harness stopped flying this "
+            f"model, because the provider would not serve it on this key and every further trial would "
+            f"have recorded the same non-result:",
+            "",
+            f"> {abandoned.provider_stop}",
+            "",
+            "The missions below that trial were **not attempted**. Nothing here is a result about the "
+            "model, and the run cannot be compared with a complete one.",
+            "",
+        ]
+
     captured = [r for r in results if r.capture_status]
     if captured:
         degraded = [r for r in captured if not r.capture_status.startswith("complete")]
@@ -1246,16 +1359,19 @@ def _write_summary(config: SuiteConfig, results: list[TrialResult], ctx: dict, r
         lines += [f"- **{r.mission_id}.{r.trial}**: {r.capture_status}" for r in degraded]
         lines.append("")
 
-    disagreements = [r for r in ran if r.run and not _claim_agrees(r.mission_id, r.run.model_claim, r.passed)]
+    disagreements = [
+        (r, r.run) for r in ran if r.run is not None and not _claim_agrees(r.mission_id, r.run.model_claim, r.passed)
+    ]
     lines += [
         "## Did the model know how it did?",
         "",
         f"The model's closing claim disagreed with the telemetry on **{len(disagreements)} of {len(ran)}** trials.",
         "",
     ]
-    for r in disagreements:
+    for r, run in disagreements:
         lines.append(
-            f"- **{r.mission_id}.{r.trial}**: model said *{r.run.model_claim}*, telemetry says {r.verdict_label} - {r.reason}"
+            f"- **{r.mission_id}.{r.trial}**: model said *{run.model_claim}*, telemetry says "
+            f"{r.verdict_label} - {r.reason}"
         )
     lines.append("")
 

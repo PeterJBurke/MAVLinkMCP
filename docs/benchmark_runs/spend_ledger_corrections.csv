@@ -1,0 +1,4 @@
+key_id,provider,model,rows,input_tokens,cached_input_tokens,unattributed_input_tokens,recorded_cost_usd,correction_upper_usd,corrected_upper_usd
+anthropic:467e65585f45,anthropic,claude-haiku-4-5-20251001,49,7485311,5992755,1492556,2.195401,0.373139,2.568540
+anthropic:467e65585f45,anthropic,claude-opus-5,49,30387774,25721376,4666398,38.437603,5.832998,44.270600
+anthropic:467e65585f45,anthropic,claude-sonnet-5,48,5209482,4220736,988746,3.005060,0.494373,3.499433

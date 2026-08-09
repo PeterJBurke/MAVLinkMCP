@@ -44,11 +44,19 @@ def main() -> int:
         for row in csv.DictReader(missions.open(newline="", encoding="utf-8")):
             if (str(run_dir), row["mission_id"], row["trial"]) in already:
                 continue
+            # Runs made before the cache-write columns existed have no value
+            # for them, and 0 is the only honest reading: the split was not
+            # measured. Such a row's cost is therefore a LOWER bound on a
+            # provider that charges a cache-write premium - which is exactly
+            # why the ledger is corrected in a separate file rather than
+            # rewritten (docs/benchmark_runs/spend_ledger_corrections.md).
             try:
                 cost = price.cost_usd(
                     int(row["input_tokens"] or 0),
                     int(row["cached_input_tokens"] or 0),
                     int(row["output_tokens"] or 0),
+                    cache_write_tokens=int(row.get("cache_write_tokens") or 0),
+                    uncounted_reasoning_tokens=int(row.get("uncounted_reasoning_tokens") or 0),
                 )
             except ValueError:
                 continue
@@ -63,8 +71,10 @@ def main() -> int:
                 trial=int(row["trial"]),
                 input_tokens=int(row["input_tokens"] or 0),
                 cached_input_tokens=int(row["cached_input_tokens"] or 0),
+                cache_write_tokens=int(row.get("cache_write_tokens") or 0),
                 output_tokens=int(row["output_tokens"] or 0),
                 reasoning_tokens=int(row["reasoning_tokens"] or 0),
+                uncounted_reasoning_tokens=int(row.get("uncounted_reasoning_tokens") or 0),
                 cost_usd=cost,
                 run_dir=str(run_dir),
                 note=f"backfilled ({row['verdict']})",

@@ -57,6 +57,15 @@ def main() -> int:
                 "input": float(pricing["prompt"]) * 1_000_000,
                 "output": float(pricing["completion"]) * 1_000_000,
                 "cached_input": float(pricing.get("input_cache_read") or 0.0) * 1_000_000,
+                # The THIRD input rate, and the one whose absence made this
+                # harness's meter read ~15% low on Anthropic: what it costs to
+                # WRITE a token into the prompt cache. OpenRouter publishes it
+                # as input_cache_write (and input_cache_write_1h for the 1-hour
+                # TTL, which this harness never requests - it asks for the
+                # 5-minute ephemeral cache). 0.0 means the provider publishes
+                # no premium, which droneserver.llm.spend.Price reads as "bill
+                # these at the base input rate".
+                "cache_write": float(pricing.get("input_cache_write") or 0.0) * 1_000_000,
                 "supports_tools": "tools" in (entry.get("supported_parameters") or []),
             }
         except (KeyError, TypeError, ValueError):
@@ -127,6 +136,11 @@ def _merge_xai(prices: dict, api_key: str, timeout_s: float) -> int:
                 "output": float(entry["completion_text_token_price"]) / XAI_UNITS_PER_USD_PER_MILLION,
                 "cached_input": float(entry.get("cached_prompt_text_token_price") or 0.0)
                 / XAI_UNITS_PER_USD_PER_MILLION,
+                # xAI's catalogue publishes no cache-write price, and its API
+                # reports no cache-write token count either, so there is
+                # nothing to bill at a premium and nothing to guess at. Left at
+                # 0.0, which Price reads as "base input rate".
+                "cache_write": 0.0,
                 "supports_tools": True,
                 "priced_by": "xai",
             }

@@ -44,6 +44,7 @@ import json
 import time
 from dataclasses import dataclass, field
 from datetime import timedelta
+from typing import Protocol
 
 import mcp.types as mcp_types
 from mcp import ClientSession
@@ -85,6 +86,28 @@ class CallRecord:
     #: arguments that were not valid JSON: the call never reached the server.
     client_side_rejection: str | None = None
     result: dict = field(default_factory=dict)
+
+
+class ToolSession(Protocol):
+    """What the agent loop needs from whatever is holding the tools.
+
+    Two things satisfy it - :class:`LiveMCPSession` (one drone server) and
+    :class:`MultiServerSession` (the drone server plus a hosted Maps server for
+    T6) - and the loop must not care which. Naming the shared surface as a
+    protocol rather than typing the loop against the concrete class is what
+    lets T6 swap in the multi-server face without the type checker (or a
+    reader) being told a lie about what is on the other end.
+    """
+
+    async def __aenter__(self) -> object: ...
+
+    async def list_tools(self) -> list[ToolSpec]: ...
+
+    async def call(
+        self, tool: str, arguments: dict, *, turn: int = 0, seq: int = 0, timeout_s: float = 300.0
+    ) -> tuple[dict, CallRecord]: ...
+
+    async def aclose(self) -> None: ...
 
 
 class LiveMCPSession:
