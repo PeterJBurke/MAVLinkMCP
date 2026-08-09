@@ -30,8 +30,13 @@ mode would betray.
                              plain MAVProxy ``--out`` forward yielded a
                              perfectly valid-looking tlog containing no commands
                              at all.
-``telemetry.csv``            more than ``min_rows`` data rows. Catches a MavSDK
-                             recorder that failed to connect and wrote a header.
+``telemetry.csv``            enough rows *for a trial of this length*, and
+                             recording all the way to the end of it. Catches a
+                             MavSDK recorder that never connected (a header and
+                             nothing else) and one that connected and then died
+                             mid-flight - which no fixed row count could tell
+                             from a short mission. T7-T9 last seconds and
+                             legitimately produce single-figure row counts.
 ``audit_slice.csv``          present and non-empty (it is absent entirely when
                              the harness was run without ``--audit-log``, which
                              is worth being told about rather than discovering
@@ -58,6 +63,7 @@ mavsdk, so it can be used (and tested) anywhere.
 import csv
 import json
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 #: Files Plan 19 §8 requires in every trial bundle, whatever the harness.
@@ -76,11 +82,22 @@ TRANSCRIPT_ARTIFACT = "transcript.jsonl"
 #: Dataflash-log suffixes, matched case-insensitively.
 DATAFLASH_SUFFIXES = (".bin", ".ulg")
 
-#: Default floor for ``telemetry.csv``. At the 10 Hz Plan 19 asks for this is
-#: one second of flight - low enough that a legitimately short trial (T7-T9
-#: never leave the ground) is not reported as degraded, high enough that a
-#: recorder which never connected always is.
+#: Ceiling on the ``telemetry.csv`` row floor. The floor actually applied is
+#: this or one row per second of the trial, whichever is *smaller*: a 2-second
+#: parameter-read mission cannot produce ten rows however healthy the recorder
+#: is, and reporting it degraded would train everyone to ignore the warning.
+#: One row per second is a deliberately conservative reading of a 10 Hz stream.
 DEFAULT_MIN_TELEMETRY_ROWS = 10
+
+#: Fraction of the trial the telemetry must span before the recording counts as
+#: covering it. This is the check that catches a recorder which connected and
+#: then died: the row count stays plausible, the coverage does not.
+MIN_TELEMETRY_COVERAGE = 0.8
+
+#: Trials shorter than this are exempt from the coverage check - a few seconds
+#: of recorder start-up and shut-down is a large fraction of a short trial and
+#: says nothing about the recorder's health.
+COVERAGE_MIN_TRIAL_S = 30.0
 
 
 @dataclass
@@ -214,29 +231,67 @@ def _check_mavlink_directions(trial_dir: Path, vehicle_sysid: int) -> Check:
     return Check("mavlink.jsonl", True, detail)
 
 
-def _read_telemetry(trial_dir: Path) -> tuple[int, bool]:
-    """``(data row count, did any row report the aircraft armed)``."""
+def _read_telemetry(trial_dir: Path) -> tuple[int, bool, float]:
+    """``(data row count, did any row report armed, last t_rel_s)``."""
     path = trial_dir / "telemetry.csv"
-    rows, armed = 0, False
+    rows, armed, last_t = 0, False, 0.0
     with path.open(newline="", encoding="utf-8") as fh:
         for record in csv.DictReader(fh):
             rows += 1
             if str(record.get("armed", "")).strip().lower() in ("true", "1"):
                 armed = True
-    return rows, armed
+            try:
+                last_t = max(last_t, float(record.get("t_rel_s") or 0.0))
+            except (TypeError, ValueError):
+                pass
+    return rows, armed, last_t
+
+
+def _trial_duration_s(trial_dir: Path) -> float | None:
+    """How long the trial lasted, from the manifest's own ``started``/``ended``."""
+    try:
+        trial = json.loads((trial_dir / "manifest.json").read_text(encoding="utf-8")).get("trial", {})
+        started = datetime.fromisoformat(trial["started_ts"])
+        ended = datetime.fromisoformat(trial["ended_ts"])
+    except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+        return None
+    seconds = (ended - started).total_seconds()
+    return seconds if seconds > 0 else None
 
 
 def _check_telemetry(trial_dir: Path, min_rows: int) -> tuple[Check, bool]:
+    """Enough rows for a trial of this length, recorded all the way to its end.
+
+    A fixed row count cannot serve both a twelve-minute survey and a two-second
+    parameter read, so the floor is the caller's ceiling or one row per second
+    of trial, whichever is smaller, and the real test of a long trial is
+    *coverage*: a recorder that connected and then died leaves a plausible
+    number of rows that all stop early.
+    """
     path = trial_dir / "telemetry.csv"
     if not path.is_file():
         return Check("telemetry.csv", False, "missing"), False
     try:
-        rows, armed = _read_telemetry(trial_dir)
+        rows, armed, last_t = _read_telemetry(trial_dir)
     except (OSError, csv.Error) as e:
         return Check("telemetry.csv", False, f"unreadable ({type(e).__name__}: {e})"), False
-    if rows < min_rows:
-        return Check("telemetry.csv", False, f"{rows} row(s), below the floor of {min_rows}"), armed
-    return Check("telemetry.csv", True, f"{rows} rows, armed={armed}"), armed
+
+    duration = _trial_duration_s(trial_dir)
+    floor = min_rows if duration is None else max(1, min(min_rows, int(duration)))
+    detail = f"{rows} rows, armed={armed}"
+    if duration is not None:
+        detail += f", spanning {last_t:.0f}s of a {duration:.0f}s trial"
+
+    if rows < floor:
+        return Check("telemetry.csv", False,
+                     f"{rows} row(s), below the floor of {floor} for a "
+                     f"{duration:.0f}s trial" if duration is not None
+                     else f"{rows} row(s), below the floor of {floor}"), armed
+    if duration is not None and duration >= COVERAGE_MIN_TRIAL_S and last_t < MIN_TELEMETRY_COVERAGE * duration:
+        return Check("telemetry.csv", False,
+                     f"the recording stops {duration - last_t:.0f}s before the trial ends "
+                     f"({detail}) - the recorder died mid-trial"), armed
+    return Check("telemetry.csv", True, detail), armed
 
 
 def _check_jsonl(trial_dir: Path, name: str) -> Check:
@@ -309,7 +364,9 @@ def verify_bundle(
     Args:
         trial_dir: the per-trial directory (``<run>/<mission>/trial_<n>/``).
         require_transcript: also require ``transcript.jsonl`` (LLM trials).
-        min_telemetry_rows: floor for ``telemetry.csv`` data rows.
+        min_telemetry_rows: ceiling on the ``telemetry.csv`` row floor; the
+            floor applied is this or one row per second of trial, whichever is
+            smaller (see :func:`_check_telemetry`).
         vehicle_sysid: the autopilot's MAVLink sysid, for the direction check.
         expect_dataflash: force the dataflash expectation. ``None`` (default)
             derives it from the telemetry: expected iff the aircraft armed.

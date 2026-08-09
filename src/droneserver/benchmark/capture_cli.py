@@ -86,9 +86,11 @@ def add_capture_arguments(parser, *, model_provenance: bool = True) -> None:
     cap.add_argument("--telemetry-rate", type=float, default=10.0,
                      help="telemetry.csv sample rate in Hz (default: %(default)s)")
     cap.add_argument("--min-telemetry-rows", type=int, default=DEFAULT_MIN_TELEMETRY_ROWS,
-                     help="a trial whose telemetry.csv has fewer data rows than this is "
-                          "reported as degraded - it is how a recorder that never connected "
-                          "is told apart from a short flight (default: %(default)s)")
+                     help="ceiling on the telemetry.csv row floor. The floor actually applied "
+                          "is this or one row per second of trial, whichever is SMALLER - a "
+                          "two-second parameter read cannot produce ten rows however healthy "
+                          "the recorder is. Long trials are additionally checked for coverage: "
+                          "the recording must reach the end of the trial (default: %(default)s)")
     cap.add_argument("--require-complete-capture", action="store_true",
                      help="exit non-zero if ANY trial's bundle is degraded. What the N=5 "
                           "campaign runs with: a green exit code should mean the evidence "
