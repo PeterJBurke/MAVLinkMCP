@@ -24,6 +24,7 @@ import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import httpx
 
@@ -51,7 +52,10 @@ def main() -> int:
     for entry in catalogue:
         pricing = entry.get("pricing") or {}
         try:
-            row = {
+            # Heterogeneous on purpose: prices are floats, supports_tools is a
+            # bool, priced_by is a string. Annotated so the mixture is a stated
+            # fact rather than something a reader (or a checker) has to infer.
+            row: dict[str, Any] = {
                 # OpenRouter quotes dollars per token; the rest of this project
                 # works in dollars per million, which is how vendors advertise.
                 "input": float(pricing["prompt"]) * 1_000_000,
@@ -104,8 +108,8 @@ def main() -> int:
     print(f"wrote {out} with {len(prices)} entries (fetched {blob['fetched_utc']})")
 
     if args.show:
-        row = prices.get(args.show) or prices.get(args.show.split("/")[-1])
-        print(f"{args.show}: {json.dumps(row) if row else 'not listed'}")
+        shown = prices.get(args.show) or prices.get(args.show.split("/")[-1])
+        print(f"{args.show}: {json.dumps(shown) if shown else 'not listed'}")
     return 0
 
 
@@ -131,7 +135,7 @@ def _merge_xai(prices: dict, api_key: str, timeout_s: float) -> int:
         if not name:
             continue
         try:
-            row = {
+            row: dict[str, Any] = {
                 "input": float(entry["prompt_text_token_price"]) / XAI_UNITS_PER_USD_PER_MILLION,
                 "output": float(entry["completion_text_token_price"]) / XAI_UNITS_PER_USD_PER_MILLION,
                 "cached_input": float(entry.get("cached_prompt_text_token_price") or 0.0)

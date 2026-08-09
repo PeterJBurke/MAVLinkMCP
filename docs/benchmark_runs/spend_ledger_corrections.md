@@ -41,12 +41,24 @@ Recomputed by `scripts/ledger_cache_write_correction.py`, which writes
 | `anthropic:467e65585f45` | `claude-haiku-4-5-20251001` | 49 | $2.1954 | $0.3731 | $2.5685 |
 | **Total** | | **146** | **$43.6381** | **$6.7005** | **$50.3386** |
 
-**No other provider is affected.** Every other provider in the matrix speaks
-the OpenAI wire format, whose `usage` object reports only
+**No other *direct* provider is affected.** OpenAI, Google, xAI, Mistral and
+DeepSeek all speak the OpenAI wire format, whose `usage` object reports only
 `prompt_tokens_details.cached_tokens` — a discounted *read*. No cache-write
 token count is reported and no cache-write premium is published, so writes are
 billed at the base input rate, which is what the harness charged. Those rows
 are exact.
+
+**One route is not exact, and is disclosed rather than claimed clean:
+OpenRouter carrying an Anthropic model** — which is Phase B of the campaign.
+The *upstream* charges the 1.25× write premium, but the OpenAI-shaped `usage`
+object has no field for it. The harness now reads a passed-through
+`cache_creation_input_tokens` opportunistically when OpenRouter supplies one;
+when it does not, those tokens land in `fresh` at the base rate and the row is
+under-billed by exactly the arithmetic above, with nothing else in the payload
+from which to recover them. The Phase-A ledger contains no such rows (its
+`openrouter:` rows are non-Anthropic models, which carry no write premium), so
+the correction table above is unaffected — but any future OpenRouter/Anthropic
+row should be treated as a lower bound and corrected the same way.
 
 ## Why this is a bound, not a number
 
@@ -94,6 +106,28 @@ They were **appended, never inserted**: a new column in the middle would
 re-map every historical row's fields under `csv.DictReader`. Historical rows
 have no value in them, and that blank is meaningful: the quantity was not
 measured when they were written.
+
+### The budget guard reads this file
+
+Leaving the ledger honest is not enough on its own. The per-key cap is enforced
+by summing the ledger's own `cost_usd` column — so a guard that reads only the
+rows believes **$43.64** on a key this very document says really cost **$50.34**,
+i.e. it is ~13% optimistic on precisely the key that already overran its
+balance mid-campaign. That is the failure this whole correction exists to
+prevent, reintroduced one layer up.
+
+So `SpendLedger.spent_by()` is the sum of two terms: `recorded_by()` (this
+file's rows, unchanged) plus `corrections_for()` (the `correction_upper_usd`
+column of `spend_ledger_corrections.csv`, matched by `key_id`). The ledger's own
+`cumulative_usd_for_key` column stays a running total of its own `cost_usd`
+column, so the file remains checkable against itself; the correction is applied
+where it belongs, in the guard.
+
+The **upper** bound is used deliberately. The direction of a guard's error
+matters more than its size: over-stating past spend refuses a trial that might
+have been affordable, under-stating it exhausts a balance mid-flight with an
+aircraft in the air. A missing or unreadable corrections file contributes zero
+and never stops a run.
 
 ## A second, smaller gap in the same accounting (partly fixed)
 

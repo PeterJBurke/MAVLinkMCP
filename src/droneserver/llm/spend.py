@@ -43,9 +43,11 @@ module therefore prices cache writes as their own quantity - see
 
 from __future__ import annotations
 
+import contextlib
 import csv
 import hashlib
 import json
+import os
 import re
 import time
 from dataclasses import dataclass, replace
@@ -353,12 +355,70 @@ class SpendLedger:
         header = next(csv.reader([lines[0]]), [])
         if header == LEDGER_HEADER or header not in [list(h) for h in LEGACY_LEDGER_HEADERS]:
             return
-        with self.path.open("w", newline="", encoding="utf-8") as fh:
+        # Written aside and moved into place, never truncated where it stands.
+        # The obvious `open("w")` empties the file first, so a crash, a kill or
+        # a full disk between the truncate and the last write would destroy an
+        # append-only research record that has no backup - to add two column
+        # names. os.replace is atomic within a filesystem.
+        scratch = self.path.with_suffix(self.path.suffix + ".widening")
+        with scratch.open("w", newline="", encoding="utf-8") as fh:
             csv.writer(fh).writerow(LEDGER_HEADER)
             fh.writelines(lines[1:])
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(scratch, self.path)
 
-    def spent_by(self, key: str) -> float:
-        """Everything this key has ever been charged, per this ledger."""
+    @property
+    def corrections_path(self) -> Path:
+        """Where the known-under-billing corrections live, beside the ledger."""
+        return self.path.with_name(self.path.stem + "_corrections.csv")
+
+    def corrections_for(self, key: str) -> float:
+        """Charges this key incurred that the ledger's own rows cannot show.
+
+        Some of what a key really spent is **not recoverable from its rows**.
+        Before 2026-08-09 the harness did not record how much of each trial's
+        input was written into the provider's prompt cache, and Anthropic
+        charges a premium for exactly that - so those rows' ``cost_usd`` is a
+        lower bound, by up to $6.70 on the key that then ran out of credit
+        mid-campaign with the ledger still showing $56 of headroom.
+
+        The rows are not rewritten - they are the record of what the harness
+        charged and when. But a budget guard that reads only them believes a
+        number it has itself documented as ~13% low, on precisely the key that
+        already overran. So the bound is kept in a sibling file, written by
+        ``scripts/ledger_cache_write_correction.py``, and **added here**: the
+        history stays honest and the guard stops being optimistic.
+
+        Deliberately the *upper* bound, because the direction of a guard's
+        error matters more than its size: over-stating past spend refuses a
+        trial that might have been affordable, under-stating it exhausts a
+        balance mid-flight. Missing or unreadable file means zero, with no
+        error - a correction that cannot be read must not stop a run.
+        """
+        path = self.corrections_path
+        if not path.exists():
+            return 0.0
+        total = 0.0
+        try:
+            with path.open(newline="", encoding="utf-8") as fh:
+                for row in csv.DictReader(fh):
+                    if row.get("key_id") != key:
+                        continue
+                    with contextlib.suppress(TypeError, ValueError):
+                        total += float(row.get("correction_upper_usd") or 0.0)
+        except OSError:
+            return 0.0
+        return total
+
+    def recorded_by(self, key: str) -> float:
+        """The sum of this key's rows in this file, and nothing else.
+
+        This is what the ledger *says*. It is deliberately separate from
+        :meth:`spent_by`, which is what the key actually cost: the file's
+        ``cumulative_usd_for_key`` column must stay a running total of its own
+        ``cost_usd`` column, or the file stops being checkable against itself.
+        """
         if not self.path.exists():
             return 0.0
         total = 0.0
@@ -371,16 +431,44 @@ class SpendLedger:
                         continue
         return total
 
+    def spent_by(self, key: str) -> float:
+        """Everything this key has cost: the rows, plus what they cannot show.
+
+        :meth:`recorded_by` plus :meth:`corrections_for`. This is the figure the
+        cap is enforced against, because it is the one that matches the
+        provider's balance.
+        """
+        return self.recorded_by(key) + self.corrections_for(key)
+
     def remaining(self, key: str) -> float:
         return self.budget_usd - self.spent_by(key)
 
     def check_before_trial(self, key: str, projected_usd: float) -> float:
-        """Refuse the trial if it could cross the cap. Returns what is left."""
+        """Refuse the trial if it could cross the cap. Returns what is left.
+
+        The message names the lever on purpose. ``projected_usd`` is a
+        deliberate worst case - every turn used, every turn paying the dearest
+        input rate - and on an expensive model it runs tens of times a real
+        trial's cost, so this can refuse a $0.78 trial against $49 of headroom.
+        That is the guard working, not misfiring, but whoever meets it
+        mid-campaign needs to know instantly which knob answers it rather than
+        guessing that the key is broken.
+        """
         left = self.remaining(key)
         if projected_usd > left:
+            corrected = self.corrections_for(key)
+            note = (
+                f" (${self.recorded_by(key):.2f} recorded in the ledger plus ${corrected:.2f} of documented "
+                f"under-billing - see {self.corrections_path.name})"
+                if corrected
+                else ""
+            )
             raise BudgetExceeded(
-                f"key {key} has ${left:.2f} of its ${self.budget_usd:.2f} budget left, and this trial "
-                f"could cost up to ${projected_usd:.2f}. Not starting it. Nothing has been spent."
+                f"key {key} has ${left:.2f} of its ${self.budget_usd:.2f} budget left{note}, and this trial "
+                f"could cost up to ${projected_usd:.2f}. Not starting it. Nothing has been spent. "
+                f"That projection is a worst case - every turn used, every turn at the dearest input rate - "
+                f"so a real trial normally costs far less; raise --budget-usd if the cap, not the money, is "
+                f"what is in the way."
             )
         return left
 
@@ -403,8 +491,15 @@ class SpendLedger:
         cache_write_tokens: int = 0,
         uncounted_reasoning_tokens: int = 0,
     ) -> float:
-        """Append one trial's spend. Returns the key's new cumulative total."""
-        cumulative = self.spent_by(key) + cost_usd
+        """Append one trial's spend. Returns the key's new cumulative total.
+
+        The ``cumulative_usd_for_key`` column is the running total of *this
+        file's own rows* (:meth:`recorded_by`), never the corrected figure, so
+        the column remains checkable against the ``cost_usd`` column above it.
+        The correction is applied where it belongs - in the guard, via
+        :meth:`spent_by`.
+        """
+        cumulative = self.recorded_by(key) + cost_usd
         with self.path.open("a", newline="", encoding="utf-8") as fh:
             csv.writer(fh).writerow(
                 [

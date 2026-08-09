@@ -113,7 +113,7 @@ def main() -> int:
         verdicts: dict[str, str] = {}
         reasons: dict[str, str] = {}
         evidence: dict[str, dict] = {}
-        totals = defaultdict(float)
+        totals: defaultdict[str, float] = defaultdict(float)
         bad_calls = 0
         for mid, blob in ms.items():
             m = blob["m"]

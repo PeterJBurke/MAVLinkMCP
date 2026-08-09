@@ -74,13 +74,31 @@ def test_a_rejected_key_is_fatal_and_is_not_a_quota_error(status, body):
     [
         (429, "Rate limit reached for requests"),
         (403, "rate_limit_exceeded: too many requests, slow down"),
-        # Google's PER-MINUTE throttle. It says "Quota exceeded", and it is a
-        # rate limit: abandoning a run over it would be the opposite mistake.
+        # Google's PER-MINUTE throttle on its NATIVE shape. It says "Quota
+        # exceeded", and it is a rate limit: abandoning a run over it would be
+        # the opposite mistake.
         (
             429,
             "{'error': {'code': 429, 'message': \"Quota exceeded for quota metric "
             "'Generate Content API requests per minute'\", 'status': 'RESOURCE_EXHAUSTED'}}",
         ),
+        # The one that matters most, and the one this harness will actually
+        # meet: Google's OpenAI-COMPATIBLE surface (the endpoint PROVIDERS
+        # ["google"] points at) answers an RPM throttle with OpenAI's own
+        # out-of-credit wording. Only RESOURCE_EXHAUSTED and the rate-limits
+        # link separate it from a genuinely dead OpenAI account.
+        (
+            429,
+            '{"error":{"code":429,"message":"You exceeded your current quota, please check your plan '
+            "and billing details. For more information on this error, head to: "
+            'https://ai.google.dev/gemini-api/docs/rate-limits.","status":"RESOURCE_EXHAUSTED"}}',
+        ),
+        # A body that says both things at once must stay on the retry path.
+        (429, "You exceeded your current quota. Rate limit reached for requests."),
+        # A gateway quoting an upstream's auth text inside a 5xx is reporting
+        # somebody else's problem; our key is not the thing that failed.
+        (502, "upstream returned: unauthorized"),
+        (503, "permission_denied from the backend, please try again later"),
         (500, "internal server error"),
         (529, "overloaded_error"),
         (503, "service unavailable"),

@@ -104,11 +104,40 @@ QUOTA_MARKERS = (
     "exceeded your monthly",
     "no credits",
 )
-# NOT a quota marker, deliberately: Google answers a PER-MINUTE throttle with
-# 429 RESOURCE_EXHAUSTED and the words "Quota exceeded for quota metric
-# 'Generate Content API requests per minute'". That is a rate limit. Treating
-# it as out-of-credit would abandon a whole model's run over a blip - the
-# opposite mistake, and a more expensive one, than the bug this list fixes.
+
+#: Substrings that mean "you are going too fast", checked **before** anything
+#: else and always winning. This list is the safety catch on the two above, and
+#: it exists because the same words mean different things at different vendors.
+#:
+#: The case that forced it: Google's OpenAI-compatible surface - the one this
+#: harness actually calls - answers a *per-minute* throttle with the OpenAI
+#: wording ``"You exceeded your current quota, please check your plan and
+#: billing details"``, which is a genuine out-of-credit message at OpenAI. Only
+#: the surrounding text separates them: Google's carries
+#: ``RESOURCE_EXHAUSTED`` and links to its rate-limits page. Without this list
+#: the harness would read an RPM throttle as a dead account and abandon a
+#: healthy model's whole run - the opposite of the defect it was widened to
+#: fix, and the more expensive one, because it throws away good trials rather
+#: than merely wasting bad ones.
+#:
+#: When a body says both things, **transient wins**. Retrying a genuinely dead
+#: key costs the four attempts of one trial and is then caught by
+#: :data:`droneserver.llm.runner.VOID_STREAK_LIMIT` within three trials;
+#: abandoning a throttled run costs the whole arm.
+TRANSIENT_MARKERS = (
+    "rate limit",
+    "rate_limit",
+    "rate-limit",  # Google links to .../docs/rate-limits in its 429 body
+    "ratelimit",
+    "too many requests",
+    "resource_exhausted",  # Google's status for an RPM/RPD throttle
+    "requests per minute",
+    "requests per day",
+    "quota metric",  # "Quota exceeded for quota metric '...per minute'"
+    "overloaded",
+    "try again later",
+    "temporarily unavailable",
+)
 
 #: Substrings that mean "this key will never work", as opposed to "this key is
 #: being throttled". Deliberately narrow: an over-broad entry here would turn a
@@ -138,16 +167,19 @@ def fatal_provider_error(status_code: int, body: str, where: str) -> ProviderErr
     in one function is the point: the two session classes must agree about what
     ends a run, and the campaign's cost of getting it wrong is measured in
     hours of flying time.
+
+    **The order of the three tests is the whole design.** Transient first, so a
+    throttle can never be read as a dead account however it is worded. Then out
+    of credit. Then a rejected key - and only below HTTP 500, because a
+    gateway or an aggregator that quotes an upstream's auth text inside a 502
+    is reporting someone else's problem, not ours.
     """
     lowered = body.lower()
+    if any(marker in lowered for marker in TRANSIENT_MARKERS):
+        return None
     if status_code == 402 or any(marker in lowered for marker in QUOTA_MARKERS):
         return ProviderQuotaError(f"{where}: out of credit / over quota - HTTP {status_code}: {body[:400]}")
-    if status_code in (401, 403) or any(marker in lowered for marker in AUTH_MARKERS):
-        # Some providers answer a per-minute throttle with 403. That is
-        # transient, and aborting a run over it would be worse than the bug
-        # this function exists to prevent - so it stays on the retry path.
-        if any(t in lowered for t in ("rate limit", "rate_limit", "too many requests")):
-            return None
+    if status_code < 500 and (status_code in (401, 403) or any(marker in lowered for marker in AUTH_MARKERS)):
         return ProviderAuthError(f"{where}: the API key was rejected - HTTP {status_code}: {body[:400]}")
     return None
 
@@ -662,12 +694,33 @@ class OpenAICompatibleSession(ModelSession):
         provider_meta = payload.get("provider") or ""
         output_tokens = int(usage.get("completion_tokens") or 0)
         reasoning_tokens = int(details.get("reasoning_tokens") or 0)
-        # No cache-WRITE quantity exists on this wire format: the OpenAI shape
-        # reports only prompt_tokens_details.cached_tokens, which is a
-        # discounted READ. Providers speaking it (OpenAI, Google, xAI, Mistral,
-        # DeepSeek, OpenRouter) cache implicitly and charge writes at the base
-        # input rate, so cache_write_tokens stays 0 and the base rate applies -
-        # which is correct, not a placeholder.
+        # The OpenAI wire format has no cache-WRITE field of its own - only
+        # prompt_tokens_details.cached_tokens, which is a discounted READ. For
+        # the vendors that speak it natively (OpenAI, Google, xAI, Mistral,
+        # DeepSeek) that is the whole story: they cache implicitly and charge
+        # writes at the base input rate, so 0 here is correct and the base rate
+        # applies.
+        #
+        # OpenRouter is the exception, and it matters because Phase B of the
+        # campaign routes Anthropic models through it: the UPSTREAM does charge
+        # a 1.25x write premium. OpenRouter sometimes passes the upstream's
+        # cache_creation count through under one of the names below, so it is
+        # read opportunistically here.
+        #
+        # KNOWN RESIDUAL, disclosed rather than papered over: when it passes
+        # nothing through, those written tokens land in `fresh` at the base
+        # rate and the row is under-billed exactly as the direct Anthropic
+        # rows were - there is no other quantity in the payload from which to
+        # recover them. Bounded by the same arithmetic as the historical
+        # correction (0.25 x base x non-cache-read input), and recorded in
+        # docs/benchmark_runs/spend_ledger_corrections.md.
+        cache_write_tokens = int(
+            usage.get("cache_creation_input_tokens")
+            or details.get("cache_creation_tokens")
+            or prompt_details.get("cache_creation_tokens")
+            or prompt_details.get("cache_write_tokens")
+            or 0
+        )
         return ModelTurn(
             resolved_model=payload.get("model") or self._wire_model,
             generation_id=payload.get("id") or "",
@@ -680,6 +733,7 @@ class OpenAICompatibleSession(ModelSession):
             attempts=attempts,
             input_tokens=int(usage.get("prompt_tokens") or 0),
             cached_input_tokens=int(prompt_details.get("cached_tokens") or 0),
+            cache_write_tokens=cache_write_tokens,
             output_tokens=output_tokens,
             reasoning_tokens=reasoning_tokens,
             uncounted_reasoning_tokens=uncounted_reasoning(self.provider, output_tokens, reasoning_tokens),

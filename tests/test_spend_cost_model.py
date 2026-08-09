@@ -20,6 +20,7 @@ from droneserver.llm.providers import (
     REASONING_REPORTED_SEPARATELY,
     AnthropicSession,
     ModelTurn,
+    OpenAICompatibleSession,
     Route,
     uncounted_reasoning,
 )
@@ -169,6 +170,63 @@ def test_openai_shaped_turns_report_no_cache_write_quantity():
     assert ModelTurn(text="", tool_calls=[], finish_reason="", decision_latency_ms=0.0).cache_write_tokens == 0
 
 
+def _openai_session(provider: str = "openrouter") -> OpenAICompatibleSession:
+    route = Route(
+        provider=PROVIDERS[provider],
+        wire_model="anthropic/claude-opus-5",
+        requested_model="claude-opus-5",
+        routing="aggregator (no $ANTHROPIC_API_KEY)",
+    )
+    return OpenAICompatibleSession(route, "not-a-real-key")
+
+
+@pytest.mark.asyncio
+async def test_an_aggregator_that_does_pass_the_cache_write_count_through_is_believed():
+    """Phase B routes Anthropic models through OpenRouter, whose upstream does
+    charge the 1.25x premium. When the count comes through, use it."""
+    session = _openai_session()
+    try:
+        turn = session._parse(
+            {
+                "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+                "usage": {
+                    "prompt_tokens": 42_100,
+                    "prompt_tokens_details": {"cached_tokens": 20_000},
+                    "cache_creation_input_tokens": 22_000,
+                    "completion_tokens": 50,
+                },
+            },
+            latency_ms=1.0,
+            wait_ms=0.0,
+            attempts=1,
+        )
+    finally:
+        await session.aclose()
+    assert turn.cache_write_tokens == 22_000
+
+
+@pytest.mark.asyncio
+async def test_a_provider_that_reports_no_cache_write_count_yields_zero():
+    session = _openai_session("openai")
+    try:
+        turn = session._parse(
+            {
+                "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+                "usage": {
+                    "prompt_tokens": 1_000,
+                    "prompt_tokens_details": {"cached_tokens": 900},
+                    "completion_tokens": 50,
+                },
+            },
+            latency_ms=1.0,
+            wait_ms=0.0,
+            attempts=1,
+        )
+    finally:
+        await session.aclose()
+    assert turn.cache_write_tokens == 0
+
+
 # ------------------------------------------------- reasoning outside the output
 
 
@@ -241,6 +299,81 @@ def test_a_legacy_ledger_gains_the_new_columns_without_a_row_being_touched(tmp_p
     assert record["note"] == "PASS"
     assert not record["cache_write_tokens"], "not measured then, and the blank says so"
     assert ledger.spent_by("anthropic:deadbeef") == pytest.approx(0.1)
+
+
+def test_the_guard_counts_what_the_rows_cannot_show(tmp_path):
+    """A cap enforced against a figure known to be low is not a cap.
+
+    The pre-fix rows under-record Anthropic spend and are deliberately never
+    rewritten, so the correction lives in a sibling file - and the guard has to
+    read it, or it believes a number this project has itself documented as ~13%
+    low on precisely the key that already overran its balance.
+    """
+    ledger = SpendLedger(path=tmp_path / "spend_ledger.csv")
+    ledger.record(
+        key="anthropic:deadbeef",
+        provider="anthropic",
+        model="claude-opus-5",
+        resolved_model="claude-opus-5",
+        mission_id="T1",
+        trial=1,
+        input_tokens=1_000,
+        cached_input_tokens=0,
+        output_tokens=0,
+        reasoning_tokens=0,
+        cost_usd=40.0,
+        run_dir="llm_runs/old",
+    )
+    assert ledger.spent_by("anthropic:deadbeef") == pytest.approx(40.0)
+
+    with (tmp_path / "spend_ledger_corrections.csv").open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(["key_id", "provider", "model", "correction_upper_usd"])
+        writer.writerow(["anthropic:deadbeef", "anthropic", "claude-opus-5", "6.700510"])
+        writer.writerow(["openai:cafe", "openai", "gpt-5.2", "1.000000"])
+
+    assert ledger.recorded_by("anthropic:deadbeef") == pytest.approx(40.0), "the file still says what it said"
+    assert ledger.corrections_for("anthropic:deadbeef") == pytest.approx(6.70051)
+    assert ledger.spent_by("anthropic:deadbeef") == pytest.approx(46.70051), "the guard sees the corrected total"
+    assert ledger.remaining("anthropic:deadbeef") == pytest.approx(100.0 - 46.70051)
+    # A key with no correction is untouched, and another key's correction is
+    # never borrowed.
+    assert ledger.spent_by("google:abc") == 0.0
+
+
+def test_a_missing_or_unreadable_corrections_file_never_stops_a_run(tmp_path):
+    ledger = SpendLedger(path=tmp_path / "spend_ledger.csv")
+    assert ledger.corrections_for("anything") == 0.0
+    (tmp_path / "spend_ledger_corrections.csv").write_text("this is not a csv we understand\n", encoding="utf-8")
+    assert ledger.corrections_for("anything") == 0.0
+
+
+def test_the_cumulative_column_stays_a_running_total_of_the_file_itself(tmp_path):
+    """Otherwise the ledger stops being checkable against itself."""
+    ledger = SpendLedger(path=tmp_path / "spend_ledger.csv")
+    with (tmp_path / "spend_ledger_corrections.csv").open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(["key_id", "correction_upper_usd"])
+        writer.writerow(["anthropic:deadbeef", "6.700510"])
+    cumulative = ledger.record(
+        key="anthropic:deadbeef",
+        provider="anthropic",
+        model="claude-opus-5",
+        resolved_model="claude-opus-5",
+        mission_id="T1",
+        trial=1,
+        input_tokens=1_000,
+        cached_input_tokens=0,
+        output_tokens=0,
+        reasoning_tokens=0,
+        cost_usd=2.0,
+        run_dir="llm_runs/new",
+    )
+    assert cumulative == pytest.approx(2.0), "the column sums this file's rows, not the correction"
+    with (tmp_path / "spend_ledger.csv").open(newline="", encoding="utf-8") as fh:
+        record = next(iter(csv.DictReader(fh)))
+    assert record["cumulative_usd_for_key"] == "2.000000"
+    assert ledger.spent_by("anthropic:deadbeef") == pytest.approx(8.70051), "but the guard still sees both"
 
 
 def test_new_rows_record_the_token_split(tmp_path):

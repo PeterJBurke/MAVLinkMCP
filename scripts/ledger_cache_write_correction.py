@@ -94,13 +94,20 @@ def main() -> int:
                 recorded = float(row["cost_usd"] or 0.0)
             except Exception:  # no price on file, or an unreadable row: skip it
                 continue
+            # The premium comes from the PUBLISHED rate wherever the table has
+            # one; the hand-maintained multiplier is only the fallback. They
+            # agree exactly today (every Anthropic row is 1.25x), but reading
+            # the multiplier by preference would let this correction silently
+            # disagree with what the harness actually charges if a vendor ever
+            # moved its write rate.
+            premium = (price.cache_write - price.input) if price.cache_write else price.input * (multiplier - 1.0)
             unattributed = max(total_in - cached, 0)
             bucket = groups[(row.get("key_id", ""), provider, model)]
             bucket["rows"] += 1
             bucket["input"] += total_in
             bucket["cached"] += cached
             bucket["recorded"] += recorded
-            bucket["extra"] += unattributed * price.input * (multiplier - 1.0) / 1_000_000
+            bucket["extra"] += unattributed * max(premium, 0.0) / 1_000_000
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)

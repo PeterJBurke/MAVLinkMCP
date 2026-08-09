@@ -202,7 +202,10 @@ async def run_agent(
             if time.perf_counter() > deadline:
                 run.stop_reason = f"wall-clock limit ({limits.wall_clock_s:.0f}s) reached"
                 break
-            total_tokens = run.input_tokens + run.output_tokens
+            # Reasoning tokens the provider reported outside output_tokens are
+            # real generated tokens and count against the budget, exactly as
+            # they count against the bill.
+            total_tokens = run.input_tokens + run.output_tokens + run.uncounted_reasoning_tokens
             if total_tokens > limits.max_total_tokens:
                 run.stop_reason = f"token budget ({limits.max_total_tokens}) exhausted"
                 break
