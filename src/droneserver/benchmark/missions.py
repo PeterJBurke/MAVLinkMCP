@@ -409,8 +409,17 @@ def t10_long_mission(c: BenchmarkClient, ctx: dict):
     home = _home(c, ctx)
     if not home:
         return False, "home position unavailable", {}
+    # Grid sized so the flight genuinely exceeds the ten minutes T10 asserts.
+    # Measured on ArduCopter SITL at the default WPNAV_SPEED: a 4x4 grid with
+    # 5 s holds over this span flies in 526 s - it completed cleanly and still
+    # failed T10's own >600 s criterion, deterministically, for every model
+    # that would ever run it. 5x5 with 8 s holds is ~33 s per waypoint plus
+    # the extra hold, i.e. comfortably past 600 s. Battery is the upper bound:
+    # the 526 s flight used 42% of the simulated pack (100% -> 58%), and the
+    # server's own low-battery auto-action returns to launch below 25%, so the
+    # grid must stay well under ~19 minutes of flying.
     span = ctx["survey_span_m"]
-    rows, cols = 4, 4
+    rows, cols = 5, 5
     waypoints = []
     for r in range(rows):
         north = -span + (2 * span) * r / (rows - 1)
@@ -419,7 +428,7 @@ def t10_long_mission(c: BenchmarkClient, ctx: dict):
             east = -span + (2 * span) * col / (cols - 1)
             lat, lon = _offset(home[0], home[1], north, east)
             waypoints.append(
-                {"latitude_deg": lat, "longitude_deg": lon, "altitude_m": ctx["takeoff_altitude_m"] + 10, "hold_s": 5}
+                {"latitude_deg": lat, "longitude_deg": lon, "altitude_m": ctx["takeoff_altitude_m"] + 10, "hold_s": 8}
             )
 
     started = c.call(
