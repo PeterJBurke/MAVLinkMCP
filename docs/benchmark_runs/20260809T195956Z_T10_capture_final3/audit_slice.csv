@@ -1,0 +1,78 @@
+ts,tool,tier,verdict,rule,latency_ms,safety_ms,audit_write_ms,client_id,outcome_status
+2026-08-09T19:59:58.673246+00:00,mission.info,normal,event,,0.0,0.0,0.0,mission_runner,mission submitted with 25 waypoint(s)
+2026-08-09T19:59:58.674815+00:00,start_managed_mission,normal,allowed,,2.84,0.103,1.228,staging,success
+2026-08-09T19:59:58.676201+00:00,mission.phase_change,normal,event,,0.0,0.0,0.0,mission_runner,submitted -> validating
+2026-08-09T19:59:58.749270+00:00,get_mission_status,read_only,allowed,,1.31,0.112,0.974,staging,success
+2026-08-09T19:59:59.478618+00:00,mission.phase_change,normal,event,,0.0,0.0,0.0,mission_runner,validating -> uploading
+2026-08-09T19:59:59.658777+00:00,mission.info,normal,event,,0.0,0.0,0.0,mission_runner,uploaded 28 mission items
+2026-08-09T19:59:59.660859+00:00,mission.phase_change,normal,event,,0.0,0.0,0.0,mission_runner,uploading -> arming
+2026-08-09T19:59:59.695306+00:00,mission.info,normal,event,,0.0,0.0,0.0,mission_runner,armed
+2026-08-09T19:59:59.714353+00:00,mission.info,normal,event,,0.0,0.0,0.0,mission_runner,climbing to 30 m before starting the mission
+2026-08-09T20:00:13.814418+00:00,get_mission_status,read_only,allowed,,1.316,0.101,1.092,staging,success
+2026-08-09T20:00:17.717687+00:00,mission.info,normal,event,,0.0,0.0,0.0,mission_runner,reached 29.9 m
+2026-08-09T20:00:17.732549+00:00,mission.phase_change,normal,event,,0.0,0.0,0.0,mission_runner,arming -> running
+2026-08-09T20:00:21.475640+00:00,mission.waypoint,normal,event,,0.0,0.0,0.0,mission_runner,reached item 2/28
+2026-08-09T20:00:21.479752+00:00,mission.mode,normal,event,,0.0,0.0,0.0,mission_runner,flight mode -> MISSION
+2026-08-09T20:00:28.894272+00:00,get_mission_status,read_only,allowed,,1.389,0.109,1.315,staging,success
+2026-08-09T20:00:44.081183+00:00,get_mission_status,read_only,allowed,,1.349,0.101,2.44,staging,success
+2026-08-09T20:00:55.964498+00:00,get_mission_status,read_only,allowed,,2.238,0.103,1.347,staging,success
+2026-08-09T20:00:59.151128+00:00,get_mission_status,read_only,allowed,,1.44,0.105,1.561,staging,success
+2026-08-09T20:01:14.231348+00:00,get_mission_status,read_only,allowed,,2.696,0.13,0.758,staging,success
+2026-08-09T20:01:29.305070+00:00,get_mission_status,read_only,allowed,,1.367,0.097,1.512,staging,success
+2026-08-09T20:01:44.397884+00:00,get_mission_status,read_only,allowed,,1.906,0.18,2.036,staging,success
+2026-08-09T20:01:55.875951+00:00,mission.waypoint,normal,event,,0.0,0.0,0.0,mission_runner,reached item 5/28
+2026-08-09T20:01:59.471461+00:00,get_mission_status,read_only,allowed,,1.463,0.107,1.982,staging,success
+2026-08-09T20:02:14.545204+00:00,get_mission_status,read_only,allowed,,1.52,0.107,1.647,staging,success
+2026-08-09T20:02:29.624996+00:00,get_mission_status,read_only,allowed,,1.598,0.141,1.326,staging,success
+2026-08-09T20:02:44.703926+00:00,get_mission_status,read_only,allowed,,1.513,0.168,1.394,staging,success
+2026-08-09T20:02:59.783723+00:00,get_mission_status,read_only,allowed,,1.812,0.121,1.831,staging,success
+2026-08-09T20:03:11.511726+00:00,mission.waypoint,normal,event,,0.0,0.0,0.0,mission_runner,reached item 8/28
+2026-08-09T20:03:14.881674+00:00,get_mission_status,read_only,allowed,,1.591,0.132,1.4,staging,success
+2026-08-09T20:03:29.968362+00:00,get_mission_status,read_only,allowed,,1.69,0.135,1.33,staging,success
+2026-08-09T20:03:45.042830+00:00,get_mission_status,read_only,allowed,,1.548,0.114,1.548,staging,success
+2026-08-09T20:04:00.126018+00:00,get_mission_status,read_only,allowed,,1.637,0.142,1.425,staging,success
+2026-08-09T20:04:15.227598+00:00,get_mission_status,read_only,allowed,,1.794,0.216,2.088,staging,success
+2026-08-09T20:04:30.305961+00:00,get_mission_status,read_only,allowed,,1.429,0.12,2.972,staging,success
+2026-08-09T20:04:45.377647+00:00,get_mission_status,read_only,allowed,,1.456,0.094,1.657,staging,success
+2026-08-09T20:04:52.362446+00:00,mission.waypoint,normal,event,,0.0,0.0,0.0,mission_runner,reached item 12/28
+2026-08-09T20:05:00.450136+00:00,get_mission_status,read_only,allowed,,1.44,0.1,1.94,staging,success
+2026-08-09T20:05:15.540853+00:00,get_mission_status,read_only,allowed,,2.065,0.126,1.481,staging,success
+2026-08-09T20:05:30.618428+00:00,get_mission_status,read_only,allowed,,2.626,0.134,3.213,staging,success
+2026-08-09T20:05:45.695202+00:00,get_mission_status,read_only,allowed,,1.39,0.098,1.768,staging,success
+2026-08-09T20:06:00.768458+00:00,get_mission_status,read_only,allowed,,1.391,0.112,1.277,staging,success
+2026-08-09T20:06:15.870791+00:00,get_mission_status,read_only,allowed,,5.157,0.12,1.767,staging,success
+2026-08-09T20:06:30.991353+00:00,get_mission_status,read_only,allowed,,2.126,0.152,1.383,staging,success
+2026-08-09T20:06:33.601968+00:00,mission.waypoint,normal,event,,0.0,0.0,0.0,mission_runner,reached item 16/28
+2026-08-09T20:06:46.083569+00:00,get_mission_status,read_only,allowed,,1.737,0.119,6.753,staging,success
+2026-08-09T20:07:01.171888+00:00,get_mission_status,read_only,allowed,,1.5,0.143,1.323,staging,success
+2026-08-09T20:07:16.247029+00:00,get_mission_status,read_only,allowed,,2.761,0.109,1.538,staging,success
+2026-08-09T20:07:31.329495+00:00,get_mission_status,read_only,allowed,,1.532,0.13,1.563,staging,success
+2026-08-09T20:07:46.407826+00:00,get_mission_status,read_only,allowed,,2.428,0.138,1.89,staging,success
+2026-08-09T20:07:49.525787+00:00,mission.waypoint,normal,event,,0.0,0.0,0.0,mission_runner,reached item 19/28
+2026-08-09T20:08:01.482702+00:00,get_mission_status,read_only,allowed,,1.652,0.124,2.118,staging,success
+2026-08-09T20:08:16.557728+00:00,get_mission_status,read_only,allowed,,1.45,0.125,1.856,staging,success
+2026-08-09T20:08:25.430542+00:00,mission.battery,normal,event,,0.0,0.0,0.0,mission_runner,battery at 50%
+2026-08-09T20:08:31.646654+00:00,get_mission_status,read_only,allowed,,1.675,0.129,0.847,staging,success
+2026-08-09T20:08:46.721284+00:00,get_mission_status,read_only,allowed,,1.628,0.189,2.015,staging,success
+2026-08-09T20:09:01.807729+00:00,get_mission_status,read_only,allowed,,2.676,0.137,2.262,staging,success
+2026-08-09T20:09:16.917526+00:00,get_mission_status,read_only,allowed,,1.512,0.093,2.632,staging,success
+2026-08-09T20:09:30.376765+00:00,mission.waypoint,normal,event,,0.0,0.0,0.0,mission_runner,reached item 23/28
+2026-08-09T20:09:31.997136+00:00,get_mission_status,read_only,allowed,,1.726,0.141,2.854,staging,success
+2026-08-09T20:09:47.080308+00:00,get_mission_status,read_only,allowed,,1.477,0.12,1.592,staging,success
+2026-08-09T20:10:02.164499+00:00,get_mission_status,read_only,allowed,,1.607,0.158,1.281,staging,success
+2026-08-09T20:10:17.235953+00:00,get_mission_status,read_only,allowed,,1.383,0.1,1.584,staging,success
+2026-08-09T20:10:32.321871+00:00,get_mission_status,read_only,allowed,,2.45,0.139,1.277,staging,success
+2026-08-09T20:10:47.401178+00:00,get_mission_status,read_only,allowed,,1.392,0.097,3.247,staging,success
+2026-08-09T20:11:02.485586+00:00,get_mission_status,read_only,allowed,,1.386,0.103,1.294,staging,success
+2026-08-09T20:11:11.264007+00:00,mission.waypoint,normal,event,,0.0,0.0,0.0,mission_runner,reached item 27/28
+2026-08-09T20:11:17.585190+00:00,get_mission_status,read_only,allowed,,1.835,0.151,2.009,staging,success
+2026-08-09T20:11:32.659759+00:00,get_mission_status,read_only,allowed,,1.724,0.133,2.242,staging,success
+2026-08-09T20:11:47.730120+00:00,get_mission_status,read_only,allowed,,1.546,0.11,1.623,staging,success
+2026-08-09T20:12:02.810779+00:00,get_mission_status,read_only,allowed,,1.391,0.124,1.911,staging,success
+2026-08-09T20:12:17.904661+00:00,get_mission_status,read_only,allowed,,1.549,0.121,1.296,staging,success
+2026-08-09T20:12:32.973866+00:00,get_mission_status,read_only,allowed,,1.63,0.206,1.575,staging,success
+2026-08-09T20:12:33.149031+00:00,mission.waypoint,normal,event,,0.0,0.0,0.0,mission_runner,reached item 28/28
+2026-08-09T20:12:38.454919+00:00,mission.phase_change,normal,event,,0.0,0.0,0.0,mission_runner,running -> completed (landed and disarmed)
+2026-08-09T20:12:48.052936+00:00,get_mission_status,read_only,allowed,,1.312,0.102,1.804,staging,success
+2026-08-09T20:12:48.121952+00:00,control_managed_mission,normal,allowed,,1.685,0.129,1.584,staging,success
+2026-08-09T20:12:52.449976+00:00,get_armed,read_only,allowed,,502.089,0.113,1.334,staging,success

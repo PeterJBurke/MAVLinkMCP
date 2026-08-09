@@ -1,0 +1,2 @@
+mission_id,name,verdict,reason,duration_s,started_utc,detail
+T10,long mission >10 min,PASS,12.3 min mission monitored server-side,770.7,2026-08-09T19:59:57.498574+00:00,"{""final_phase"": ""completed"", ""flight_s"": 740.7, ""events"": 21}"
