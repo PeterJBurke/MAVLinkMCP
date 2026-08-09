@@ -10,17 +10,25 @@ stream that SITL / mavlink-router forwards to them and never inject traffic.
 - :func:`~droneserver.capture.events.derive_events` - distilled safety/flight events
 """
 
+from droneserver.capture.events import derive_events
+from droneserver.capture.manifest import (
+    RemoteDataflashError,
+    gather_versions,
+    retain_dataflash,
+    retain_remote_dataflash,
+    write_manifest,
+)
 from droneserver.capture.mavlink_tap import MavlinkTap
 from droneserver.capture.telemetry_recorder import TelemetryRecorder
 from droneserver.capture.transcript import TranscriptWriter
-from droneserver.capture.manifest import retain_dataflash, write_manifest, gather_versions
-from droneserver.capture.events import derive_events
 
 __all__ = [
     "MavlinkTap",
     "TelemetryRecorder",
     "TranscriptWriter",
     "retain_dataflash",
+    "retain_remote_dataflash",
+    "RemoteDataflashError",
     "write_manifest",
     "gather_versions",
     "derive_events",

@@ -55,8 +55,14 @@ from droneserver.capture import (
     derive_events,
     gather_versions,
     retain_dataflash,
+    retain_remote_dataflash,
     write_manifest,
 )
+
+#: Refuse to copy a dataflash log bigger than this (bytes). A SITL left in
+#: continuous-logging mode produces multi-gigabyte files that would dominate
+#: the trial directory and the copy time; better to skip and say so.
+MAX_DATAFLASH_BYTES = 1 << 30  # 1 GiB
 
 #: audit_slice.csv columns written per trial. Superset of what the run-level
 #: slice writes, plus ``call_id``/``outcome_error`` so events.derive_events can
@@ -112,6 +118,7 @@ class CaptureConfig:
         mavlink_endpoint: str = "udpin:127.0.0.1:14650",
         telemetry_address: str = "udp://:14540",
         dataflash_dir: Path | None = None,
+        dataflash_remote: str = "",
         vehicle_sysid: int = 1,
         rate_hz: float = 10.0,
         model: str = "",
@@ -120,10 +127,15 @@ class CaptureConfig:
         firmware: str = "",
         firmware_version: str = "",
         sim_params: dict | None = None,
+        droneserver_commit: str = "",
+        sitl_host: str = "",
     ):
         self.mavlink_endpoint = mavlink_endpoint
         self.telemetry_address = telemetry_address
         self.dataflash_dir = Path(dataflash_dir) if dataflash_dir else None
+        #: ``host:/path`` of the log directory when the simulator runs on
+        #: another machine (the usual SITL case - see finalize()).
+        self.dataflash_remote = dataflash_remote
         self.vehicle_sysid = vehicle_sysid
         self.rate_hz = rate_hz
         self.model = model
@@ -132,6 +144,11 @@ class CaptureConfig:
         self.firmware = firmware
         self.firmware_version = firmware_version
         self.sim_params = sim_params or {}
+        #: Plan 19 §6 provenance the harness must supply, because this layer
+        #: refuses to guess it: which code flew, and which machine the sim ran
+        #: on (not derivable once the link goes through a local relay).
+        self.droneserver_commit = droneserver_commit
+        self.sitl_host = sitl_host
 
 
 class _AsyncLoopThread:
@@ -260,11 +277,28 @@ class TrialCapture:
         events. Order matters - ``write_manifest`` hashes whatever exists, so it
         runs after every other artifact is on disk, and ``derive_events`` last
         (Plan 19 §7 build order)."""
-        # 1. Retain the newest dataflash .BIN/.ulg for this trial.
-        if self.config.dataflash_dir is not None:
+        # 1. Retain the newest dataflash .BIN/.ulg for this trial, from the local
+        #    disk or - the usual SITL case - from the machine running the sim.
+        #    Only a log actually written during this trial is taken (started_ts
+        #    guard), so a mission that never armed retains nothing rather than
+        #    inheriting the previous flight's log.
+        trial_name = f"{mission_id}_t{trial_idx}"
+        if self.config.dataflash_remote:
             try:
-                retain_dataflash(self.config.dataflash_dir, self.trial_dir,
-                                 f"{mission_id}_t{trial_idx}")
+                kept = retain_remote_dataflash(
+                    self.config.dataflash_remote, self.trial_dir, trial_name,
+                    min_mtime=started_ts, max_bytes=MAX_DATAFLASH_BYTES,
+                )
+                if kept is None:
+                    print(f"[capture] no dataflash log written during {trial_name} "
+                          f"(nothing newer than the trial start, or over the size cap)", flush=True)
+                else:
+                    print(f"[capture] retained {kept.name} ({kept.stat().st_size} bytes)", flush=True)
+            except Exception as e:  # noqa: BLE001 - never let capture break the trial
+                print(f"[capture] retain_remote_dataflash error: {type(e).__name__}: {e}", flush=True)
+        elif self.config.dataflash_dir is not None:
+            try:
+                retain_dataflash(self.config.dataflash_dir, self.trial_dir, trial_name)
             except Exception as e:  # noqa: BLE001
                 print(f"[capture] retain_dataflash error: {type(e).__name__}: {e}", flush=True)
 
@@ -379,7 +413,8 @@ class TrialCapture:
             "sim": "SITL",
             "sim_params": cfg.sim_params,
             "host": socket.gethostname(),
-            "sitl_host": _host_of(cfg.telemetry_address) or _host_of(cfg.mavlink_endpoint),
+            "sitl_host": cfg.sitl_host or _host_of(cfg.telemetry_address) or _host_of(cfg.mavlink_endpoint),
+            "droneserver_commit": cfg.droneserver_commit,
             "clock_offset_ms": None,  # not measured by the harness
             "started_ts": _iso(started_ts),
             "ended_ts": _iso(ended_ts),

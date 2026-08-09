@@ -2,11 +2,15 @@
 
 import json
 import os
+from pathlib import Path
 
 from droneserver.capture.manifest import (
     SCHEMA,
+    RemoteDataflashError,
     gather_versions,
+    parse_remote_spec,
     retain_dataflash,
+    retain_remote_dataflash,
     sha256_file,
     write_manifest,
 )
@@ -171,3 +175,79 @@ def test_gather_versions_returns_dict():
     # Never fabricates: values, if present, are strings from package metadata.
     for v in result.values():
         assert isinstance(v, str)
+
+
+# -- remote dataflash retention (the SITL-on-another-machine case) -----------
+
+
+class _FakeCompleted:
+    def __init__(self, returncode=0, stdout="", stderr=""):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+def _fake_subprocess(monkeypatch, listing, *, scp_rc=0, calls=None):
+    """Patch subprocess.run so ssh returns ``listing`` and scp writes a file."""
+    import subprocess
+
+    def run(cmd, **kwargs):
+        if calls is not None:
+            calls.append(cmd)
+        if cmd[0] == "scp":
+            if scp_rc == 0:
+                Path(cmd[-1]).write_bytes(b"BIN-CONTENT")
+            return _FakeCompleted(returncode=scp_rc, stderr="permission denied")
+        return _FakeCompleted(stdout=listing)
+
+    monkeypatch.setattr(subprocess, "run", run)
+
+
+def test_remote_spec_must_name_a_host():
+    import pytest
+
+    with pytest.raises(ValueError):
+        parse_remote_spec("/just/a/local/path")
+    assert parse_remote_spec("llmuavsitl:/logs") == ("llmuavsitl", "/logs")
+
+
+def test_retain_remote_copies_the_newest_log(tmp_path, monkeypatch):
+    _fake_subprocess(monkeypatch, "1786000000.5 4096 /logs/00000007.BIN\n")
+    dest = retain_remote_dataflash("sitl:/logs", tmp_path, "T1_t1", min_mtime=1785999999.0)
+    assert dest is not None and dest.name == "T1_t1.BIN"
+    assert dest.read_bytes() == b"BIN-CONTENT"
+
+
+def test_retain_remote_refuses_a_log_older_than_the_trial(tmp_path, monkeypatch):
+    """The dangerous failure: a mission that never armed inheriting the
+    previous flight's log, with the manifest vouching for it."""
+    calls = []
+    _fake_subprocess(monkeypatch, "1786000000.0 4096 /logs/00000007.BIN\n", calls=calls)
+    dest = retain_remote_dataflash("sitl:/logs", tmp_path, "T1_t1", min_mtime=1786000060.0)
+    assert dest is None
+    assert not any(c[0] == "scp" for c in calls), "must not copy a pre-trial log"
+
+
+def test_retain_remote_skips_an_oversized_log(tmp_path, monkeypatch):
+    _fake_subprocess(monkeypatch, "1786000000.0 999999999 /logs/00000007.BIN\n")
+    assert retain_remote_dataflash("sitl:/logs", tmp_path, "T1_t1", max_bytes=1024) is None
+
+
+def test_retain_remote_returns_none_when_no_logs_exist(tmp_path, monkeypatch):
+    _fake_subprocess(monkeypatch, "")
+    assert retain_remote_dataflash("sitl:/logs", tmp_path, "T1_t1") is None
+
+
+def test_retain_remote_raises_when_the_copy_fails(tmp_path, monkeypatch):
+    """A broken capture setup must be loud, not silently log-less."""
+    import pytest
+
+    _fake_subprocess(monkeypatch, "1786000000.0 4096 /logs/7.BIN\n", scp_rc=1)
+    with pytest.raises(RemoteDataflashError):
+        retain_remote_dataflash("sitl:/logs", tmp_path, "T1_t1")
+
+
+def test_retain_remote_keeps_the_px4_suffix(tmp_path, monkeypatch):
+    _fake_subprocess(monkeypatch, "1786000000.0 4096 /logs/log001.ulg\n")
+    dest = retain_remote_dataflash("sitl:/logs", tmp_path, "T2_t1")
+    assert dest is not None and dest.name == "T2_t1.ulg"

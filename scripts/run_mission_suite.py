@@ -24,6 +24,29 @@ from droneserver.benchmark.missions import SUITE, SUITE_BY_ID
 from droneserver.benchmark.runner import default_mission_ids, run_suite
 
 
+def _git_commit() -> str:
+    """The droneserver commit that flew this run, or "" if it cannot be read.
+
+    Recorded in every manifest: without it the archive says what happened but
+    not which code made it happen. Reported as ``<sha>-dirty`` when the working
+    tree has uncommitted changes, because a clean sha would be a lie.
+    """
+    import subprocess
+
+    repo = Path(__file__).resolve().parent.parent
+    try:
+        sha = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
+                             capture_output=True, text=True, timeout=10, check=False)
+        if sha.returncode != 0:
+            return ""
+        commit = sha.stdout.strip()
+        dirty = subprocess.run(["git", "-C", str(repo), "status", "--porcelain"],
+                               capture_output=True, text=True, timeout=10, check=False)
+        return f"{commit}-dirty" if dirty.stdout.strip() else commit
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="droneserver mission suite T1-T10")
     parser.add_argument("--url", default="http://127.0.0.1:8080/sse", help="MCP SSE endpoint")
@@ -59,6 +82,11 @@ def main() -> int:
     cap.add_argument("--dataflash-dir", default="",
                      help="directory where SITL writes its .BIN/.ulg logs; the newest is "
                           "retained per trial (empty: skip dataflash retention)")
+    cap.add_argument("--dataflash-remote", default="",
+                     help="host:/path of the log directory when the simulator runs on "
+                          "ANOTHER machine (the usual SITL case), fetched per trial over "
+                          "ssh/scp; only a log written during the trial is kept. Takes "
+                          "precedence over --dataflash-dir")
     cap.add_argument("--vehicle-sysid", type=int, default=1,
                      help="MAVLink sysid of the autopilot, for the tap's direction "
                           "heuristic (default: %(default)s)")
@@ -71,6 +99,10 @@ def main() -> int:
                      help="decoding settings as JSON, e.g. '{\"temperature\":0,\"seed\":1}'")
     cap.add_argument("--firmware", default="", help="autopilot firmware family (e.g. ArduCopter, PX4)")
     cap.add_argument("--firmware-version", default="", help="autopilot firmware version string")
+    cap.add_argument("--sitl-host", default="",
+                     help="hostname/address of the machine running the simulator, for the "
+                          "manifest. Set it whenever the link goes through a local relay or "
+                          "forward, where the endpoints no longer name the sim's machine")
     cap.add_argument("--sim-params", default="",
                      help="simulator params as JSON, e.g. '{\"frame\":\"quad\",\"wind\":0}'")
 
@@ -114,6 +146,7 @@ def main() -> int:
             mavlink_endpoint=args.mavlink_endpoint,
             telemetry_address=args.telemetry_address,
             dataflash_dir=Path(args.dataflash_dir) if args.dataflash_dir else None,
+            dataflash_remote=args.dataflash_remote,
             vehicle_sysid=args.vehicle_sysid,
             rate_hz=args.telemetry_rate,
             model=args.model,
@@ -122,6 +155,8 @@ def main() -> int:
             firmware=args.firmware,
             firmware_version=args.firmware_version,
             sim_params=_parse_json(args.sim_params, "--sim-params"),
+            sitl_host=args.sitl_host,
+            droneserver_commit=_git_commit(),
         )
 
     client = BenchmarkClient(url=args.url, api_key=args.api_key)

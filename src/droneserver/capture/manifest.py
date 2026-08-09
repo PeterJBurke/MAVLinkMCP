@@ -119,6 +119,103 @@ def retain_dataflash(src_log_dir: Path, out_dir: Path, trial_name: str) -> Path 
     return dest
 
 
+class RemoteDataflashError(RuntimeError):
+    """The remote log directory could not be listed or the copy failed."""
+
+
+def parse_remote_spec(spec: str) -> tuple[str, str]:
+    """Split ``user@host:/path/to/logs`` into ``(ssh_target, directory)``.
+
+    Raises ``ValueError`` when the spec has no ``:`` separator, because a bare
+    path would silently be treated as local and the trial would end up with the
+    wrong machine's logs (or none, reported as success).
+    """
+    target, sep, directory = spec.partition(":")
+    if not sep or not target or not directory:
+        raise ValueError(f"remote dataflash spec must be host:/path, got {spec!r}")
+    return target, directory
+
+
+def retain_remote_dataflash(
+    spec: str,
+    out_dir: Path,
+    trial_name: str,
+    *,
+    min_mtime: float | None = None,
+    max_bytes: int | None = None,
+    timeout_s: float = 300.0,
+    ssh: str = "ssh",
+) -> Path | None:
+    """Copy the newest dataflash log from a *remote* log directory.
+
+    The simulator writes its dataflash log on the machine running it, which for
+    the SITL campaign is not the machine running the harness - so the local
+    :func:`retain_dataflash` has nothing to find. This fetches it over SSH
+    instead. It is deliberately conservative, because the failure mode that
+    matters is not "no log" but "the wrong log, silently":
+
+    - ``min_mtime`` (normally the trial start time) rejects a log that was not
+      written during this trial. Without it, a mission that never armed would
+      be handed the previous flight's ``.BIN`` and the manifest would swear to
+      it. **This is why a mission that does not arm correctly retains nothing.**
+    - ``max_bytes`` rejects an implausibly large log rather than spending
+      minutes copying, e.g., a continuously-logging session's multi-gigabyte
+      file.
+
+    Returns the destination path, or ``None`` when no log qualifies. Raises
+    :class:`RemoteDataflashError` if the remote cannot be reached or the copy
+    fails - that is a broken capture setup, not an empty result, and the caller
+    should see the difference.
+    """
+    import subprocess
+
+    target, directory = parse_remote_spec(spec)
+    # One round trip: newest matching file with its mtime and size.
+    listing_cmd = (
+        f"find {directory} -maxdepth 1 -type f "
+        r"\( -iname '*.BIN' -o -iname '*.ulg' \) "
+        r"-printf '%T@ %s %p\n' | sort -rn | head -1"
+    )
+    try:
+        proc = subprocess.run(
+            [ssh, "-o", "BatchMode=yes", target, listing_cmd],
+            capture_output=True, text=True, timeout=timeout_s, check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as e:
+        raise RemoteDataflashError(f"listing {spec} failed: {type(e).__name__}: {e}") from e
+    if proc.returncode != 0:
+        raise RemoteDataflashError(f"listing {spec} failed (rc={proc.returncode}): {proc.stderr.strip()}")
+
+    line = proc.stdout.strip()
+    if not line:
+        return None
+    try:
+        mtime_s, size_s, remote_path = line.split(None, 2)
+        mtime, size = float(mtime_s), int(size_s)
+    except ValueError as e:
+        raise RemoteDataflashError(f"unparsable listing from {spec}: {line!r}") from e
+
+    if min_mtime is not None and mtime < min_mtime:
+        return None
+    if max_bytes is not None and size > max_bytes:
+        return None
+
+    suffix = ".ulg" if remote_path.lower().endswith(".ulg") else ".BIN"
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    dest = out_dir / f"{trial_name}{suffix}"
+    try:
+        copy = subprocess.run(
+            ["scp", "-q", "-o", "BatchMode=yes", f"{target}:{remote_path}", str(dest)],
+            capture_output=True, text=True, timeout=timeout_s, check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as e:
+        raise RemoteDataflashError(f"copying {remote_path} failed: {type(e).__name__}: {e}") from e
+    if copy.returncode != 0:
+        raise RemoteDataflashError(f"copying {remote_path} failed (rc={copy.returncode}): {copy.stderr.strip()}")
+    return dest
+
+
 def write_manifest(out_dir: Path, meta: dict) -> Path:
     """Write ``out_dir/manifest.json`` and return its path.
 
