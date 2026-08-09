@@ -186,3 +186,8 @@ fastagent.secrets.yaml
 
 # LLM-in-the-loop run artifacts (published ones are copied into docs/)
 llm_runs/
+
+# Capture bundles (Plan 19): hundreds of MB of .BIN/.tlog per run.
+# These are the Zenodo deposit, not git content. Run-level CSVs and summaries
+# worth citing get copied into docs/benchmark_runs/ instead.
+/benchmark_runs/

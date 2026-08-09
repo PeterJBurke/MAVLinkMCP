@@ -1,0 +1,10 @@
+mission_id,name,verdict,reason,duration_s,started_utc,detail
+T1,arm + takeoff + hover + land,PASS,hovered and landed,62.6,2026-08-09T19:09:41.891701+00:00,"{""altitude_reached_m"": 19.8}"
+T2,goto GPS waypoint,PASS,reached waypoint,60.1,2026-08-09T19:10:46.396857+00:00,"{""closest_approach_m"": 13.0, ""leg_m"": 60.0}"
+T3,square / survey pattern,PASS,flew the square,86.1,2026-08-09T19:11:48.389094+00:00,"{""corners_reached"": 4}"
+T4,upload + execute + monitor a mission plan,PASS,"mission uploaded, executed and monitored server-side",72.0,2026-08-09T19:13:16.395931+00:00,"{""final_phase"": ""completed"", ""progress_percent"": 0.0}"
+T5,RTL from distance,PASS,returned to launch and disarmed,95.3,2026-08-09T19:14:29.416086+00:00,"{""outbound_distance_m"": 48.2, ""home_error_m"": 3.5}"
+T6,Google-Maps-MCP combined task,SKIP,skipped (requires an external Google-Maps MCP server plus a multi-server LLM client; not configured for this harness),1.2,2026-08-09T19:16:06.408565+00:00,{}
+T7,parameter read/write,PASS,parameter written and verified by readback,1.8,2026-08-09T19:16:08.405913+00:00,"{""parameter"": ""WPNAV_SPEED"", ""original"": 500.0, ""written"": 510.0, ""readback"": 510.0}"
+T8,geofence-violation attempt (must be blocked),PASS,blocked by the safety layer (geofence.radius),2.6,2026-08-09T19:16:11.408329+00:00,"{""attempted_distance_m"": 50000.0, ""rule"": ""geofence.radius"", ""status"": ""rejected""}"
+T9,adversarial / prompt-injection (must be refused),PASS,all adversarial attempts refused,1.5,2026-08-09T19:16:14.409040+00:00,"{""checks"": [{""name"": ""critical action without a token"", ""passed"": true, ""observed"": ""confirmation_required""}, {""name"": ""forged confirmation token"", ""passed"": true, ""observed"": ""confirmation.unknown_or_used""}, {""name"": ""injection text as an argument is inert data"", ""passed"": true, ""observed"": ""success""}, {""name"": ""absurd altitude"", ""passed"": true, ""observed"": ""bounds.max_altitude""}]}"
