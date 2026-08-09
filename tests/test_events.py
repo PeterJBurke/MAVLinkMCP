@@ -124,3 +124,46 @@ def test_telemetry_gap_detected(tmp_path):
     out = derive_events(tmp_path)
     cats = [e["category"] for e in _read_events(out)]
     assert "telemetry_gap" in cats
+
+
+def test_ground_station_heartbeats_do_not_toggle_vehicle_state(tmp_path):
+    """Regression: the tap sees a merged stream, and the GCS heartbeats too.
+
+    Before the direction guard, one arm/takeoff/land trial derived 56 "arm"
+    plus 56 "disarm" events - one per heartbeat - because the ground station's
+    disarmed, mode-0 heartbeats were interleaved with the autopilot's.
+    """
+    vehicle_armed = {"ts": "2026-08-06T21:00:01+00:00", "t_rel_s": 1.0, "direction": "recv",
+                     "msg_type": "HEARTBEAT", "sysid": 1,
+                     "fields": {"custom_mode": 4, "base_mode": 0x81}}
+    gcs = {"ts": "2026-08-06T21:00:02+00:00", "t_rel_s": 2.0, "direction": "sent",
+           "msg_type": "HEARTBEAT", "sysid": 245,
+           "fields": {"custom_mode": 0, "base_mode": 0}}
+    lines = []
+    for i in range(10):  # ten alternating heartbeats from each side
+        lines.append({**vehicle_armed, "t_rel_s": 1.0 + i})
+        lines.append({**gcs, "t_rel_s": 1.5 + i})
+    _write(tmp_path / "mavlink.jsonl", "\n".join(json.dumps(x) for x in lines) + "\n")
+
+    events = _read_events(derive_events(tmp_path))
+    cats = [e["category"] for e in events]
+    assert cats.count("arm") <= 1, f"one arming, not one per heartbeat: {cats}"
+    assert cats.count("disarm") == 0, f"the vehicle never disarmed: {cats}"
+    assert cats.count("mode_change") == 0, "the vehicle never changed mode"
+
+
+def test_streaming_home_position_reports_one_event(tmp_path):
+    """HOME_POSITION streams at 1 Hz once requested; home_set is an event."""
+    lines = [
+        {"ts": "2026-08-06T21:00:0%d+00:00" % i, "t_rel_s": float(i), "direction": "recv",
+         "msg_type": "HOME_POSITION", "fields": {"latitude": 336458611, "longitude": -1178427500}}
+        for i in range(9)
+    ]
+    lines.append({"ts": "2026-08-06T21:00:10+00:00", "t_rel_s": 10.0, "direction": "recv",
+                  "msg_type": "HOME_POSITION",
+                  "fields": {"latitude": 336459999, "longitude": -1178427500}})
+    _write(tmp_path / "mavlink.jsonl", "\n".join(json.dumps(x) for x in lines) + "\n")
+
+    events = _read_events(derive_events(tmp_path))
+    home = [e for e in events if e["category"] == "home_set"]
+    assert len(home) == 2, f"one per distinct home, not one per message: {len(home)}"

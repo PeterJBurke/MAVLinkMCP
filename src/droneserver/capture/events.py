@@ -67,6 +67,10 @@ From ``mavlink.jsonl`` (source ``"mavlink"``):
         ArduCopter mode name (or the raw number as a fallback).
     ``arm`` / ``disarm``
         HEARTBEAT ``base_mode`` MAV_MODE_FLAG_SAFETY_ARMED (0x80) bit toggled.
+        Both this and ``mode_change`` are read only from messages the tap
+        labelled ``direction == "recv"`` - i.e. the vehicle's own heartbeats.
+        A ground station on the same wire heartbeats too, and mixing the two
+        streams toggles the tracked state on every other message.
     ``command_ack``
         COMMAND_ACK. ``detail = "<command> <result>"``.
     ``mission_item_reached``
@@ -75,7 +79,8 @@ From ``mavlink.jsonl`` (source ``"mavlink"``):
         STATUSTEXT. ``detail`` is the message text. Re-categorised as
         ``failsafe`` or ``geofence`` when the text matches those keywords.
     ``home_set``
-        HOME_POSITION.
+        HOME_POSITION, emitted only when the coordinates change (the topic
+        itself streams continuously on ArduPilot once it has been requested).
 
 From ``telemetry.csv`` (source ``"telemetry"``):
     ``takeoff``
@@ -239,6 +244,7 @@ def _read_mavlink(path: pathlib.Path) -> list:
     events = []
     last_custom_mode = None
     last_armed = None
+    last_home: tuple | None = None
     with open(path, encoding="utf-8") as fh:
         for line in fh:
             line = line.strip()
@@ -252,6 +258,21 @@ def _read_mavlink(path: pathlib.Path) -> list:
             t_rel = _to_float(msg.get("t_rel_s"))
             msg_type = (msg.get("msg_type") or "").upper()
             fields = msg.get("fields") or {}
+
+            # Vehicle state is read ONLY from the vehicle's own messages. The
+            # tap sees a merged stream, and a ground station heartbeats too -
+            # its base_mode has the ARMED bit clear and its custom_mode is 0,
+            # so interleaving it with the autopilot's toggles the tracked state
+            # on every other heartbeat. Measured before this guard: a single
+            # arm/takeoff/land trial derived 56 "arm" + 56 "disarm" + 122
+            # "mode_change" events, one per heartbeat, instead of 1 + 1 + 2.
+            # Anything not explicitly labelled "sent" is treated as the
+            # vehicle's, so a hand-written or legacy jsonl without the tap's
+            # exact vocabulary still yields the vehicle's state changes.
+            from_ground_station = msg.get("direction") == "sent"
+
+            if msg_type == "HEARTBEAT" and from_ground_station:
+                continue
 
             if msg_type == "HEARTBEAT":
                 custom_mode = fields.get("custom_mode")
@@ -297,11 +318,16 @@ def _read_mavlink(path: pathlib.Path) -> list:
                 )
 
             elif msg_type == "HOME_POSITION":
+                # HOME_POSITION streams once a second on ArduPilot (the server
+                # asks for it - see droneserver.telemetry.home), so emit only
+                # when home actually moves. "home_set" is an event, not a topic.
                 lat = fields.get("latitude")
                 lon = fields.get("longitude")
-                events.append(
-                    _mk(ts, t_rel, "home_set", f"lat={lat} lon={lon}", "mavlink")
-                )
+                if (lat, lon) != last_home:
+                    last_home = (lat, lon)
+                    events.append(
+                        _mk(ts, t_rel, "home_set", f"lat={lat} lon={lon}", "mavlink")
+                    )
     return events
 
 
