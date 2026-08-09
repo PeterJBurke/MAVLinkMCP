@@ -265,6 +265,39 @@ def write_manifest(out_dir: Path, meta: dict) -> Path:
     return manifest_path
 
 
+def annotate_manifest(out_dir: Path, extra: dict) -> Path | None:
+    """Merge ``extra`` into an existing manifest's ``trial`` block.
+
+    Used for facts that can only be established *after* the manifest exists -
+    principally ``capture_status``, which is decided by verifying the bundle,
+    and verification includes checking that the manifest lists every file. The
+    manifest never hashes itself, so re-writing it cannot invalidate any hash
+    it records; nothing else in the document is touched.
+
+    Returns the manifest path, or ``None`` when there is no manifest to
+    annotate or it cannot be read (never raises: an annotation failure must not
+    take a trial's artifacts with it).
+    """
+    manifest_path = Path(out_dir) / "manifest.json"
+    try:
+        document = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    trial = document.get("trial")
+    if not isinstance(trial, dict):
+        trial = {}
+    trial.update(extra)
+    document["trial"] = trial
+    try:
+        manifest_path.write_text(
+            json.dumps(document, indent=2, ensure_ascii=False, default=str) + "\n",
+            encoding="utf-8",
+        )
+    except OSError:
+        return None
+    return manifest_path
+
+
 def gather_versions() -> dict:
     """Best-effort installed versions of the MAVLink stack, for convenience.
 

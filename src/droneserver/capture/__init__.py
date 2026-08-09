@@ -8,11 +8,13 @@ stream that SITL / mavlink-router forwards to them and never inject traffic.
 - :class:`~droneserver.capture.transcript.TranscriptWriter` - full LLM transcript
 - :mod:`~droneserver.capture.manifest` - per-trial provenance + dataflash retention
 - :func:`~droneserver.capture.events.derive_events` - distilled safety/flight events
+- :func:`~droneserver.capture.verify.verify_bundle` - is the bundle real, or stubs?
 """
 
 from droneserver.capture.events import derive_events
 from droneserver.capture.manifest import (
     RemoteDataflashError,
+    annotate_manifest,
     gather_versions,
     retain_dataflash,
     retain_remote_dataflash,
@@ -21,6 +23,7 @@ from droneserver.capture.manifest import (
 from droneserver.capture.mavlink_tap import MavlinkTap
 from droneserver.capture.telemetry_recorder import TelemetryRecorder
 from droneserver.capture.transcript import TranscriptWriter
+from droneserver.capture.verify import DEFAULT_MIN_TELEMETRY_ROWS, BundleCheck, verify_bundle
 
 __all__ = [
     "MavlinkTap",
@@ -30,6 +33,10 @@ __all__ = [
     "retain_remote_dataflash",
     "RemoteDataflashError",
     "write_manifest",
+    "annotate_manifest",
     "gather_versions",
     "derive_events",
+    "verify_bundle",
+    "BundleCheck",
+    "DEFAULT_MIN_TELEMETRY_ROWS",
 ]
