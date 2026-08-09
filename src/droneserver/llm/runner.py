@@ -37,6 +37,22 @@ reading the files it leaves behind.
 ``summary.md``                       the human-readable report
 ===================================  =======================================
 
+**With ``--capture``, each trial additionally leaves a Plan 19 bundle** in
+``<run>/<mission>/trial_<n>/``: the raw MAVLink wire capture in both
+directions, a 10 Hz MavSDK telemetry CSV, the autopilot's own dataflash log,
+the trial's slice of the server audit, the distilled events, the full model
+transcript, and a ``manifest.json`` that hashes all of it. That bundle - not
+the CSVs above - is what the reproducibility package is made of, and it is why
+the N=5 campaign must run with capture on.
+
+**Two telemetry recorders run during a captured trial, and they are different
+things.** :class:`~droneserver.llm.mcp_session.McpTelemetryPoller` polls the
+server's read-only tools at about 0.5 Hz and is what every verdict in this file
+is computed from - unchanged, because 166 historical trials were judged by it.
+:class:`droneserver.capture.telemetry_recorder.TelemetryRecorder` subscribes to
+MavSDK at 10 Hz and writes the archival ``telemetry.csv``. Replacing the former
+with the latter would make old and new results incomparable, so both run.
+
 **Three clocks are reported and never added together carelessly.** *Decision
 latency* is time inside the model. *Command latency* is the round trip to the
 drone server, measured here. *Server latency* is what the server itself
@@ -56,6 +72,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from droneserver.benchmark.missions import DEFAULT_CONTEXT
 from droneserver.llm.agent import AgentRun, Limits, run_agent, transcript_lines
@@ -63,13 +80,16 @@ from droneserver.llm.mcp_session import (
     AGENT_CLIENT_NAME,
     CallRecord,
     LiveMCPSession,
+    McpTelemetryPoller,
     MultiServerSession,
-    TelemetryRecorder,
 )
 from droneserver.llm.prompts import SYSTEM_PROMPT, mission_prompts
 from droneserver.llm.providers import ToolSpec, open_session, resolve_model
 from droneserver.llm.spend import BudgetExceeded, Price, SpendLedger, project_trial_cost_usd
 from droneserver.llm.verdicts import TRACK_HEADER, Track, Verdict, judge
+
+if TYPE_CHECKING:  # the capture layer is imported lazily, never at runtime here
+    from droneserver.benchmark.capture_session import CaptureConfig
 
 HARNESS_CLIENT_NAME = "droneserver-llm-harness"
 
@@ -135,6 +155,13 @@ class TrialResult:
     #: The trial did not run, or was cut short, because of the spending cap.
     budget_stop: bool = False
     cost_usd: float = 0.0
+    #: There was no model behaviour to judge - the provider never served the
+    #: model. Neither a pass nor a failure; excluded from pass rates. See
+    #: :func:`droneserver.llm.verdicts.not_evaluated`.
+    not_evaluated: bool = False
+    #: Plan 19 bundle verdict for this trial: ``complete`` / ``degraded[...]``,
+    #: or ``""`` when the trial was flown without ``--capture``.
+    capture_status: str = ""
 
     @property
     def verdict_label(self) -> str:
@@ -144,6 +171,8 @@ class TrialResult:
             return "BUDGET"
         if self.link_failure:
             return "LINK"
+        if self.not_evaluated:
+            return "VOID"
         return "PASS" if self.passed else "FAIL"
 
 
@@ -190,6 +219,13 @@ class SuiteConfig:
     #: surface the other missions are measured against, which is a confound.
     maps_url: str = ""
     maps_api_key: str = ""
+    #: Plan 19 per-trial capture. ``None`` (the default) leaves this harness
+    #: exactly as it was: no per-trial directories, no recorders, and no
+    #: pymavlink/mavsdk import. A
+    #: :class:`droneserver.benchmark.capture_session.CaptureConfig` turns on the
+    #: full bundle - which is what the N=5 campaign runs with, because trials
+    #: flown without it cannot go in the reproducibility package.
+    capture: CaptureConfig | None = None
 
 
 # ------------------------------------------------------------------- helpers
@@ -533,8 +569,14 @@ async def _run_trial(
     if mission_id == "T7":
         extra["param_before"] = await _read_parameter(harness, ctx["param_name"])
 
-    recorder = TelemetryRecorder(config.url, config.recorder_api_key or config.api_key, config.telemetry_interval_s)
-    await recorder.start()
+    # Plan 19 capture. Its own clock, deliberately: `started`/`clock` below
+    # remain exactly where they were so the reported duration_s still measures
+    # the same thing it measured for every historical trial.
+    capture_started = time.time()
+    trial_capture = await _start_capture(config, ctx, mission_id, trial, prompt, capture_started, log)
+
+    poller = McpTelemetryPoller(config.url, config.recorder_api_key or config.api_key, config.telemetry_interval_s)
+    await poller.start()
 
     agent_mcp = LiveMCPSession(config.url, config.api_key, AGENT_CLIENT_NAME, agent_version)
     # T6, and only T6, also gets a hosted Google Maps MCP server, merged behind
@@ -554,37 +596,51 @@ async def _run_trial(
     started = time.time()
     clock = time.perf_counter()
     try:
-        await session.__aenter__()
-        tools: list[ToolSpec] = await session.list_tools()
-        model = open_session(config.model_spec, **config.model_options)
-        run = await run_agent(
-            model=model,
-            mcp=session,
-            tools=tools,
-            system_prompt=SYSTEM_PROMPT,
-            user_prompt=prompt,
-            limits=config.limits,
-            on_event=lambda kind, item: _log_event(log, kind, item),
-            cost_of=lambda r: _run_cost(config, r),
-        )
-        messages = list(model.messages)
-    finally:
-        if model is not None:
+        try:
+            await session.__aenter__()
+            tools: list[ToolSpec] = await session.list_tools()
+            model = open_session(config.model_spec, **config.model_options)
+            run = await run_agent(
+                model=model,
+                mcp=session,
+                tools=tools,
+                system_prompt=SYSTEM_PROMPT,
+                user_prompt=prompt,
+                limits=config.limits,
+                on_event=lambda kind, item: _log_event(log, kind, item),
+                cost_of=lambda r: _run_cost(config, r),
+            )
+            messages = list(model.messages)
+        finally:
+            if model is not None:
+                with contextlib.suppress(Exception):
+                    await model.aclose()
+            await session.aclose()
             with contextlib.suppress(Exception):
-                await model.aclose()
-        await session.aclose()
-        with contextlib.suppress(Exception):
-            await recorder.sample_once(full=True)
-        await recorder.stop()
+                await poller.sample_once(full=True)
+            await poller.stop()
 
-    duration = time.perf_counter() - clock
-    intervened = await _settle(harness)
-    if mission_id == "T7":
-        extra["param_after"] = await _read_parameter(harness, ctx["param_name"])
-        extra["param_observed_values"] = _parameter_values_seen(run.calls)
+        duration = time.perf_counter() - clock
+        # The harness's own landing, if it needs one, is part of the flight and
+        # belongs in the capture: stop the recorders after it, not before.
+        intervened = await _settle(harness)
+        if mission_id == "T7":
+            extra["param_after"] = await _read_parameter(harness, ctx["param_name"])
+            extra["param_observed_values"] = _parameter_values_seen(run.calls)
+    finally:
+        if trial_capture is not None:
+            await asyncio.to_thread(trial_capture.stop)
     extra["model_claim"] = run.model_claim
+    # What the scorer needs to tell "the model did nothing" from "the model was
+    # never there" (see verdicts.not_evaluated).
+    extra["model_turns"] = len(run.turns)
+    extra["model_error"] = run.error or ""
 
-    track = Track(recorder.samples, ctx["home"])
+    capture_status = await _finalize_capture(
+        config, trial_capture, ctx, mission_id, trial, run, capture_started, log
+    )
+
+    track = Track(poller.samples, ctx["home"])
     link_errors = _link_errors(run.calls)
     if link_errors >= LINK_ERROR_THRESHOLD:
         log(
@@ -605,9 +661,13 @@ async def _run_trial(
             run=run,
             harness_intervened=intervened,
             link_failure=True,
+            capture_status=capture_status,
         )
     verdict: Verdict = judge(mission_id, track, run.calls, ctx, extra)
-    if not verdict.passed and not run.stop_reason.startswith("model declared"):  # noqa: SIM102
+    # A trial with no model behaviour in it is not dressed up as one: neither
+    # the harness cut-off note nor the intervention note is about a model that
+    # was never reached, and the not_evaluated flag survives both.
+    if not verdict.not_evaluated and not verdict.passed and not run.stop_reason.startswith("model declared"):
         # The model did not choose to stop; we stopped it. Say so in the
         # verdict, because "failed" and "was cut off before it could finish"
         # are different findings and only one of them is about the model.
@@ -628,6 +688,7 @@ async def _run_trial(
                 verdict.passed,
                 f"{verdict.reason} (note: the model left the aircraft airborne; {intervened})",
                 verdict.evidence | {"harness_intervened": intervened},
+                not_evaluated=verdict.not_evaluated,
             )
 
     result = TrialResult(
@@ -640,9 +701,73 @@ async def _run_trial(
         evidence=verdict.evidence | {"prompt": prompt, "model_claim": run.model_claim},
         run=run,
         harness_intervened=intervened,
+        not_evaluated=verdict.not_evaluated,
+        capture_status=capture_status,
     )
     _write_trial_files(config, result, track, messages)
     return result
+
+
+# --------------------------------------------------------- Plan 19 capture
+#
+# Both helpers are no-ops without ``config.capture``, and neither imports the
+# capture layer (pymavlink/mavsdk) in that case. Everything they do runs in a
+# worker thread: the recorders are synchronous, own a background event loop of
+# their own, and the dataflash fetch is an scp of a file that can run to tens
+# of megabytes - none of which may sit on this harness's event loop.
+#
+# Nothing here can fail a trial. A capture problem is reported and the flight
+# continues; whether the resulting bundle is usable is decided afterwards, by
+# looking at the files (see droneserver.capture.verify).
+
+
+async def _start_capture(config: SuiteConfig, ctx: dict, mission_id: str, trial: int,
+                         prompt: str, t0: float, log):
+    """Open the per-trial bundle and start the recorders. ``None`` if capture is off."""
+    if config.capture is None:
+        return None
+    try:
+        from droneserver.benchmark.capture_session import TrialCapture
+
+        trial_dir = config.out_dir / mission_id / f"trial_{trial}"
+        capture = TrialCapture(config.capture, trial_dir, t0=t0)
+        await asyncio.to_thread(
+            capture.start, None, ctx, system_prompt=SYSTEM_PROMPT, user_prompt=prompt
+        )
+        return capture
+    except Exception as e:  # noqa: BLE001 - capture must never break a flight
+        log(f"[{_utc()}] [capture] could not start for {mission_id} trial {trial}: {type(e).__name__}: {e}")
+        return None
+
+
+async def _finalize_capture(config: SuiteConfig, capture, ctx: dict, mission_id: str,
+                            trial: int, run, started_ts: float, log) -> str:
+    """Write the bundle's derived artifacts, verify it, return its status."""
+    if capture is None:
+        return ""
+    ended_ts = time.time()
+    audit_rows = _read_audit(config.audit_log, started_ts, ended_ts) if config.audit_log else []
+    try:
+        check = await asyncio.to_thread(
+            capture.finalize,
+            run_id=config.out_dir.name,
+            mission_id=mission_id,
+            trial_idx=trial,
+            client=None,
+            context=ctx,
+            audit_rows=audit_rows,
+            started_ts=started_ts,
+            ended_ts=ended_ts,
+            llm_run=run,
+            # An LLM trial without its conversation is not a reproducible trial:
+            # the transcript is the ground truth of what the model was told and
+            # what it decided (Plan 19 §1c).
+            require_transcript=True,
+        )
+    except Exception as e:  # noqa: BLE001
+        log(f"[{_utc()}] [capture] finalize failed for {mission_id} trial {trial}: {type(e).__name__}: {e}")
+        return f"degraded[finalize failed: {type(e).__name__}: {e}]"
+    return check.status
 
 
 def _log_event(log, kind: str, item) -> None:
@@ -721,7 +846,12 @@ def _write_trial_files(config: SuiteConfig, result: TrialResult, track: Track, m
                 fh.write(json.dumps({"record": "call", **asdict(call)}, default=str) + "\n")
 
 
-def _read_audit(audit_log: Path | None, window_start: float) -> list[dict]:
+def _read_audit(audit_log: Path | None, window_start: float, window_end: float | None = None) -> list[dict]:
+    """The server's own audit rows for a window: the whole run, or one trial.
+
+    ``window_end`` is what makes the per-trial slice a slice - without it every
+    trial's ``audit_slice.csv`` would carry the whole run to date.
+    """
     if not audit_log or not audit_log.exists():
         return []
     rows = []
@@ -733,7 +863,7 @@ def _read_audit(audit_log: Path | None, window_start: float) -> list[dict]:
             ts = datetime.fromisoformat(record["ts"]).timestamp()
         except Exception:
             continue
-        if ts >= window_start:
+        if ts >= window_start and (window_end is None or ts <= window_end):
             record["_ts"] = ts
             rows.append(record)
     return rows
@@ -814,6 +944,7 @@ def _write_outputs(
                 "stop_reason",
                 "harness_intervened",
                 "started_utc",
+                "capture_status",
                 "evidence",
             ]
         )
@@ -821,7 +952,9 @@ def _write_outputs(
             run = r.run
             claim = run.model_claim if run else ""
             matches = (
-                "" if r.skipped or r.link_failure or not run else str(_claim_agrees(r.mission_id, claim, r.passed))
+                ""
+                if r.skipped or r.link_failure or r.not_evaluated or not run
+                else str(_claim_agrees(r.mission_id, claim, r.passed))
             )
             cost = _cost(config, run) if run else None
             writer.writerow(
@@ -851,6 +984,7 @@ def _write_outputs(
                     run.stop_reason if run else "",
                     r.harness_intervened,
                     _utc(r.started_at) if r.started_at else "",
+                    r.capture_status,
                     json.dumps(r.evidence, default=str),
                 ]
             )
@@ -971,8 +1105,13 @@ def _write_outputs(
 
 
 def _write_summary(config: SuiteConfig, results: list[TrialResult], ctx: dict, route, audit_rows, agent_label) -> None:
-    ran = [r for r in results if not r.skipped and not r.link_failure]
+    # "Judged" excludes trials in which there was nothing to judge: a skip, a
+    # broken drone link, or a model the provider never served. Counting any of
+    # them as a model failure would put an infrastructure fault in the paper's
+    # results table.
+    ran = [r for r in results if not r.skipped and not r.link_failure and not r.not_evaluated]
     broken = [r for r in results if r.link_failure]
+    void = [r for r in results if r.not_evaluated]
     passed = [r for r in ran if r.passed]
     runs = [r.run for r in ran if r.run]
     decision = [t.decision_latency_ms for run in runs for t in run.turns]
@@ -992,7 +1131,8 @@ def _write_summary(config: SuiteConfig, results: list[TrialResult], ctx: dict, r
         f"- Target: `{config.target_label or config.url}`",
         "- Safety layer: **on** (the server was not reconfigured for this run)",
         f"- Missions judged: **{len(ran)}** "
-        f"({sum(1 for r in results if r.skipped)} skipped, {len(broken)} lost to a broken drone link)",
+        f"({sum(1 for r in results if r.skipped)} skipped, {len(broken)} lost to a broken drone link, "
+        f"{len(void)} not evaluated)",
         f"- Passed on telemetry evidence: **{len(passed)}/{len(ran)}**",
         "",
         "| Mission | Verdict | Model's own claim | Turns | Tool calls | Model time (s) | Drone time (s) | Reason |",
@@ -1079,6 +1219,35 @@ def _write_summary(config: SuiteConfig, results: list[TrialResult], ctx: dict, r
             "",
         ]
         lines += [f"- **{r.mission_id}.{r.trial}**: {r.reason}" for r in broken]
+        lines.append("")
+
+    if void:
+        lines += [
+            "## Trials not evaluated",
+            "",
+            "The model never ran: the provider returned nothing, so there were no turns and no tool "
+            "calls. These are excluded from the pass rate rather than counted as failures - and, more "
+            "importantly, they cannot be counted as passes. Two of these missions pass by the ABSENCE "
+            "of an action, which silence satisfies without demonstrating anything.",
+            "",
+        ]
+        lines += [f"- **{r.mission_id}.{r.trial}**: {r.reason}" for r in void]
+        lines.append("")
+
+    captured = [r for r in results if r.capture_status]
+    if captured:
+        degraded = [r for r in captured if not r.capture_status.startswith("complete")]
+        lines += [
+            "## Capture (Plan 19 bundles)",
+            "",
+            "Verified against the files on disk, not the exit code: the recorders are fail-soft, so a "
+            "run that captured nothing would still finish cleanly.",
+            "",
+            f"- Trials with capture on: **{len(captured)}**",
+            f"- Bundles degraded: **{len(degraded)}**",
+            "",
+        ]
+        lines += [f"- **{r.mission_id}.{r.trial}**: {r.capture_status}" for r in degraded]
         lines.append("")
 
     disagreements = [r for r in ran if r.run and not _claim_agrees(r.mission_id, r.run.model_claim, r.passed)]

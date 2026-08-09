@@ -68,7 +68,21 @@ no `.BIN` — correct: there is no flight log, because there was no flight.
 
 `capture_session.py` deliberately swallows recorder start failures so a capture
 problem cannot destroy a flight. That means **a run that skipped every recorder
-still exits 0**. After the first trial of any new topology, verify by hand:
+still exits 0**.
+
+Both harnesses now verify each bundle themselves
+(`droneserver/capture/verify.py`), record the answer in the manifest as
+`capture_status: complete | degraded[...]`, and print `capture: N/M trial(s)
+degraded` at the end of a run. **`--require-complete-capture` makes a degraded
+bundle exit non-zero (4)** — pass it for any run whose data is meant to be
+kept. The checks are the ones whose absence hid the defects on this page: the
+tlog must carry both directions, `telemetry.csv` must clear a row floor, the
+manifest must list every file at its true size, `events.jsonl` must parse, and
+a trial whose telemetry shows the aircraft armed must have retained a dataflash
+log.
+
+That is a machine check, not a substitute for looking. After the first trial of
+any new topology, verify by hand as well:
 
 ```bash
 python - <<'PY'
@@ -85,6 +99,11 @@ PY
 ```
 
 ## The working invocation
+
+Two harnesses, the same capture flags — they come from one definition
+(`src/droneserver/benchmark/capture_cli.py`) so they cannot drift apart.
+
+### The scripted mission suite
 
 ```bash
 cd /root/droneserver
@@ -104,3 +123,42 @@ KEY="$(printf '%s' "$SAFETY_API_KEYS" | cut -d, -f1 | cut -d: -f2)"
 ```
 
 `--include-slow` adds T10 (>10 minutes); run it on its own.
+
+### The LLM-in-the-loop harness (what the N=5 campaign runs)
+
+Identical capture flags; the model provenance in the manifest comes from the
+resolved route rather than a `--model` flag typed twice. Give the flight
+recorder its own telemetry-scope key, or it spends the model's rate-limit
+allowance.
+
+```bash
+cd /root/droneserver
+set -a; . /etc/droneserver/staging.env; . /root/llmuav.env; set +a
+export DRONESERVER_API_KEY="$(printf '%s' "$SAFETY_API_KEYS" | tr ',' '\n' | grep '^staging:' | cut -d: -f2)"
+export DRONESERVER_RECORDER_API_KEY="$(printf '%s' "$SAFETY_API_KEYS" | tr ',' '\n' | grep '^llm-recorder:' | cut -d: -f2)"
+
+.venv/bin/python scripts/run_llm_missions.py \
+  --url http://127.0.0.1:8090/sse \
+  --model gemini-3.5-flash-lite --missions T1,T9 --trials 1 --label n5 \
+  --audit-log /var/lib/droneserver/audit.jsonl \
+  --target-label "ArduPilot SITL (llmuavsitl)" \
+  --capture --mavlink-endpoint udpin:127.0.0.1:14655 \
+  --telemetry-address "udp://:14540" \
+  --firmware ArduCopter --firmware-version "ArduCopter 4.5.7 (SITL)" \
+  --sitl-host llmuavsitl \
+  --dataflash-remote llmuavsitl:/home/dronepilot/ardupilot/ArduCopter/logs \
+  --require-complete-capture
+```
+
+The LLM bundle carries one file the scripted one cannot: `transcript.jsonl`
+holds the real conversation — the system prompt, the mission prompt, every
+assistant turn with its token usage, and every tool call with the server's
+reply. It is required for an LLM trial and its absence degrades the bundle.
+
+**Two things named `TelemetryRecorder` used to exist.** The one in
+`llm/mcp_session.py` polls MCP tools at ~0.5 Hz and feeds the pass/fail
+verdicts; it is now `McpTelemetryPoller`. The Plan 19 one in
+`capture/telemetry_recorder.py` subscribes to MavSDK at 10 Hz and writes
+`telemetry.csv`. Both run during a captured LLM trial. Do not replace the
+poller with the recorder: every historical trial was judged by the poller, and
+swapping it would make old and new results incomparable.

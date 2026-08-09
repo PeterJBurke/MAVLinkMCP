@@ -1,16 +1,24 @@
-"""Per-trial capture orchestration for the mission suite (Plan 19 wiring).
+"""Per-trial capture orchestration for both benchmark harnesses (Plan 19 wiring).
 
-This module glues the six passive capture recorders in
-:mod:`droneserver.capture` onto the mission-suite harness so that, when the
-``--capture`` flag is set, every trial leaves a self-contained artifact
-directory behind (the Plan 19 §8 bundle layout: one dir per mission/trial).
+This module glues the passive capture recorders in :mod:`droneserver.capture`
+onto a benchmark harness so that, when the ``--capture`` flag is set, every
+trial leaves a self-contained artifact directory behind (the Plan 19 §8 bundle
+layout: one dir per mission/trial).
 
-**It is lazy-imported.** :func:`droneserver.benchmark.runner.run_suite` only
-imports this module when a :class:`CaptureConfig` is supplied, so the default
-(no-capture) benchmark path never pulls in pymavlink / mavsdk and behaves
-exactly as before. Importing this module is itself safe without those packages:
-:mod:`droneserver.capture` imports them tolerantly (pymavlink inside
-``MavlinkTap.start``; mavsdk under a guarded ``try/except`` in the recorder).
+**Both harnesses use it.** :func:`droneserver.benchmark.runner.run_suite` (the
+scripted suite) and :func:`droneserver.llm.runner.run_llm_suite` (the
+LLM-in-the-loop suite the N=5 campaign runs) drive the same
+:class:`TrialCapture`, so a trial flown by a model and a trial flown by a
+script leave the same evidence in the same shape. The only difference is the
+transcript: the scripted harness has no model conversation to record and says
+so, while the LLM harness writes the real turns (Plan 19 §1c).
+
+**It is lazy-imported.** Both runners only import this module when a
+:class:`CaptureConfig` is supplied, so the default (no-capture) path never
+pulls in pymavlink / mavsdk and behaves exactly as before. Importing this
+module is itself safe without those packages: :mod:`droneserver.capture`
+imports them tolerantly (pymavlink inside ``MavlinkTap.start``; mavsdk under a
+guarded ``try/except`` in the recorder).
 
 Orchestration per trial (:class:`TrialCapture`)
 -----------------------------------------------
@@ -18,13 +26,26 @@ Orchestration per trial (:class:`TrialCapture`)
    :class:`~droneserver.capture.TranscriptWriter` (and write the system + user
    prompt turns we have), start the :class:`~droneserver.capture.MavlinkTap`,
    and start the async :class:`~droneserver.capture.TelemetryRecorder`.
-2. the mission runs (synchronously, in the caller's thread).
+2. the mission runs.
 3. ``stop()`` - stop the tap and the telemetry recorder (always, via the
    caller's ``try/finally``, so a mission crash still flushes both).
 4. ``finalize(...)`` - retain the dataflash ``.BIN``, write the per-trial
-   ``audit_slice.csv``, record the tool-call turns onto the transcript and close
-   it, ``write_manifest`` (§6 provenance + sha256 of every artifact), then
-   ``derive_events`` -> ``events.jsonl``.
+   ``audit_slice.csv``, record the conversation onto the transcript and close
+   it, ``derive_events`` -> ``events.jsonl``, ``write_manifest`` (§6 provenance
+   + sha256 of every artifact), then :func:`~droneserver.capture.verify_bundle`
+   and stamp its ``capture_status`` back into the manifest.
+
+**Why the events are derived before the manifest is written:** the manifest
+hashes what it finds on disk, so anything written afterwards is a file nobody
+can verify. ``events.jsonl`` used to be written after it and was therefore
+absent from every manifest's artifact list.
+
+**Why the bundle is verified at all.** The recorders are deliberately
+fail-soft - a capture problem must never destroy a flight - which means a run
+that skipped every recorder still exits 0. Every capture defect found on this
+project was silent in exactly that way. :func:`~droneserver.capture.verify_bundle`
+looks at the files instead of the exit code and records the answer in the
+manifest, and the runners count the degraded trials at the end of the run.
 
 The async telemetry recorder
 ----------------------------
@@ -49,13 +70,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from droneserver.capture import (
+    DEFAULT_MIN_TELEMETRY_ROWS,
+    BundleCheck,
     MavlinkTap,
     TelemetryRecorder,
     TranscriptWriter,
+    annotate_manifest,
     derive_events,
     gather_versions,
     retain_dataflash,
     retain_remote_dataflash,
+    verify_bundle,
     write_manifest,
 )
 
@@ -121,6 +146,7 @@ class CaptureConfig:
         dataflash_remote: str = "",
         vehicle_sysid: int = 1,
         rate_hz: float = 10.0,
+        min_telemetry_rows: int = DEFAULT_MIN_TELEMETRY_ROWS,
         model: str = "",
         provider: str = "",
         decoding: dict | None = None,
@@ -138,6 +164,9 @@ class CaptureConfig:
         self.dataflash_remote = dataflash_remote
         self.vehicle_sysid = vehicle_sysid
         self.rate_hz = rate_hz
+        #: Floor for ``telemetry.csv``: fewer data rows than this and the trial
+        #: is reported degraded (see droneserver.capture.verify).
+        self.min_telemetry_rows = min_telemetry_rows
         self.model = model
         self.provider = provider
         self.decoding = decoding or {}
@@ -203,14 +232,27 @@ class TrialCapture:
 
     # -- lifecycle ---------------------------------------------------------
 
-    def start(self, mission, context: dict) -> None:
-        """Create the trial dir and start all recorders before the mission runs."""
+    def start(
+        self,
+        mission=None,
+        context: dict | None = None,
+        *,
+        system_prompt: str | None = None,
+        user_prompt: str | None = None,
+    ) -> None:
+        """Create the trial dir and start all recorders before the mission runs.
+
+        ``system_prompt`` / ``user_prompt`` are the LLM harness's real prompts;
+        when they are given they are written verbatim as the opening transcript
+        turns. Without them (the scripted harness) the transcript opens with a
+        note saying there was no model, which is the truth and is preferable to
+        an empty file that looks like a lost recording.
+        """
         self.trial_dir.mkdir(parents=True, exist_ok=True)
 
-        # Transcript: pure stdlib, cannot hard-fail. Record the prompt turns we
-        # genuinely have (see the class TODO below).
+        # Transcript: pure stdlib, cannot hard-fail.
         self.transcript = TranscriptWriter(self.trial_dir, t0=self.t0)
-        self._write_prompt_turns(mission, context)
+        self._write_prompt_turns(mission, context or {}, system_prompt, user_prompt)
 
         # MAVLink wire tap (needs a passive UDP forward from SITL/mavlink-router).
         try:
@@ -267,16 +309,28 @@ class TrialCapture:
         run_id: str,
         mission_id: str,
         trial_idx: int,
-        client,
+        client=None,
         context: dict,
         audit_rows: list[dict],
         started_ts: float,
         ended_ts: float,
-    ) -> None:
-        """Post-trial: dataflash, audit slice, transcript tool turns, manifest,
-        events. Order matters - ``write_manifest`` hashes whatever exists, so it
-        runs after every other artifact is on disk, and ``derive_events`` last
-        (Plan 19 §7 build order)."""
+        llm_run=None,
+        require_transcript: bool = False,
+    ) -> BundleCheck:
+        """Post-trial: dataflash, audit slice, transcript, events, manifest, verify.
+
+        Order matters. ``derive_events`` reads the audit slice and the two
+        MAVLink files, so it runs after them; ``write_manifest`` hashes whatever
+        it finds, so it runs after *every* artifact including the events; and
+        the verification runs last, because one of the things it checks is that
+        the manifest lists everything. The verdict is stamped back onto the
+        manifest as ``capture_status`` and returned to the caller, which counts
+        the degraded trials for the run-end summary.
+
+        ``llm_run`` is an :class:`~droneserver.llm.agent.AgentRun`: when given,
+        the model's own turns and tool calls are written to the transcript
+        instead of the scripted harness's client-side call list.
+        """
         # 1. Retain the newest dataflash .BIN/.ulg for this trial, from the local
         #    disk or - the usual SITL case - from the machine running the sim.
         #    Only a log actually written during this trial is taken (started_ts
@@ -305,12 +359,24 @@ class TrialCapture:
         # 2. Per-trial audit slice (windowed rows the caller already read).
         self._write_audit_slice(audit_rows)
 
-        # 3. Transcript tool-call turns (what the client actually saw), then close.
-        self._write_tool_turns(client, started_ts, ended_ts)
+        # 3. Transcript: the model's conversation (LLM harness) or the tool
+        #    calls the deterministic client made (scripted harness), then close.
+        if llm_run is not None:
+            self._write_model_turns(llm_run)
+        else:
+            self._write_tool_turns(client, started_ts, ended_ts)
         if self.transcript is not None:
             self.transcript.close()
 
-        # 4. Manifest: provenance (§6) + sha256 of every artifact present.
+        # 4. Derive the distilled event narrative (reads audit_slice + mavlink +
+        #    telemetry from the trial dir). BEFORE the manifest, so events.jsonl
+        #    is hashed like every other artifact.
+        try:
+            derive_events(self.trial_dir)
+        except Exception as e:  # noqa: BLE001
+            print(f"[capture] derive_events error: {type(e).__name__}: {e}", flush=True)
+
+        # 5. Manifest: provenance (§6) + sha256 of every artifact present.
         meta = self._manifest_meta(run_id, mission_id, trial_idx, context,
                                    started_ts, ended_ts)
         try:
@@ -318,45 +384,133 @@ class TrialCapture:
         except Exception as e:  # noqa: BLE001
             print(f"[capture] write_manifest error: {type(e).__name__}: {e}", flush=True)
 
-        # 5. Derive the distilled event narrative (reads audit_slice + mavlink +
-        #    telemetry from the trial dir).
+        # 6. Verify what is actually on disk, and record the answer where a
+        #    reader of the archive will find it.
+        check = verify_bundle(
+            self.trial_dir,
+            require_transcript=require_transcript,
+            min_telemetry_rows=self.config.min_telemetry_rows,
+            vehicle_sysid=self.config.vehicle_sysid,
+        )
         try:
-            derive_events(self.trial_dir)
+            annotate_manifest(self.trial_dir, check.as_dict())
         except Exception as e:  # noqa: BLE001
-            print(f"[capture] derive_events error: {type(e).__name__}: {e}", flush=True)
+            print(f"[capture] annotate_manifest error: {type(e).__name__}: {e}", flush=True)
+        label = f"{mission_id} trial {trial_idx}"
+        if check.complete:
+            print(f"[capture] {label}: bundle complete", flush=True)
+        else:
+            print(f"[capture] {label}: DEGRADED - {'; '.join(check.problems)}", flush=True)
+        return check
 
     # -- helpers -----------------------------------------------------------
 
-    def _write_prompt_turns(self, mission, context: dict) -> None:
-        """Record the prompt turns the harness DOES have.
+    def _write_prompt_turns(self, mission, context: dict,
+                            system_prompt: str | None = None,
+                            user_prompt: str | None = None) -> None:
+        """Open the transcript with the prompts this trial genuinely used.
 
-        TODO(transcript): the mission suite drives the MCP server directly via
-        the deterministic ``BenchmarkClient`` - there is no LLM in this loop, so
-        there are no assistant-reasoning turns or model-decided tool_call args to
-        record here. When a real LLM client is wired in front of the server, thread
-        this same TranscriptWriter through it and emit the assistant/tool turns
-        (with call_id, args, tool_result, usage) per Plan 19 §1c. Until then we
-        record only the system + user prompt turns below (not fabricated) so the
-        transcript.jsonl exists and is clock-aligned.
+        The LLM harness passes the real system and mission prompts, which is
+        the Plan 19 §1c ground truth of *what the model was told*. The scripted
+        mission suite has no model: it drives the MCP server directly through
+        the deterministic ``BenchmarkClient``, so there are no assistant turns
+        and none are invented - the opening turn says so instead, and the file
+        still exists and is clock-aligned with the other recorders.
         """
         if self.transcript is None:
             return
+        if system_prompt is not None or user_prompt is not None:
+            self.transcript.turn(
+                "system",
+                content=system_prompt,
+                model=self.config.model or None,
+                params=self.config.decoding or None,
+            )
+            self.transcript.turn(
+                "user",
+                content=user_prompt,
+                model=self.config.model or None,
+            )
+            return
+
+        label = getattr(mission, "mission_id", "?")
+        name = getattr(mission, "name", "")
         self.transcript.turn(
             "system",
             content=(
                 "droneserver mission-suite benchmark harness. Tool calls are issued "
                 "by the deterministic BenchmarkClient against the MCP server, not by "
-                "an LLM; no model conversation exists for this trial (see transcript "
-                "module TODO). Recorded for clock-aligned provenance."
+                "an LLM; no model conversation exists for this trial. Recorded for "
+                "clock-aligned provenance."
             ),
             model=self.config.model or None,
             params=self.config.decoding or None,
         )
         self.transcript.turn(
             "user",
-            content=f"Mission {mission.mission_id}: {mission.name}",
+            content=f"Mission {label}: {name}",
             model=self.config.model or None,
         )
+
+    def _write_model_turns(self, run) -> None:
+        """Write the model's own conversation to the transcript (Plan 19 §1c).
+
+        One ``assistant`` turn per model turn - its text, the tool calls it
+        requested with their arguments, its token usage and decision latency -
+        followed by one ``tool`` turn per call carrying what the server sent
+        back. Arguments and results pass through the transcript writer's
+        redactor, so confirmation tokens and keys never reach the file.
+
+        Turn indices and ``call_id`` (``<turn>.<seq>``) are the harness's own,
+        so a line here joins to the same call in ``tool_calls.csv`` and
+        ``audit_slice.csv``.
+        """
+        if self.transcript is None or run is None:
+            return
+        calls_by_turn: dict[int, list] = {}
+        for call in getattr(run, "calls", []):
+            calls_by_turn.setdefault(call.turn, []).append(call)
+
+        for turn in getattr(run, "turns", []):
+            calls = calls_by_turn.get(turn.index, [])
+            self.transcript.turn(
+                "assistant",
+                content=turn.text or None,
+                tool_calls=[
+                    {"call_id": f"{c.turn}.{c.seq}", "tool": c.tool, "args": c.arguments}
+                    for c in calls
+                ] or None,
+                model=turn.resolved_model or self.config.model or None,
+                params=self.config.decoding or None,
+                usage={
+                    "prompt_tokens": turn.input_tokens,
+                    "cached_prompt_tokens": turn.cached_input_tokens,
+                    "completion_tokens": turn.output_tokens,
+                    "reasoning_tokens": turn.reasoning_tokens,
+                    "decision_latency_ms": round(turn.decision_latency_ms, 1),
+                    "finish_reason": turn.finish_reason,
+                    "served_by": turn.served_by,
+                    "quantization": turn.quantization,
+                },
+            )
+            for call in calls:
+                self.transcript.turn(
+                    "tool",
+                    tool_calls=[{"call_id": f"{call.turn}.{call.seq}", "tool": call.tool}],
+                    tool_result={
+                        "status": call.status,
+                        "rule": call.rule,
+                        "error": call.error,
+                        "confirmation_required": call.confirmation_required,
+                        "client_side_rejection": call.client_side_rejection,
+                        "wall_ms": round(call.wall_ms, 2),
+                        "result": call.result,
+                    },
+                )
+
+        stop_reason = getattr(run, "stop_reason", "")
+        if stop_reason:
+            self.transcript.turn("system", content=f"trial ended: {stop_reason}")
 
     def _write_tool_turns(self, client, started_ts: float, ended_ts: float) -> None:
         """Record one turn per tool call the client made during this trial window.

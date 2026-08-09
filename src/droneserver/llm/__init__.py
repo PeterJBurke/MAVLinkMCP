@@ -11,7 +11,7 @@ command-line front door.
 """
 
 from droneserver.llm.agent import AgentRun, Limits, run_agent
-from droneserver.llm.mcp_session import LiveMCPSession, TelemetryRecorder
+from droneserver.llm.mcp_session import LiveMCPSession, McpTelemetryPoller
 from droneserver.llm.prompts import SYSTEM_PROMPT, mission_prompts
 from droneserver.llm.providers import ModelSession, ToolSpec, open_session, resolve_model
 from droneserver.llm.runner import LLM_SUITE, SuiteConfig, TrialResult, run_llm_suite
@@ -21,10 +21,10 @@ __all__ = [
     "LLM_SUITE",
     "Limits",
     "LiveMCPSession",
+    "McpTelemetryPoller",
     "ModelSession",
     "SYSTEM_PROMPT",
     "SuiteConfig",
-    "TelemetryRecorder",
     "ToolSpec",
     "TrialResult",
     "mission_prompts",

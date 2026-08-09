@@ -10,12 +10,23 @@ MCP (Model Context Protocol - the open standard the server speaks). It fetches
 the real tool schemas and executes tool calls, timing each one. It is what the
 model acts through.
 
-:class:`TelemetryRecorder` is a *second, separate* connection that does nothing
-but ask the drone where it is, roughly once a second, for the whole trial. It
-never takes an instruction from the model. This is the flight recorder: when
-the harness later decides whether a mission passed, it reads this track, not
-the model's account of itself. A model that says "I have successfully reached
-20 metres" is making a claim; the track is evidence.
+:class:`McpTelemetryPoller` is a *second, separate* connection that does
+nothing but ask the drone where it is, roughly once a second, for the whole
+trial. It never takes an instruction from the model. This is the flight
+recorder the verdicts are computed from: when the harness later decides whether
+a mission passed, it reads this track, not the model's account of itself. A
+model that says "I have successfully reached 20 metres" is making a claim; the
+track is evidence.
+
+**It is not the Plan 19 telemetry recorder, and the two must not be confused.**
+This one polls the MCP server through read-only *tools* at about 0.5 Hz and
+feeds the pass/fail logic;
+:class:`droneserver.capture.telemetry_recorder.TelemetryRecorder` subscribes to
+MavSDK directly at 10 Hz and writes the archival ``telemetry.csv``. They ran
+under the same class name for a while, which is the likeliest reason the
+capture layer was wired into one harness and not the other (blocker B-2). Both
+run during a captured LLM trial, deliberately: the poller keeps the historical
+trials comparable, the MavSDK recorder produces the paper-grade artifact.
 
 **Why the two connections announce themselves differently.** The server writes
 an audit line per tool call and stores the client's self-reported name. The
@@ -320,8 +331,16 @@ class TelemetrySample:
     in_air: bool | None = None
 
 
-class TelemetryRecorder:
+class McpTelemetryPoller:
     """Polls the drone's own telemetry for the whole trial, on its own session.
+
+    **Named to be unmistakable.** It was ``TelemetryRecorder``, which is also
+    the name of the Plan 19 MavSDK recorder in
+    :mod:`droneserver.capture.telemetry_recorder`. That collision is the most
+    plausible explanation for the LLM harness looking as though it already had
+    a telemetry recorder while producing none of the Plan 19 artifacts. This
+    one polls MCP *tools*; that one subscribes to MavSDK. Both are needed, and
+    they are not interchangeable.
 
     Runs as a background task. It only ever calls read-only tools, so it cannot
     change what it is measuring, and it swallows its own errors: a hiccup in

@@ -130,10 +130,13 @@ def run_suite(
             verdict = "SKIP" if skipped else ("PASS" if passed else "FAIL")
             print(f"[{_utc()}] {verdict} {label} in {duration:.0f}s - {reason}", flush=True)
 
-            # Post-trial capture: dataflash, per-trial audit slice, manifest, events.
+            # Post-trial capture: dataflash, per-trial audit slice, events,
+            # manifest, and the verification that says whether any of it is
+            # real. The status is carried on the result so the caller can fail
+            # a run whose flights were fine but whose evidence was not.
             if trial_capture is not None:
                 audit_rows = _read_audit(audit_log, started, ended) if audit_log else []
-                trial_capture.finalize(
+                check = trial_capture.finalize(
                     run_id=run_id,
                     mission_id=mission.mission_id,
                     trial_idx=trial,
@@ -143,6 +146,7 @@ def run_suite(
                     started_ts=started,
                     ended_ts=ended,
                 )
+                result.capture_status = check.status
 
             # Between flights, make sure we left the vehicle safe.
             _settle(client)
@@ -192,11 +196,13 @@ def _write_outputs(client: BenchmarkClient, results: list[MissionResult], out_di
                    ctx: dict, audit_log: Path | None) -> None:
     with (out_dir / "missions.csv").open("w", newline="") as fh:
         w = csv.writer(fh)
-        w.writerow(["mission_id", "name", "verdict", "reason", "duration_s", "started_utc", "detail"])
+        w.writerow(["mission_id", "name", "verdict", "reason", "duration_s", "started_utc",
+                    "capture_status", "detail"])
         for r in results:
             verdict = "SKIP" if r.skipped else ("PASS" if r.passed else "FAIL")
             w.writerow([r.mission_id, r.name, verdict, r.reason, r.duration_s,
                         datetime.fromtimestamp(r.started_at, timezone.utc).isoformat(),
+                        r.capture_status,
                         json.dumps(r.detail, default=str)])
 
     with (out_dir / "tool_calls.csv").open("w", newline="") as fh:
@@ -261,6 +267,24 @@ def _write_summary(client: BenchmarkClient, results: list[MissionResult], out_di
     ]
     if server_ms:
         lines.append(_latency_row("server audit latency_ms", server_ms))
+    captured = [r for r in results if r.capture_status]
+    if captured:
+        degraded = [r for r in captured if not r.capture_status.startswith("complete")]
+        lines += [
+            "",
+            "## Capture (Plan 19 bundles)",
+            "",
+            "Checked against the files on disk, not the exit code: the recorders are fail-soft, "
+            "so a run that captured nothing would still finish cleanly.",
+            "",
+            f"- Trials with capture on: **{len(captured)}**",
+            f"- Bundles degraded: **{len(degraded)}**",
+            "",
+        ]
+        lines += [f"- **{r.mission_id}**: {r.capture_status}" for r in degraded]
+        if degraded:
+            lines.append("")
+
     lines += [
         "",
         "## Safety",

@@ -42,6 +42,11 @@ class MissionResult:
     duration_s: float
     skipped: bool = False
     detail: dict = field(default_factory=dict)
+    #: ``complete`` / ``degraded[...]`` from the Plan 19 bundle verification,
+    #: or ``""`` when this trial was flown without ``--capture``. A mission can
+    #: pass while its capture is degraded - they are different questions, and
+    #: the campaign needs both answered.
+    capture_status: str = ""
 
 
 @dataclass

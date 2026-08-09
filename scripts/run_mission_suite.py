@@ -19,32 +19,14 @@ import os
 import sys
 from pathlib import Path
 
+from droneserver.benchmark.capture_cli import (
+    add_capture_arguments,
+    build_capture_config,
+    report_capture,
+)
 from droneserver.benchmark.client import BenchmarkClient
 from droneserver.benchmark.missions import SUITE, SUITE_BY_ID
 from droneserver.benchmark.runner import default_mission_ids, run_suite
-
-
-def _git_commit() -> str:
-    """The droneserver commit that flew this run, or "" if it cannot be read.
-
-    Recorded in every manifest: without it the archive says what happened but
-    not which code made it happen. Reported as ``<sha>-dirty`` when the working
-    tree has uncommitted changes, because a clean sha would be a lie.
-    """
-    import subprocess
-
-    repo = Path(__file__).resolve().parent.parent
-    try:
-        sha = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
-                             capture_output=True, text=True, timeout=10, check=False)
-        if sha.returncode != 0:
-            return ""
-        commit = sha.stdout.strip()
-        dirty = subprocess.run(["git", "-C", str(repo), "status", "--porcelain"],
-                               capture_output=True, text=True, timeout=10, check=False)
-        return f"{commit}-dirty" if dirty.stdout.strip() else commit
-    except (OSError, subprocess.SubprocessError):
-        return ""
 
 
 def main() -> int:
@@ -62,49 +44,9 @@ def main() -> int:
     parser.add_argument("--list", action="store_true", help="list the suite and exit")
 
     # -- Plan 19 capture layer (all optional; capture is OFF unless --capture) --
-    cap = parser.add_argument_group(
-        "capture (Plan 19)",
-        "Opt-in per-trial artifact capture. Nothing below has any effect, and no "
-        "capture code (pymavlink/mavsdk) is imported, unless --capture is passed.")
-    cap.add_argument("--capture", action="store_true",
-                     help="enable the per-trial capture layer (MAVLink tap + telemetry "
-                          "recorder + dataflash retention + manifest + events)")
-    cap.add_argument("--mavlink-endpoint", default="udpin:127.0.0.1:14650",
-                     help="passive pymavlink listener for the MAVLink wire tap; SITL / "
-                          "mavlink-router must forward a COPY of the stream here "
-                          "(default: %(default)s)")
-    cap.add_argument("--telemetry-address", default="udp://:14540",
-                     help="MavSDK system address for the telemetry recorder. Defaults to "
-                          "the same MAVLink address/port the server uses (MAVLINK_PORT "
-                          "14540); in practice point it at its OWN forwarded endpoint "
-                          "(mavlink-router --out) so it does not contend with the server "
-                          "for the socket (default: %(default)s)")
-    cap.add_argument("--dataflash-dir", default="",
-                     help="directory where SITL writes its .BIN/.ulg logs; the newest is "
-                          "retained per trial (empty: skip dataflash retention)")
-    cap.add_argument("--dataflash-remote", default="",
-                     help="host:/path of the log directory when the simulator runs on "
-                          "ANOTHER machine (the usual SITL case), fetched per trial over "
-                          "ssh/scp; only a log written during the trial is kept. Takes "
-                          "precedence over --dataflash-dir")
-    cap.add_argument("--vehicle-sysid", type=int, default=1,
-                     help="MAVLink sysid of the autopilot, for the tap's direction "
-                          "heuristic (default: %(default)s)")
-    cap.add_argument("--telemetry-rate", type=float, default=10.0,
-                     help="telemetry.csv sample rate in Hz (default: %(default)s)")
-    # Manifest provenance (§6). Free-form; may be empty. JSON where noted.
-    cap.add_argument("--model", default="", help="LLM model id for the manifest provenance")
-    cap.add_argument("--provider", default="", help="LLM provider (e.g. anthropic, openai)")
-    cap.add_argument("--decoding", default="",
-                     help="decoding settings as JSON, e.g. '{\"temperature\":0,\"seed\":1}'")
-    cap.add_argument("--firmware", default="", help="autopilot firmware family (e.g. ArduCopter, PX4)")
-    cap.add_argument("--firmware-version", default="", help="autopilot firmware version string")
-    cap.add_argument("--sitl-host", default="",
-                     help="hostname/address of the machine running the simulator, for the "
-                          "manifest. Set it whenever the link goes through a local relay or "
-                          "forward, where the endpoints no longer name the sim's machine")
-    cap.add_argument("--sim-params", default="",
-                     help="simulator params as JSON, e.g. '{\"frame\":\"quad\",\"wind\":0}'")
+    # Shared with scripts/run_llm_missions.py: one definition, so the two
+    # harnesses cannot drift apart again (see benchmark/capture_cli.py).
+    add_capture_arguments(parser)
 
     args = parser.parse_args()
 
@@ -125,39 +67,7 @@ def main() -> int:
 
     # Build the capture config only when --capture is set, so the no-capture
     # path never imports the capture layer (pymavlink/mavsdk).
-    capture_cfg = None
-    if args.capture:
-        import json as _json
-
-        from droneserver.benchmark.capture_session import CaptureConfig
-
-        def _parse_json(value: str, flag: str) -> dict:
-            if not value:
-                return {}
-            try:
-                parsed = _json.loads(value)
-            except _json.JSONDecodeError as e:
-                parser.error(f"{flag} must be valid JSON: {e}")
-            if not isinstance(parsed, dict):
-                parser.error(f"{flag} must be a JSON object")
-            return parsed
-
-        capture_cfg = CaptureConfig(
-            mavlink_endpoint=args.mavlink_endpoint,
-            telemetry_address=args.telemetry_address,
-            dataflash_dir=Path(args.dataflash_dir) if args.dataflash_dir else None,
-            dataflash_remote=args.dataflash_remote,
-            vehicle_sysid=args.vehicle_sysid,
-            rate_hz=args.telemetry_rate,
-            model=args.model,
-            provider=args.provider,
-            decoding=_parse_json(args.decoding, "--decoding"),
-            firmware=args.firmware,
-            firmware_version=args.firmware_version,
-            sim_params=_parse_json(args.sim_params, "--sim-params"),
-            sitl_host=args.sitl_host,
-            droneserver_commit=_git_commit(),
-        )
+    capture_cfg = build_capture_config(args, error=parser.error)
 
     client = BenchmarkClient(url=args.url, api_key=args.api_key)
     print(f"connecting to {args.url} ...", flush=True)
@@ -183,7 +93,11 @@ def main() -> int:
     failed = [r for r in ran if not r.passed]
     print(f"\nwrote {out_dir}/summary.md")
     print(f"{len(ran) - len(failed)}/{len(ran)} missions passed")
-    return 1 if failed else 0
+    capture_failed = report_capture([r.capture_status for r in results],
+                                    require_complete=args.require_complete_capture)
+    if failed:
+        return 1
+    return 4 if capture_failed else 0
 
 
 if __name__ == "__main__":

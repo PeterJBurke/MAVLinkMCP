@@ -42,6 +42,11 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+from droneserver.benchmark.capture_cli import (
+    add_capture_arguments,
+    build_capture_config,
+    report_capture,
+)
 from droneserver.llm.agent import Limits
 from droneserver.llm.prompts import mission_prompts
 from droneserver.llm.providers import ProviderError, list_openrouter_endpoints, resolve_model
@@ -159,6 +164,13 @@ def main() -> int:
     )
     recovery.add_argument("--link-retries", type=int, default=1, help="retries per trial after a link recovery")
 
+    # -- Plan 19 capture layer (OFF unless --capture; shared with the scripted
+    #    suite so the two harnesses cannot drift apart - see capture_cli.py).
+    #    --model/--provider/--decoding are omitted: this script already owns
+    #    --model, and the provenance is taken from the resolved route and the
+    #    protocol options actually sent, which is better evidence than a flag.
+    add_capture_arguments(parser, model_provenance=False)
+
     parser.add_argument("--list", action="store_true", help="show the suite and the prompts, then exit")
     parser.add_argument("--list-endpoints", default="", help="show OpenRouter hosts for a model, then exit")
     parser.add_argument("--dry-run", action="store_true", help="resolve everything and print the plan; fly nothing")
@@ -244,6 +256,14 @@ def main() -> int:
     if args.reasoning_effort:
         model_options["reasoning_effort"] = args.reasoning_effort
 
+    capture_cfg = build_capture_config(
+        args,
+        error=parser.error,
+        model=route.requested_model,
+        provider=route.provider.name,
+        decoding=model_options,
+    )
+
     config = SuiteConfig(
         url=args.url,
         api_key=args.api_key,
@@ -271,6 +291,7 @@ def main() -> int:
         link_retries=args.link_retries,
         maps_url=args.maps_url,
         maps_api_key=args.maps_api_key,
+        capture=capture_cfg,
     )
 
     print(f"model:    {route.requested_model} via {route.provider.name} ({route.routing})")
@@ -286,24 +307,44 @@ def main() -> int:
     print(f"missions: {', '.join(missions)} x{args.trials}")
     if args.maps_url:
         print(f"maps:     {args.maps_url} (attached for T6 only, {'keyed' if args.maps_api_key else 'NO KEY'})")
+    if capture_cfg is not None:
+        print(
+            f"capture:  ON - tap {capture_cfg.mavlink_endpoint}, telemetry {capture_cfg.telemetry_address} "
+            f"@{capture_cfg.rate_hz:g} Hz, dataflash "
+            f"{capture_cfg.dataflash_remote or capture_cfg.dataflash_dir or 'NOT CONFIGURED'}"
+        )
+    else:
+        print("capture:  off - this run will leave NO Plan 19 per-trial bundle (pass --capture)")
     print(f"output:   {out_dir}")
     if args.dry_run:
         print("dry run: nothing was flown")
         return 0
 
     results = asyncio.run(run_llm_suite(config))
-    flown = [r for r in results if not r.skipped and not r.link_failure and not r.budget_stop]
+    flown = [
+        r for r in results if not r.skipped and not r.link_failure and not r.budget_stop and not r.not_evaluated
+    ]
     failed = [r for r in flown if not r.passed]
     lost = [r for r in results if r.link_failure]
     stopped = [r for r in results if r.budget_stop]
+    void = [r for r in results if r.not_evaluated]
     print(f"\nwrote {out_dir}/summary.md")
     print(f"{len(flown) - len(failed)}/{len(flown)} missions passed on telemetry evidence")
     if lost:
         print(f"{len(lost)} trial(s) lost to a broken drone link (not counted as model results)")
     if stopped:
         print(f"{len(stopped)} trial(s) not run because of the spending cap; rerun to resume")
+    if void:
+        print(
+            f"{len(void)} trial(s) NOT EVALUATED - the model never ran, so they count as neither "
+            f"passes nor failures"
+        )
+    capture_failed = report_capture([r.capture_status for r in results],
+                                    require_complete=args.require_complete_capture)
     print(f"spend on {key}: ${ledger.spent_by(key):.2f} of ${args.budget_usd:.2f}")
-    return 1 if failed else 0
+    if failed:
+        return 1
+    return 4 if capture_failed else 0
 
 
 if __name__ == "__main__":
