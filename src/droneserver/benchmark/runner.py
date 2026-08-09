@@ -21,6 +21,7 @@ import time
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from droneserver.benchmark.client import BenchmarkClient
 from droneserver.benchmark.missions import (
@@ -59,11 +60,17 @@ def run_suite(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # Lazy: only import the capture orchestration (and thus the capture package,
-    # pymavlink, mavsdk) when capture is actually requested.
-    TrialCapture = None
+    # pymavlink, mavsdk) when capture is actually requested. The class is bound
+    # to a separate name from the import so the "not requested" case is a plain
+    # None rather than a rebinding of an imported symbol - which is both what
+    # the type checker needs and clearer about which of the two states we are
+    # in at each use below.
+    trial_capture_cls: type[Any] | None = None
     run_id = out_dir.name
     if capture is not None:
         from droneserver.benchmark.capture_session import TrialCapture
+
+        trial_capture_cls = TrialCapture
 
     # Home altitude is needed to convert the above-sea-level arguments some
     # tools take. Retry: a server that has only just connected may not have a
@@ -115,9 +122,9 @@ def run_suite(
 
             # Start the recorders BEFORE the mission (capture off => no-op).
             trial_capture = None
-            if TrialCapture is not None:
+            if trial_capture_cls is not None:
                 trial_dir = out_dir / mission.mission_id / f"trial_{trial}"
-                trial_capture = TrialCapture(capture, trial_dir, t0=started)
+                trial_capture = trial_capture_cls(capture, trial_dir, t0=started)
                 trial_capture.start(mission=mission, context=ctx)
 
             try:

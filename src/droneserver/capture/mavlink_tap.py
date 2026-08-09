@@ -91,6 +91,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, BinaryIO, TextIO
 
 #: Message types the SENT/RECEIVED analysis (Plan 19 s2a) depends on. Recorded
 #: for documentation only - the tap logs every type it hears.
@@ -265,9 +266,11 @@ class MavlinkTap:
         self.tlog_path = self.out_dir / TLOG_NAME
         self.jsonl_path = self.out_dir / JSONL_NAME
 
-        self._conn = None
-        self._tlog_fh = None
-        self._jsonl_fh = None
+        # pymavlink is imported lazily in start(), so the connection has no
+        # importable static type here; the file handles do.
+        self._conn: Any = None
+        self._tlog_fh: BinaryIO | None = None
+        self._jsonl_fh: TextIO | None = None
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
         self._lock = threading.Lock()
@@ -343,6 +346,8 @@ class MavlinkTap:
         unexpected error is swallowed so the caller's flight is never
         disturbed by the recorder."""
         conn = self._conn
+        if conn is None:  # start() failed to open one; nothing to read
+            return
         while not self._stop.is_set():
             try:
                 msg = conn.recv_match(blocking=True, timeout=self.READ_TIMEOUT_S)
@@ -369,12 +374,18 @@ class MavlinkTap:
             except (OSError, ValueError):
                 self.write_errors += 1
 
+            # start() always sets both, but a caller that reached _record
+            # without it must still produce a usable row rather than a
+            # TypeError inside the recorder: t_rel then starts from this
+            # message, which is the only origin available.
+            t0 = self.t0 if self.t0 is not None else wall
+            t0_monotonic = self.t0_monotonic if self.t0_monotonic is not None else mono
             try:
                 record = decode_message(
                     msg,
                     wall_time=wall,
-                    t0=self.t0,
-                    t0_monotonic=self.t0_monotonic,
+                    t0=t0,
+                    t0_monotonic=t0_monotonic,
                     mono_time=mono,
                     vehicle_sysid=self.vehicle_sysid,
                 )

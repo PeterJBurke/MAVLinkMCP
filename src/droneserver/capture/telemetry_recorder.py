@@ -47,6 +47,7 @@ import math
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, TextIO
 
 # mavsdk is a hard runtime dependency (see pyproject) but is imported lazily-
 # tolerantly so that unit tests can run without the (heavy, native-gRPC) package
@@ -158,12 +159,16 @@ class TelemetryRecorder:
         #: Shared clock origin (Unix seconds) for alignment with the other logs.
         self.t0 = time.time() if t0 is None else float(t0)
 
-        self._system = None
-        self._latest: dict[str, object] = {key: None for key, _ in _STREAMS}
+        # mavsdk types are only present when mavsdk is installed (it is
+        # monkeypatched out in the unit tests), and the per-topic objects it
+        # yields are all different shapes, so both of these are deliberately
+        # dynamic rather than dishonestly narrow.
+        self._system: Any = None
+        self._latest: dict[str, Any] = {key: None for key, _ in _STREAMS}
         self._tasks: list[asyncio.Task] = []
         self._sampler: asyncio.Task | None = None
-        self._file = None
-        self._writer = None
+        self._file: TextIO | None = None
+        self._writer: Any = None  # csv.writer's return type is not public
         self._started = False
         self._stopped = False
 
@@ -323,7 +328,7 @@ class TelemetryRecorder:
             "groundspeed_ms": _round(groundspeed, 3),
             "airspeed_ms": _round(_get(fw, "airspeed_m_s"), 3),
             "gps_fix_type": "" if gps is None else str(_get(gps, "fix_type")),
-            "num_satellites": "" if _get(gps, "num_satellites") is None else int(gps.num_satellites),
+            "num_satellites": "" if (sats := _get(gps, "num_satellites")) is None else int(sats),
             "hdop": "",  # not exposed by MavSDK gps_info
             "vdop": "",  # not exposed by MavSDK gps_info
             "battery_v": _round(_get(batt, "voltage_v"), 3),

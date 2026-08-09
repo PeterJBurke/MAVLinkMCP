@@ -91,6 +91,25 @@ def distance_m(a: tuple[float, float], b: tuple[float, float]) -> float:
     return EARTH_R * 2 * math.atan2(math.sqrt(x), math.sqrt(1 - x))
 
 
+def coordinate(sample: TelemetrySample) -> tuple[float, float] | None:
+    """This sample's position, or ``None`` if it has not got one.
+
+    A telemetry sample is *not* guaranteed to carry a fix: the poller records a
+    row every cycle whether or not ``get_position`` answered, so a lost link,
+    a timed-out call or a pre-GPS-lock sample all arrive with
+    ``latitude_deg`` and ``longitude_deg`` set to ``None``. Every distance in
+    this module must therefore go through this function - passing a sample's
+    raw fields to :func:`distance_m` would put ``None`` into ``math.radians``
+    and raise ``TypeError`` in the middle of scoring a completed flight, losing
+    a trial that flew perfectly. Returning the pair only when *both* halves are
+    present is what makes that unrepresentable rather than merely unlikely.
+    """
+    lat, lon = sample.latitude_deg, sample.longitude_deg
+    if lat is None or lon is None:
+        return None
+    return lat, lon
+
+
 def offset(lat: float, lon: float, north_m: float, east_m: float) -> tuple[float, float]:
     dlat = north_m / 111320.0
     dlon = east_m / (111320.0 * max(math.cos(math.radians(lat)), 1e-6))
@@ -106,7 +125,18 @@ class Track:
 
     @property
     def fixes(self) -> list[TelemetrySample]:
-        return [s for s in self.samples if s.latitude_deg is not None and s.longitude_deg is not None]
+        """The samples that carry a position at all."""
+        return [s for s in self.samples if coordinate(s) is not None]
+
+    @property
+    def positions(self) -> list[tuple[float, float]]:
+        """Just the positions, as (lat, lon) pairs that are known to be real.
+
+        Every distance below is computed from this list rather than from
+        :attr:`fixes`, so a sample without a fix cannot reach the maths - see
+        :func:`coordinate`.
+        """
+        return [c for c in (coordinate(s) for s in self.samples) if c is not None]
 
     @property
     def max_relative_altitude_m(self) -> float:
@@ -115,7 +145,7 @@ class Track:
 
     @property
     def max_distance_from_home_m(self) -> float:
-        return max((distance_m((s.latitude_deg, s.longitude_deg), self.home) for s in self.fixes), default=0.0)
+        return max((distance_m(p, self.home) for p in self.positions), default=0.0)
 
     @property
     def ever_armed(self) -> bool:
@@ -142,11 +172,11 @@ class Track:
 
     @property
     def final_fix(self) -> tuple[float, float] | None:
-        fixes = self.fixes
-        return (fixes[-1].latitude_deg, fixes[-1].longitude_deg) if fixes else None
+        positions = self.positions
+        return positions[-1] if positions else None
 
     def closest_approach_m(self, target: tuple[float, float]) -> float:
-        return min((distance_m((s.latitude_deg, s.longitude_deg), target) for s in self.fixes), default=float("inf"))
+        return min((distance_m(p, target) for p in self.positions), default=float("inf"))
 
     def visited(self, target: tuple[float, float], threshold_m: float) -> bool:
         return self.closest_approach_m(target) <= threshold_m
