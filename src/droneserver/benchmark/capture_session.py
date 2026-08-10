@@ -474,6 +474,17 @@ class TrialCapture:
         Turn indices and ``call_id`` (``<turn>.<seq>``) are the harness's own,
         so a line here joins to the same call in ``tool_calls.csv`` and
         ``audit_slice.csv``.
+
+        **When each turn happened is reconstructed here**, not taken from the
+        clock. This runs after the flight, so writing "now" onto every turn
+        collapsed a nine-minute conversation into 35 milliseconds *after* the
+        trial's ``ended_ts`` - which is what the smoke-run bundle of
+        2026-08-09 contains. Each tool call carries its own ``started_at`` and
+        ``wall_ms``, which stamps both the call and the model turn that asked
+        for it (the decision landed when the harness began executing it); a
+        turn that called no tool is placed by advancing a cursor through the
+        measured per-turn latencies from the run's start, and is labelled
+        ``reconstructed`` so nobody mistakes it for a measurement.
         """
         if self.transcript is None or run is None:
             return
@@ -481,10 +492,20 @@ class TrialCapture:
         for call in getattr(run, "calls", []):
             calls_by_turn.setdefault(call.turn, []).append(call)
 
+        cursor = float(getattr(run, "started_at", 0.0) or self.t0)
+
         for turn in getattr(run, "turns", []):
             calls = calls_by_turn.get(turn.index, [])
+            call_starts = [float(c.started_at) for c in calls if getattr(c, "started_at", 0)]
+            if call_starts:
+                at, source = min(call_starts), "observed"
+            else:
+                at, source = cursor + (turn.decision_latency_ms or 0.0) / 1000.0, "reconstructed"
+            cursor = max(cursor, at)
             self.transcript.turn(
                 "assistant",
+                at=at,
+                ts_source=source,
                 content=turn.text or None,
                 tool_calls=[{"call_id": f"{c.turn}.{c.seq}", "tool": c.tool, "args": c.arguments} for c in calls]
                 or None,
@@ -509,8 +530,14 @@ class TrialCapture:
                 },
             )
             for call in calls:
+                # The result reached the model when the call came back.
+                started = float(getattr(call, "started_at", 0.0) or 0.0)
+                returned = started + (call.wall_ms or 0.0) / 1000.0 if started else None
+                if returned is not None:
+                    cursor = max(cursor, returned)
                 self.transcript.turn(
                     "tool",
+                    at=returned,
                     tool_calls=[{"call_id": f"{call.turn}.{call.seq}", "tool": call.tool}],
                     tool_result={
                         "status": call.status,
@@ -525,7 +552,15 @@ class TrialCapture:
 
         stop_reason = getattr(run, "stop_reason", "")
         if stop_reason:
-            self.transcript.turn("system", content=f"trial ended: {stop_reason}")
+            started_at = float(getattr(run, "started_at", 0.0) or 0.0)
+            duration = float(getattr(run, "duration_s", 0.0) or 0.0)
+            ended_at = started_at + duration if started_at else None
+            self.transcript.turn(
+                "system",
+                at=max(ended_at, cursor) if ended_at else None,
+                ts_source="observed",
+                content=f"trial ended: {stop_reason}",
+            )
 
     def _write_tool_turns(self, client, started_ts: float, ended_ts: float) -> None:
         """Record one turn per tool call the client made during this trial window.
@@ -534,6 +569,10 @@ class TrialCapture:
         rule, wall time, whether a confirmation was demanded). Args and call_id
         are not available client-side (see the module/transcript TODO), so only
         what the client genuinely saw is written - nothing is fabricated.
+
+        Each call knows when it started and how long it took, so each turn is
+        stamped with when the result came back rather than with the moment this
+        loop happened to run (which is after the mission, for every call).
         """
         if self.transcript is None or client is None:
             return
@@ -543,6 +582,7 @@ class TrialCapture:
                 continue
             self.transcript.turn(
                 "tool",
+                at=float(started) + (call.wall_ms or 0.0) / 1000.0,
                 tool_calls=[{"tool": call.tool}],
                 tool_result={
                     "status": call.status,

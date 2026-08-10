@@ -18,6 +18,7 @@ Schema (one object per line)::
     {
       "ts": "2026-08-06T21:34:59.123456+00:00",  # UTC ISO-8601, wall clock
       "t_rel_s": 12.345,          # seconds since t0 (shared recorder clock)
+      "ts_source": "observed",    # where that timestamp came from - see below
       "turn_idx": 0,              # auto-incrementing from 0, per writer
       "role": "assistant",        # "system"|"user"|"assistant"|"tool"
       "content": "…"|null,        # message text, redacted (null if none)
@@ -33,6 +34,26 @@ Schema (one object per line)::
     }
 
 The schema is STABLE: fields may be added, never removed or repurposed.
+
+When a turn is written, and when it happened
+--------------------------------------------
+``ts``/``t_rel_s`` are only worth having if they say when the *turn* happened,
+not when the line was written. The LLM harness hands its whole conversation to
+the capture layer after the flight, so writing the clock at write time stamped
+every model turn of a nine-minute trial inside the same 35 ms - after the
+trial's own ``ended_ts``. Nothing crashed; the transcript simply could not be
+laid alongside the telemetry, which is the one thing Plan 19 §0 asks of it.
+
+Callers therefore pass ``at=`` (a wall-clock epoch) whenever they know when the
+turn really happened, and every record says which kind of stamp it carries:
+
+``live``           written as it happened - the stamp is the event (prompts at
+                   trial start, and any caller logging in the loop).
+``observed``       ``at`` came from a measured timestamp of that turn (a tool
+                   call's own start/finish).
+``reconstructed``  ``at`` was computed from the run's start plus the measured
+                   per-turn latencies, because nothing timestamped that turn
+                   directly (a final assistant answer that called no tool).
 """
 
 import json
@@ -127,16 +148,30 @@ class TranscriptWriter:
         model: str | None = None,
         params: dict | None = None,
         usage: dict | None = None,
+        at: float | None = None,
+        ts_source: str = "observed",
     ) -> None:
-        """Append one conversation turn. Never raises into the caller."""
+        """Append one conversation turn. Never raises into the caller.
+
+        Args:
+            at: wall-clock epoch (``time.time()``) of when this turn actually
+                happened. Omit it only when the line is being written as the
+                turn happens - the record then says ``ts_source="live"``, which
+                is the truth. See the module docstring.
+            ts_source: how ``at`` was arrived at: ``"observed"`` (default, a
+                measured timestamp of this turn) or ``"reconstructed"``.
+                Ignored when ``at`` is None.
+        """
         with self._lock:
             if self._closed:
                 return
             idx = self._turn_idx
+            when = time.time() if at is None else float(at)
             record = {
                 "schema": SCHEMA,
-                "ts": datetime.now(timezone.utc).isoformat(),
-                "t_rel_s": round(time.time() - self.t0, 6),
+                "ts": datetime.fromtimestamp(when, timezone.utc).isoformat(),
+                "t_rel_s": round(when - self.t0, 6),
+                "ts_source": "live" if at is None else ts_source,
                 "turn_idx": idx,
                 "role": role,
                 "content": redact(content) if content is not None else None,
