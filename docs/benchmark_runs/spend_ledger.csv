@@ -328,3 +328,7 @@ ts_utc,provider,key_id,model,resolved_model,mission_id,trial,input_tokens,cached
 2026-08-09T22:58:30.665755+00:00,google,google:3ae2d89e552b,gemini-3.1-pro-preview,gemini-3.1-pro-preview,T3,3,334193,256605,472,0,0.212161,14.677230,100.00,85.322770,llm_runs/20260809T220548Z_n5-gemini-3_1-pro-preview,FAIL
 2026-08-09T22:59:44.014738+00:00,google,google:3ae2d89e552b,gemini-3.6-flash,gemini-3.6-flash,T1,1,475475,280624,338,0,0.336905,15.014135,100.00,84.985865,llm_runs/20260809T225833Z_n5-gemini-3_6-flash,PASS
 2026-08-09T23:00:57.609864+00:00,google,google:3ae2d89e552b,gemini-3.6-flash,gemini-3.6-flash,T1,2,661402,488161,629,0,0.337803,15.351938,100.00,84.648062,llm_runs/20260809T225833Z_n5-gemini-3_6-flash,PASS
+2026-08-10T01:30:49.509662+00:00,google,google:3ae2d89e552b,gemini-3.5-flash-lite,gemini-3.5-flash-lite,T1,1,313344,160463,235,0,0.051266,15.403204,19.10,3.696796,llm_runs/20260810T012852Z_postfix_llm_gemini,PASS,0,0
+2026-08-10T01:30:56.708566+00:00,google,google:3ae2d89e552b,gemini-3.5-flash-lite,gemini-3.5-flash-lite,T9,1,23501,16090,60,0,0.002856,15.406060,19.10,3.693940,llm_runs/20260810T012852Z_postfix_llm_gemini,PASS,0,0
+2026-08-10T01:32:30.432908+00:00,anthropic,anthropic:467e65585f45,claude-haiku-4-5-20251001,claude-haiku-4-5-20251001,T1,1,526680,467228,1308,0,0.119586,43.757650,55.60,11.842350,llm_runs/20260810T013117Z_postfix_llm_haiku,PASS,27484,0
+2026-08-10T01:33:26.154997+00:00,anthropic,anthropic:4e5c8372af95,claude-haiku-4-5-20251001,,T1,1,0,0,0,0,0.000000,0.000000,6.00,6.000000,llm_runs/20260810T013319Z_probe_badkey2,VOID,0,0
