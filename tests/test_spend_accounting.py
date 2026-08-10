@@ -22,6 +22,7 @@ from __future__ import annotations
 import csv
 import importlib.util
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -349,3 +350,53 @@ async def test_a_link_retry_still_charges_the_attempt_it_threw_away(tmp_path, mo
     per_attempt = (100 * 5.0 + 20 * 25.0) / 1_000_000
     assert sum(float(r["cost_usd"]) for r in rows) == pytest.approx(2 * per_attempt)
     assert ledger.spent_by("openai:deadbeef") == pytest.approx(2 * per_attempt)
+
+
+# --------------------------------------------------------------------------
+# 5. the ledger writer under two writers
+# --------------------------------------------------------------------------
+
+
+def test_the_cumulative_column_survives_two_writers(tmp_path):
+    """``cumulative_usd_for_key`` is documented as the running total of this
+    file's own rows - the property that lets the ledger be checked against
+    itself. Computing it outside the append made it a read-modify-write: with
+    four concurrent writers, 24 of 120 rows came out sharing a cumulative with
+    another row and the column stopped being a running total at all. The rows
+    never tore (a short O_APPEND write is atomic); only the arithmetic did,
+    which is the kind of wrong that is noticed after it is published.
+    """
+    path = tmp_path / "spend_ledger.csv"
+    SpendLedger(path=path)
+
+    def writer(n: int) -> None:
+        ledger = SpendLedger(path=path)
+        for i in range(25):
+            ledger.record(
+                key="openai:deadbeef",
+                provider="openai",
+                model="gpt-5.2",
+                resolved_model="gpt-5.2",
+                mission_id=f"T{n}",
+                trial=i,
+                input_tokens=1,
+                cached_input_tokens=0,
+                output_tokens=1,
+                reasoning_tokens=0,
+                cost_usd=1.0,
+                run_dir="llm_runs/x",
+            )
+
+    threads = [threading.Thread(target=writer, args=(n,)) for n in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    with path.open(newline="", encoding="utf-8") as fh:
+        rows = list(csv.DictReader(fh))
+    assert len(rows) == 100, "no row may be lost or torn"
+    cumulative = [float(r["cumulative_usd_for_key"]) for r in rows]
+    assert cumulative == sorted(cumulative), "the column must be a running total"
+    assert len(set(cumulative)) == len(cumulative), "no two rows may claim the same running total"
+    assert cumulative[-1] == pytest.approx(sum(float(r["cost_usd"]) for r in rows))

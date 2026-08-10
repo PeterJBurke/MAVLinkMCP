@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import contextlib
 import csv
+import fcntl
 import hashlib
 import json
 import os
@@ -507,6 +508,30 @@ class SpendLedger:
             )
         return left
 
+    @contextlib.contextmanager
+    def _appending(self):
+        """Open the ledger for append, holding an exclusive lock on it.
+
+        Rows are appended by more than one process only against the operating
+        procedure ("one model at a time, always"), but the procedure is a
+        convention and this file is the project's financial record. The lock
+        costs nothing when nobody is competing for it and it makes
+        :meth:`record`'s read-then-append a single step.
+
+        It does **not** make :meth:`check_before_trial` and :meth:`record` one
+        step - a trial runs for minutes and nothing may hold a lock across it.
+        Two campaigns started against the same key can therefore both pass the
+        guard and jointly cross the cap; the only thing that prevents that is
+        not running two campaigns against one key.
+        """
+        with self.path.open("a", newline="", encoding="utf-8") as fh:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            try:
+                yield fh
+                fh.flush()
+            finally:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+
     def record(
         self,
         *,
@@ -545,8 +570,16 @@ class SpendLedger:
         entirely, and the guard goes back to believing an Anthropic total this
         project has documented as ~13% low.
         """
-        cumulative = self.recorded_by(key) + cost_usd
-        with self.path.open("a", newline="", encoding="utf-8") as fh:
+        with self._appending() as fh:
+            # Read the running total INSIDE the lock. Reading it outside is a
+            # read-modify-write across two processes: with four appending at
+            # once, 24 of 120 rows came out carrying a cumulative that another
+            # row already had, and the column stopped being the running total
+            # this file's own docstring promises. The rows themselves never
+            # tore - a short O_APPEND write is atomic - so it is only ever the
+            # arithmetic that goes wrong, which is the sort of wrong nobody
+            # notices until it is quoted in a paper.
+            cumulative = self.recorded_by(key) + cost_usd
             csv.writer(fh).writerow(
                 [
                     datetime.fromtimestamp(time.time(), timezone.utc).isoformat(),
