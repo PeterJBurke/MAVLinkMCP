@@ -39,9 +39,11 @@ mode would betray.
                              ground-station side must carry something other than
                              heartbeats.
 ``telemetry.csv``            enough rows *for a trial of this length*, rows that
-                             actually carry vehicle state, no long gap between
-                             consecutive rows, and recording all the way to the
-                             end of the trial. Catches a MavSDK recorder that
+                             actually carry vehicle state, rows that were fed by
+                             a live link (``sample_age_s``) rather than held
+                             from an old sample, no long gap between consecutive
+                             rows, and recording all the way to the end of the
+                             trial. Catches a MavSDK recorder that
                              never connected (which still emits perfectly
                              evenly-spaced rows - every cell empty), one whose
                              sampler stalled (ten rows spread over twelve
@@ -388,6 +390,10 @@ class _TelemetryEvidence:
     max_gap_at: float = 0.0
     #: Any row carried a value in any of :data:`TELEMETRY_STATE_COLUMNS`.
     has_state: bool = False
+    #: Worst ``sample_age_s`` seen, when the recorder wrote that column: how
+    #: stale the held values ever got. A recorder whose link died keeps writing
+    #: rows at full rate, so nothing else in the file betrays it.
+    max_sample_age: float | None = None
     #: The file has at least one of those columns, so ``has_state`` means
     #: something. A CSV without them cannot be judged this way and says so
     #: rather than passing silently.
@@ -407,6 +413,13 @@ def _read_telemetry(trial_dir: Path) -> _TelemetryEvidence:
                 evidence.armed = True
             if not evidence.has_state:
                 evidence.has_state = any(str(record.get(c, "") or "").strip() for c in TELEMETRY_STATE_COLUMNS)
+            age_cell = str(record.get("sample_age_s", "") or "").strip()
+            if age_cell:
+                try:
+                    age = float(age_cell)
+                except ValueError:
+                    age = 0.0
+                evidence.max_sample_age = max(evidence.max_sample_age or 0.0, age)
             try:
                 t = float(record.get("t_rel_s") or 0.0)
             except (TypeError, ValueError):
@@ -459,6 +472,8 @@ def _check_telemetry(trial_dir: Path, min_rows: int) -> tuple[Check, _TelemetryE
     if duration is not None:
         detail += f", spanning {last_t:.0f}s of a {duration:.0f}s trial"
     detail += f", worst gap {evidence.max_gap:.1f}s"
+    if evidence.max_sample_age is not None:
+        detail += f", worst sample age {evidence.max_sample_age:.1f}s"
     if not evidence.state_columns_present:
         detail += " (no state columns to check)"
 
@@ -476,6 +491,14 @@ def _check_telemetry(trial_dir: Path, min_rows: int) -> tuple[Check, _TelemetryE
             False,
             f"{rows} row(s) and not one carries any vehicle state (position, mode, armed all empty) - "
             "the recorder ran but never connected to the drone",
+        ), evidence
+    if evidence.max_sample_age is not None and evidence.max_sample_age > MAX_TELEMETRY_GAP_S:
+        return Check(
+            "telemetry.csv",
+            False,
+            f"the recorder went {evidence.max_sample_age:.0f}s without a single fresh sample while still "
+            f"writing rows ({detail}) - those rows repeat a held value, they are not observations of the "
+            "aircraft",
         ), evidence
     if evidence.max_gap > MAX_TELEMETRY_GAP_S:
         return Check(

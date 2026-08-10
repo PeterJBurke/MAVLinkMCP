@@ -21,7 +21,22 @@ Column schema (STABLE - fixed order, see ``COLUMNS``)::
     roll_deg, pitch_deg, yaw_deg, vn_ms, ve_ms, vd_ms, groundspeed_ms,
     airspeed_ms, gps_fix_type, num_satellites, hdop, vdop, battery_v,
     battery_pct, throttle_pct, in_air, home_lat, home_lon, home_alt, ekf_ok,
-    geofence_ok
+    geofence_ok, sample_age_s
+
+Sample-and-hold, and how to tell it apart from flight
+-----------------------------------------------------
+Because the timer writes a row whether or not anything arrived, a link that
+dies mid-flight does not leave a gap: it leaves rows, at the full rate, all the
+way to the end of the trial, every one repeating the last position, mode and
+armed state the recorder ever saw. A track drawn from that file shows an
+aircraft holding station perfectly - which is a claim about the vehicle, made
+by a recorder that had stopped listening.
+
+``sample_age_s`` is the seconds since the freshest item on ANY topic arrived,
+recorded on every row. Fresh telemetry keeps it near zero; a dead link makes it
+climb without bound, so a stale hold is visible in the artifact itself instead
+of being indistinguishable from a hover. It is empty until the first sample
+ever arrives (nothing to be stale yet).
 
 Columns MavSDK does NOT expose are written empty every row and documented here
 so downstream analysis does not mistake them for missing data:
@@ -90,6 +105,7 @@ COLUMNS = [
     "home_alt",
     "ekf_ok",
     "geofence_ok",
+    "sample_age_s",
 ]
 
 #: Columns MavSDK's telemetry plugin cannot fill; written empty every row.
@@ -193,6 +209,9 @@ class TelemetryRecorder:
         # dynamic rather than dishonestly narrow.
         self._system: Any = None
         self._latest: dict[str, Any] = {key: None for key, _ in _STREAMS}
+        #: ``time.monotonic()`` when ANY topic last yielded an item. None until
+        #: the first one does. This is what tells a held sample from a live one.
+        self._last_sample_mono: float | None = None
         self._tasks: list[asyncio.Task] = []
         self._sampler: asyncio.Task | None = None
         self._file: TextIO | None = None
@@ -279,6 +298,7 @@ class TelemetryRecorder:
             stream_factory = getattr(self._system.telemetry, method_name)
             async for item in stream_factory():
                 self._latest[key] = item
+                self._last_sample_mono = time.monotonic()
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -366,5 +386,11 @@ class TelemetryRecorder:
             "home_alt": _round(_get(home, "absolute_altitude_m"), 3),
             "ekf_ok": "",  # no single EKF-status flag in MavSDK
             "geofence_ok": "",  # not surfaced by MavSDK telemetry
+            # How old the newest value in this row is. Every other column is
+            # sample-and-hold, so without this a dead link is indistinguishable
+            # from a stationary aircraft.
+            "sample_age_s": (
+                "" if self._last_sample_mono is None else round(time.monotonic() - self._last_sample_mono, 3)
+            ),
         }
         return [values[col] for col in COLUMNS]

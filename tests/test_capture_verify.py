@@ -494,3 +494,40 @@ def test_the_manifest_check_says_whether_hashes_were_verified(tmp_path):
     skipped = [c for c in verify_bundle(trial_dir, verify_hashes=False).checks if c.name == "manifest.json"][0]
     assert "all sha256 verified" in verified.detail
     assert "sha256 not re-computed" in skipped.detail
+
+
+def test_a_link_that_died_mid_flight_is_not_a_stationary_aircraft(tmp_path):
+    """Sample-and-hold does not leave a gap; it leaves a lie at full rate.
+
+    When the MavSDK link dies the timer keeps writing rows, every one repeating
+    the last position, mode and armed state the recorder ever saw. Row count,
+    inter-row spacing and coverage all stay perfect, and a track drawn from the
+    file shows an aircraft holding station beautifully. ``sample_age_s`` is the
+    column that tells the two apart.
+    """
+    trial_dir = complete_bundle(tmp_path, telemetry_rows=0)
+    header = "t_iso,t_rel_s,lat_deg,lon_deg,flight_mode,armed,in_air,sample_age_s\n"
+    rows = []
+    for i in range(200):
+        # Live for the first five seconds, then frozen for the remaining fifteen.
+        age = 0.05 if i < 50 else round((i - 50) * 0.1, 2)
+        rows.append(f"2026-08-09T19:00:00+00:00,{i * 0.1:.1f},33.6,-117.8,GUIDED,True,True,{age}\n")
+    (trial_dir / "telemetry.csv").write_text(header + "".join(rows), encoding="utf-8")
+    _reseal(trial_dir)
+
+    check = verify_bundle(trial_dir)
+    assert not check.complete
+    assert any("without a single fresh sample" in p for p in check.problems)
+
+
+def test_a_live_link_reports_its_worst_sample_age_and_passes(tmp_path):
+    trial_dir = complete_bundle(tmp_path, telemetry_rows=0)
+    header = "t_iso,t_rel_s,lat_deg,lon_deg,flight_mode,armed,in_air,sample_age_s\n"
+    rows = "".join(f"2026-08-09T19:00:00+00:00,{i * 0.1:.1f},33.6,-117.8,GUIDED,True,True,0.12\n" for i in range(200))
+    (trial_dir / "telemetry.csv").write_text(header + rows, encoding="utf-8")
+    _reseal(trial_dir)
+
+    check = verify_bundle(trial_dir)
+    assert check.complete, check.problems
+    telemetry = [c for c in check.checks if c.name == "telemetry.csv"][0]
+    assert "worst sample age 0.1s" in telemetry.detail
