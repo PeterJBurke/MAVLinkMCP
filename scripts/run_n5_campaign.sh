@@ -28,9 +28,41 @@ export DRONESERVER_RECORDER_API_KEY=$(cat /root/llmuav-recorder.key)
 MISSIONS="${MISSIONS:-T1,T2,T3,T4,T5,T6,T7,T8,T9}"
 TRIALS="${TRIALS:-5}"
 # Phase A: direct vendor APIs, uniform access path.
-MODELS="${MODELS:-claude-opus-5 claude-sonnet-5 claude-haiku-4-5-20251001 gemini-3.1-pro-preview gemini-3.6-flash gemini-3.5-flash-lite grok-4.5 grok-4.20-0309-reasoning grok-4.20-0309-non-reasoning}"
+#
+# gpt-5.2 and gemini-robotics-er-2-preview were MISSING from this list until
+# 2026-08-10. They are in Plan 04's accepted matrix and both have flown at N=1;
+# omitting them would have produced a comparison table with no OpenAI column at
+# all - a reviewer comment we would have paid two days of campaign time to earn.
+MODELS="${MODELS:-claude-opus-5 claude-sonnet-5 claude-haiku-4-5-20251001 gpt-5.2 gemini-3.1-pro-preview gemini-3.6-flash gemini-3.5-flash-lite gemini-robotics-er-2-preview grok-4.5 grok-4.20-0309-reasoning grok-4.20-0309-non-reasoning}"
 # 45 trials/model at a few minutes each; generous so a slow model is not truncated.
 PER_MODEL_TIMEOUT="${PER_MODEL_TIMEOUT:-21600}"
+
+# --- per-key spend ceilings (Peter, 2026-08-10) ------------------------------
+# The harness guard must bind BEFORE the provider's own cap: it stops cleanly
+# between trials and logs "rerun to resume", whereas a provider cap hard-stops
+# mid-trial with no warning - the failure that destroyed 80 trials on 08-08.
+#
+# anthropic 175: one complete claude-opus-5 run is $62.01 and ~$50.34 is already
+#                spent, so the standing $100 rule cannot finish the Opus arm.
+# google     75: deliberately under Peter's $125 provider cap, so we stop first.
+# others    100: unchanged, within the standing rule.
+budget_for() {
+  case "$1" in
+    anthropic) echo 175 ;;
+    google)    echo 75  ;;
+    *)         echo 100 ;;
+  esac
+}
+provider_of() {
+  case "$1" in
+    claude*)      echo anthropic ;;
+    gemini*)      echo google ;;
+    grok*)        echo xai ;;
+    gpt*|o[134]*) echo openai ;;
+    *:*)          echo "${1%%:*}" ;;
+    *)            echo unknown ;;
+  esac
+}
 
 # --- dead-key handling ------------------------------------------------------
 # run_llm_missions.py exits 3 when the provider would not serve the key for this
@@ -58,9 +90,12 @@ echo
 
 for model in $MODELS; do
   label="n5-$(echo "$model" | tr '/.' '__')"
-  echo "############ $model  ($(date -u +%FT%TZ)) ############"
+  provider=$(provider_of "$model")
+  budget=$(budget_for "$provider")
+  echo "############ $model  ($(date -u +%FT%TZ))  [$provider, cap \$$budget] ############"
   timeout "$PER_MODEL_TIMEOUT" /root/.local/bin/uv run python scripts/run_llm_missions.py \
       --missions "$MISSIONS" --trials "$TRIALS" --model "$model" \
+      --budget-usd "$budget" \
       --url http://127.0.0.1:8090/sse \
       --audit-log /var/lib/droneserver/audit.jsonl \
       --target-label "ArduPilot SITL (llmuavsitl)" \
