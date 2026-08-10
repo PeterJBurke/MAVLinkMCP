@@ -8,6 +8,9 @@ reading the files it leaves behind.
 1. A *harness* connection to the drone server checks the aircraft is on the
    ground and disarmed, and reads its home position. The harness needs home to
    judge the flight later; the model is told nothing and must ask for itself.
+   It then puts the aircraft back on the run's launch point if the previous
+   trial left it somewhere else, and **refuses to fly the trial at all** if it
+   cannot verify that it is there (see :func:`_ferry_to_launch`).
 2. The *flight recorder* starts - a separate connection that logs position,
    altitude and armed state about once a second until the trial ends.
 3. An *agent* connection fetches the server's real tool list.
@@ -87,7 +90,7 @@ from droneserver.llm.mcp_session import (
 from droneserver.llm.prompts import SYSTEM_PROMPT, mission_prompts
 from droneserver.llm.providers import ToolSpec, open_session, resolve_model
 from droneserver.llm.spend import BudgetExceeded, Price, SpendLedger, project_trial_cost_usd
-from droneserver.llm.verdicts import TRACK_HEADER, Track, Verdict, judge
+from droneserver.llm.verdicts import TRACK_HEADER, Track, Verdict, distance_m, judge
 
 if TYPE_CHECKING:  # the capture layer is imported lazily, never at runtime here
     from droneserver.benchmark.capture_session import CaptureConfig
@@ -148,6 +151,28 @@ EXPECTED_CLAIM_ON_PASS = {"T8": "aborted", "T9": "aborted"}
 #: or key-rejected reply (providers.fatal_provider_error) aborts the run on the
 #: first trial without waiting for the streak.
 VOID_STREAK_LIMIT = 3
+
+#: How far from the run's launch point a trial may begin.
+#:
+#: Deliberately the same number as ``arrival_threshold_m``: a trial that starts
+#: further from the launch point than a mission counts as *arriving* at a
+#: waypoint is not the same trial as one that starts on it.
+#:
+#: **Why this exists.** Nothing used to return the aircraft between trials. T2
+#: lands 60 m north of where it started, T3 lands wherever it finished, and the
+#: next trial begins there. In the halted N=5 campaign that walked the aircraft
+#: 300 m in five T2 trials, on top of the ~690 m it had already walked in
+#: earlier runs - until it was parked 986 m from the centre of the server's
+#: 1000 m geofence and *every* horizontal command was refused. The result was
+#: a per-mission table in which everything requiring horizontal flight failed
+#: (T4 0%, T3 17%, T5 20%, T2 23%) and everything vertical-only passed (T1 100%,
+#: T9 100%), which reads like a capability finding and is not one.
+#:
+#: The fix is not to compensate for the drift in the scorer - the scorer already
+#: measures from the trial's own start (:func:`_trial_origin`), which is why the
+#: drift stayed invisible for 300 m. It is to remove the drift, and to make a
+#: trial that cannot verify its own starting point decline to run.
+DEFAULT_START_TOLERANCE_M = 15.0
 
 
 def abandon_reason(result: TrialResult, void_streak: int) -> str:
@@ -216,6 +241,12 @@ class TrialResult:
     link_failure: bool = False
     #: The trial did not run, or was cut short, because of the spending cap.
     budget_stop: bool = False
+    #: The harness could not put the aircraft on the run's launch point, so the
+    #: trial was not flown. Like ``link_failure`` this is a fact about the rig,
+    #: not about the model, and it is excluded from pass rates: a mission scored
+    #: from a starting point we could not verify is a misleading FAIL, not a
+    #: result. See :data:`DEFAULT_START_TOLERANCE_M`.
+    start_position_unknown: bool = False
     #: Why the whole model run was abandoned at this trial: the provider would
     #: not serve this key at all (out of credit, or the key was rejected), or
     #: it failed so many times running that continuing was pointless. Empty on
@@ -236,6 +267,8 @@ class TrialResult:
             return "SKIP"
         if self.budget_stop:
             return "BUDGET"
+        if self.start_position_unknown:
+            return "START"
         if self.link_failure:
             return "LINK"
         if self.not_evaluated:
@@ -279,6 +312,13 @@ class SuiteConfig:
     link_recovery_command: str = ""
     #: How many times one trial may be retried after a link failure.
     link_retries: int = 1
+    #: How far from the run's launch point a trial may begin. The harness flies
+    #: the aircraft back before every trial and refuses to fly one it cannot
+    #: place within this radius. See :data:`DEFAULT_START_TOLERANCE_M`.
+    start_tolerance_m: float = DEFAULT_START_TOLERANCE_M
+    #: Set to False only to reproduce a historical run that was flown without
+    #: the between-trial reset. It is a confound, not an option.
+    reset_position_between_trials: bool = True
     #: A second, hosted MCP server (Google Maps) to attach *only* for T6, so a
     #: model asked to fly to the nearest hospital can look the place up and then
     #: command the drone. Empty leaves T6 skipped. It is attached for T6 alone
@@ -472,6 +512,96 @@ async def _trial_origin(harness: LiveMCPSession, fallback: dict) -> dict:
     return {k: fallback[k] for k in ("home", "home_amsl_m", "home_source") if k in fallback}
 
 
+async def _parked_position(harness: LiveMCPSession) -> tuple[float, float] | None:
+    """Where the aircraft is standing, or ``None`` if we cannot read it."""
+    reading = await harness.call_raw("get_position", {}, 60)
+    if reading.get("status") != "success":
+        return None
+    p = reading.get("position") or {}
+    lat, lon = p.get("latitude_deg"), p.get("longitude_deg")
+    if lat is None or lon is None:
+        return None
+    return float(lat), float(lon)
+
+
+async def _ferry_to_launch(
+    harness: LiveMCPSession,
+    launch: tuple[float, float],
+    launch_amsl_m: float,
+    altitude_m: float,
+    tolerance_m: float,
+    timeout_s: float,
+    log,
+) -> tuple[float, str]:
+    """Put the aircraft back on the run's launch point. ``(distance_m, note)``.
+
+    Returns the distance from the launch point **as re-measured afterwards**,
+    never as intended: the caller decides whether to fly on that number, and a
+    ferry that quietly failed must not be able to report success. ``distance_m``
+    is ``inf`` when the position could not be read at all, which is the same
+    answer as "somewhere unknown" and is treated as such.
+
+    The ferry is flown by the *harness*, on the harness's own MCP connection,
+    before the flight recorder and the Plan 19 capture start - so it appears in
+    no trial's evidence and cannot be mistaken for something the model did.
+
+    It is a plain go-to rather than a return-to-launch on purpose. RTL flies to
+    the *autopilot's* home, which ArduPilot re-sets to wherever the aircraft was
+    standing at each arming; using it here would return the aircraft precisely
+    to the drifted position this exists to undo.
+    """
+    position = await _parked_position(harness)
+    if position is None:
+        return float("inf"), "could not read the aircraft's position before the trial"
+    offset = distance_m(position, launch)
+    if offset <= tolerance_m:
+        return offset, ""
+
+    log(f"[{_utc()}] the aircraft is {offset:.0f} m from the launch point; ferrying it back before the trial")
+    armed = await harness.call_raw("arm_drone", {}, 90)
+    if armed.get("status") != "success":
+        return offset, f"could not arm to ferry the aircraft home: {armed.get('error') or armed.get('status')}"
+
+    climb = await harness.call_raw("takeoff", {"takeoff_altitude": altitude_m}, 120)
+    if climb.get("status") != "success":
+        await _settle(harness)
+        return offset, f"could not take off to ferry the aircraft home: {climb.get('error') or climb.get('status')}"
+    await asyncio.sleep(10)
+
+    goto = await harness.call_raw(
+        "go_to_location",
+        {
+            "latitude_deg": launch[0],
+            "longitude_deg": launch[1],
+            "absolute_altitude_m": launch_amsl_m + altitude_m,
+        },
+        90,
+    )
+    if goto.get("status") != "success":
+        await _settle(harness)
+        # The commonest way this happens is the fence itself: an aircraft that
+        # has drifted to the edge of the server's radius cannot be commanded
+        # anywhere, including back. Say so, rather than flying a trial whose
+        # every horizontal command will be refused for the same reason.
+        return offset, (
+            f"the server refused the command to ferry the aircraft home "
+            f"({goto.get('rule') or 'no rule named'}: {goto.get('error') or goto.get('status')})"
+        )
+
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        here = await _parked_position(harness)
+        if here is not None and distance_m(here, launch) <= tolerance_m:
+            break
+        await asyncio.sleep(5)
+
+    await _settle(harness)
+    final = await _parked_position(harness)
+    if final is None:
+        return float("inf"), "could not read the aircraft's position after ferrying it home"
+    return distance_m(final, launch), f"ferried the aircraft {offset:.0f} m back to the launch point"
+
+
 async def _recover_link(config: SuiteConfig, harness: LiveMCPSession, log) -> bool:
     """Bring the drone server's link back after its helper process died.
 
@@ -558,9 +688,41 @@ async def run_llm_suite(config: SuiteConfig, log=print) -> list[TrialResult]:
             raise RuntimeError("the server never reported a live drone link")
         await _settle(harness)
         ctx.update(await _read_home(harness))
+        # The launch point is read ONCE and never moves for the rest of the run.
+        # It is what every trial is put back on, and what "the aircraft started
+        # where it was supposed to" is checked against; ctx["home"] continues to
+        # be re-read per trial and is what the verdicts measure from, so if the
+        # two ever disagree by more than the tolerance the trial declines to fly
+        # rather than being scored from a point nobody chose.
+        #
+        # Read the same way a trial reads its own origin - the *parked*
+        # position - and not from get_home_position. ArduPilot re-sets the
+        # autopilot's home to wherever the aircraft was standing when it last
+        # armed, so after a ferry flight the two disagree: home is where the
+        # ferry took off, the aircraft is where it landed. Anchoring the launch
+        # point to the position trials are actually measured from keeps
+        # "where the run began" and "where each trial begins" one quantity.
+        launch_origin = await _trial_origin(harness, ctx)
+        ctx["launch"] = launch_origin["home"]
+        ctx["launch_amsl_m"] = launch_origin["home_amsl_m"]
         log(
             f"[{_utc()}] home: {ctx['home'][0]:.6f},{ctx['home'][1]:.6f} "
             f"at {ctx['home_amsl_m']:.1f} m above sea level ({ctx['home_source']})"
+        )
+        # Printed separately from `home` above, and it is the load-bearing one:
+        # the autopilot's home is wherever the aircraft last armed, which after
+        # any ferry flight is NOT where it is standing. The launch point is
+        # where it is standing, and it is what every trial is put back on.
+        log(
+            f"[{_utc()}] launch point: {ctx['launch'][0]:.6f},{ctx['launch'][1]:.6f} "
+            f"at {ctx['launch_amsl_m']:.1f} m above sea level ({launch_origin['home_source']})"
+        )
+        log(
+            f"[{_utc()}] every trial will start within {config.start_tolerance_m:.0f} m of that point; "
+            f"the harness flies the aircraft back between trials"
+            if config.reset_position_between_trials
+            else f"[{_utc()}] WARNING: the between-trial position reset is OFF - trials will start "
+            f"wherever the previous one left the aircraft"
         )
         log(f"[{_utc()}] model: {route.label} ({route.routing}) via {route.provider.base_url}")
         if not config.recorder_api_key:
@@ -632,6 +794,17 @@ async def run_llm_suite(config: SuiteConfig, log=print) -> list[TrialResult]:
                 results.append(result)
                 _record_spend(config, result, log)
 
+                # An aircraft that could not be put back on the launch point
+                # will not be back on it for the next trial either, and every
+                # remaining trial would record the same non-result while the
+                # vehicle sits somewhere nobody chose. Stop and say so; a human
+                # can reposition it and rerun.
+                if result.start_position_unknown:
+                    log(f"[{_utc()}] START stop: {result.reason}")
+                    log(f"[{_utc()}] abandoning the remaining trials for {config.model_spec}.")
+                    stop_everything = True
+                    break
+
                 # Is there any point in flying the next trial? Two ways there
                 # is not, and both abandon this MODEL's run - never the whole
                 # campaign, which moves on to the next model.
@@ -658,6 +831,26 @@ async def run_llm_suite(config: SuiteConfig, log=print) -> list[TrialResult]:
     finally:
         with contextlib.suppress(Exception):
             await _settle(harness)
+        # Leave the aircraft where the run found it. Each model in a campaign
+        # is a separate process, so a run that ends 60 m downrange hands that
+        # 60 m to the next model as its launch point - the same drift as
+        # before, just one run further out. Ending where we started makes the
+        # whole campaign start from one place instead of eleven.
+        if config.reset_position_between_trials and ctx.get("launch"):
+            with contextlib.suppress(Exception):
+                distance, note = await _ferry_to_launch(
+                    harness,
+                    ctx["launch"],
+                    float(ctx.get("launch_amsl_m") or 0.0),
+                    float(ctx["takeoff_altitude_m"]),
+                    config.start_tolerance_m,
+                    float(ctx.get("nav_timeout_s") or 240.0),
+                    log,
+                )
+                log(
+                    f"[{_utc()}] run finished with the aircraft {distance:.0f} m from the launch point"
+                    f"{'; ' + note if note else ''}"
+                )
         await harness.aclose()
         # The capture loop is shared by every trial, so the run closes it (see
         # droneserver.benchmark.capture_session.capture_loop). Off the event
@@ -694,7 +887,44 @@ async def _run_trial(
             link_failure=True,
         )
     await _settle(harness)
+
+    ferry_note = ""
+    if config.reset_position_between_trials and ctx.get("launch"):
+        offset, ferry_note = await _ferry_to_launch(
+            harness,
+            ctx["launch"],
+            float(ctx.get("launch_amsl_m") or 0.0),
+            float(ctx["takeoff_altitude_m"]),
+            config.start_tolerance_m,
+            float(ctx.get("nav_timeout_s") or 240.0),
+            log,
+        )
+        if offset > config.start_tolerance_m:
+            where = "an unknown position" if offset == float("inf") else f"{offset:.0f} m from the launch point"
+            log(f"[{_utc()}] START {mission_id} trial {trial}: the aircraft is at {where}; not flying")
+            return TrialResult(
+                mission_id,
+                trial,
+                False,
+                (
+                    f"not flown - the aircraft could not be returned to the run's launch point (it is at "
+                    f"{where}, tolerance {config.start_tolerance_m:.0f} m"
+                    f"{'; ' + ferry_note if ferry_note else ''}). Flying from an unverified starting point "
+                    f"produces a verdict about the rig, not about the model"
+                ),
+                started_at=time.time(),
+                evidence={"start_offset_m": None if offset == float("inf") else round(offset, 1)},
+                start_position_unknown=True,
+            )
+        if ferry_note:
+            log(f"[{_utc()}] {ferry_note}; now {offset:.0f} m from it")
+
     ctx = {**ctx, **await _trial_origin(harness, ctx)}
+    # Stamped on every trial so the correlation that produced the halted
+    # campaign - pass rate against how far the trial started from the launch
+    # point - is readable straight out of missions.csv, without re-deriving it
+    # from the telemetry tracks as the post-mortem had to.
+    start_offset_m = round(distance_m(ctx["home"], ctx["launch"]), 1) if ctx.get("launch") else None
 
     extra: dict = {}
     if mission_id == "T7":
@@ -793,7 +1023,12 @@ async def _run_trial(
             ),
             started_at=started,
             duration_s=round(duration, 1),
-            evidence={"prompt": prompt, "model_claim": run.model_claim, "link_errors": link_errors},
+            evidence={
+                "prompt": prompt,
+                "model_claim": run.model_claim,
+                "link_errors": link_errors,
+                "start_offset_m": start_offset_m,
+            },
             run=run,
             harness_intervened=intervened,
             link_failure=True,
@@ -834,7 +1069,13 @@ async def _run_trial(
         reason=verdict.reason,
         started_at=started,
         duration_s=round(duration, 1),
-        evidence=verdict.evidence | {"prompt": prompt, "model_claim": run.model_claim},
+        evidence=verdict.evidence
+        | {
+            "prompt": prompt,
+            "model_claim": run.model_claim,
+            "start_offset_m": start_offset_m,
+            "ferried_home": ferry_note or None,
+        },
         run=run,
         harness_intervened=intervened,
         not_evaluated=verdict.not_evaluated,
@@ -1093,7 +1334,7 @@ def _write_outputs(
             claim = run.model_claim if run else ""
             matches = (
                 ""
-                if r.skipped or r.link_failure or r.not_evaluated or not run
+                if r.skipped or r.link_failure or r.not_evaluated or r.start_position_unknown or not run
                 else str(_claim_agrees(r.mission_id, claim, r.passed))
             )
             cost = _cost(config, run) if run else None
@@ -1255,7 +1496,12 @@ def _write_summary(config: SuiteConfig, results: list[TrialResult], ctx: dict, r
     # broken drone link, or a model the provider never served. Counting any of
     # them as a model failure would put an infrastructure fault in the paper's
     # results table.
-    ran = [r for r in results if not r.skipped and not r.link_failure and not r.not_evaluated]
+    ran = [
+        r
+        for r in results
+        if not r.skipped and not r.link_failure and not r.not_evaluated and not r.start_position_unknown
+    ]
+    unplaced = [r for r in results if r.start_position_unknown]
     broken = [r for r in results if r.link_failure]
     void = [r for r in results if r.not_evaluated]
     passed = [r for r in ran if r.passed]
@@ -1278,7 +1524,7 @@ def _write_summary(config: SuiteConfig, results: list[TrialResult], ctx: dict, r
         "- Safety layer: **on** (the server was not reconfigured for this run)",
         f"- Missions judged: **{len(ran)}** "
         f"({sum(1 for r in results if r.skipped)} skipped, {len(broken)} lost to a broken drone link, "
-        f"{len(void)} not evaluated)",
+        f"{len(void)} not evaluated, {len(unplaced)} not flown from a verified start)",
         f"- Passed on telemetry evidence: **{len(passed)}/{len(ran)}**",
         "",
         "| Mission | Verdict | Model's own claim | Turns | Tool calls | Model time (s) | Drone time (s) | Reason |",
@@ -1357,6 +1603,42 @@ def _write_summary(config: SuiteConfig, results: list[TrialResult], ctx: dict, r
             if key not in seen:
                 seen.add(key)
                 lines.append(f"| {record.get('tool')} | {record.get('verdict')} | `{record.get('rule') or '-'}` |")
+        lines.append("")
+
+    offsets: list[tuple[TrialResult, float]] = [
+        (r, float(r.evidence["start_offset_m"])) for r in results if r.evidence.get("start_offset_m") is not None
+    ]
+    if offsets:
+        worst = max(d for _r, d in offsets)
+        lines += [
+            "## Where each trial started",
+            "",
+            "How far the aircraft was from the run's launch point when the trial began. Nothing used "
+            "to return it between trials, so this number used to grow all run - and once it approached "
+            "the radius of the server's geofence, every horizontal command was refused and every "
+            "mission that needs horizontal flight failed. It is reported on every run now so that a "
+            "pass rate can never again be read without it.",
+            "",
+            f"- Tolerance: **{config.start_tolerance_m:.0f} m** (a trial that cannot be placed within it is not flown)",
+            f"- Furthest any trial started from the launch point: **{worst:.1f} m**",
+            "",
+            "| Mission | Start offset (m) | Verdict |",
+            "|---|---:|---|",
+        ]
+        lines += [f"| {r.mission_id}.{r.trial} | {d:.1f} | {r.verdict_label} |" for r, d in offsets]
+        lines.append("")
+
+    if unplaced:
+        lines += [
+            "## Trials not flown - the aircraft was not on the launch point",
+            "",
+            "The harness could not verify that the aircraft was standing where the run started, so it "
+            "declined to fly. A mission scored from a starting point nobody chose is a statement about "
+            "the rig, not about the model, so these are excluded from the pass rate rather than "
+            "recorded as failures.",
+            "",
+        ]
+        lines += [f"- **{r.mission_id}.{r.trial}**: {r.reason}" for r in unplaced]
         lines.append("")
 
     if broken:

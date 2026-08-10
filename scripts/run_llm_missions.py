@@ -64,7 +64,7 @@ from droneserver.benchmark.capture_cli import (
 from droneserver.llm.agent import Limits
 from droneserver.llm.prompts import mission_prompts
 from droneserver.llm.providers import ProviderError, list_openrouter_endpoints, resolve_model
-from droneserver.llm.runner import LLM_SUITE, SKIPPED, SuiteConfig, run_llm_suite
+from droneserver.llm.runner import DEFAULT_START_TOLERANCE_M, LLM_SUITE, SKIPPED, SuiteConfig, run_llm_suite
 from droneserver.llm.spend import (
     DEFAULT_BUDGET_USD,
     DEFAULT_LEDGER,
@@ -130,6 +130,28 @@ def main() -> int:
         "not by this",
     )
     parser.add_argument("--max-tool-calls", type=int, default=250, help="tool calls before the trial is cut off")
+    parser.add_argument(
+        "--max-total-tokens",
+        type=int,
+        default=Limits.max_total_tokens,
+        help="runaway backstop: tokens a single trial may process before it is cut off. This is NOT the "
+        "money bound - that is --max-trial-cost-usd, which is exact. Set high enough that --max-turns is "
+        "what actually limits a trial, because a trial cut off mid-flight leaves the aircraft airborne "
+        "and fails on a condition it was never allowed to reach",
+    )
+    parser.add_argument(
+        "--start-tolerance-m",
+        type=float,
+        default=DEFAULT_START_TOLERANCE_M,
+        help="how far from the run's launch point a trial may begin. The harness flies the aircraft back "
+        "between trials and refuses to fly one it cannot place within this radius",
+    )
+    parser.add_argument(
+        "--no-position-reset",
+        action="store_true",
+        help="do NOT return the aircraft to the launch point between trials. Only for reproducing a "
+        "historical run flown without it; it is a confound, not an option",
+    )
     parser.add_argument("--trial-timeout-s", type=float, default=1800.0, help="wall-clock limit per trial")
     parser.add_argument("--temperature", type=float, default=None, help="sampling temperature, if the model takes one")
     parser.add_argument("--reasoning-effort", default=None, help="reasoning effort, for models that expose it")
@@ -314,6 +336,7 @@ def main() -> int:
             max_turns=args.max_turns,
             max_tool_calls=args.max_tool_calls,
             wall_clock_s=args.trial_timeout_s,
+            max_total_tokens=args.max_total_tokens,
             max_cost_usd=args.max_trial_cost_usd,
         ),
         model_options=model_options,
@@ -323,6 +346,8 @@ def main() -> int:
         provider_name=route.provider.name,
         link_recovery_command=args.link_recovery_command,
         link_retries=args.link_retries,
+        start_tolerance_m=args.start_tolerance_m,
+        reset_position_between_trials=not args.no_position_reset,
         maps_url=args.maps_url,
         maps_api_key=args.maps_api_key,
         capture=capture_cfg,
@@ -369,11 +394,20 @@ def main() -> int:
         return 0
 
     results = asyncio.run(run_llm_suite(config))
-    flown = [r for r in results if not r.skipped and not r.link_failure and not r.budget_stop and not r.not_evaluated]
+    flown = [
+        r
+        for r in results
+        if not r.skipped
+        and not r.link_failure
+        and not r.budget_stop
+        and not r.not_evaluated
+        and not r.start_position_unknown
+    ]
     failed = [r for r in flown if not r.passed]
     lost = [r for r in results if r.link_failure]
     stopped = [r for r in results if r.budget_stop]
     void = [r for r in results if r.not_evaluated]
+    unplaced = [r for r in results if r.start_position_unknown]
     provider_stop = next((r.provider_stop for r in results if r.provider_stop), "")
     print(f"\nwrote {out_dir}/summary.md")
     print(f"{len(flown) - len(failed)}/{len(flown)} missions passed on telemetry evidence")
@@ -381,6 +415,11 @@ def main() -> int:
         print(f"{len(lost)} trial(s) lost to a broken drone link (not counted as model results)")
     if stopped:
         print(f"{len(stopped)} trial(s) not run because of the spending cap; rerun to resume")
+    if unplaced:
+        print(
+            f"{len(unplaced)} trial(s) NOT FLOWN - the aircraft could not be returned to the launch point; "
+            f"reposition it and rerun"
+        )
     if void:
         print(f"{len(void)} trial(s) NOT EVALUATED - the model never ran, so they count as neither passes nor failures")
     capture_failed = report_capture([r.capture_status for r in results], require_complete=args.require_complete_capture)

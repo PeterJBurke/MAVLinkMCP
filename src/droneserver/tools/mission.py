@@ -10,6 +10,31 @@ from droneserver.mavlink.connection import ensure_connection
 from droneserver.telemetry.flight_log import LogColors, log_mavlink_cmd, log_tool_call, logger
 from droneserver.tools._common import first_stream_item
 
+#: How long any of these tools will wait for a ``mission_progress`` sample.
+#:
+#: MavSDK publishes mission progress when the vehicle crosses a waypoint, not on
+#: a timer, so between two distant waypoints the stream is legitimately silent
+#: for minutes. Every read of it must therefore be bounded: a tool that blocks
+#: until the next transition holds an MCP call open for the whole leg, and the
+#: client eventually kills it at *its* timeout with no answer at all - which is
+#: strictly worse than answering "progress unknown" straight away.
+MISSION_PROGRESS_TIMEOUT_S = 5.0
+
+
+async def _mission_progress_or_unknown(drone) -> tuple[int, int]:
+    """``(current, total)`` waypoints, or ``(0, 0)`` if the stream is silent.
+
+    Never raises and never blocks longer than
+    :data:`MISSION_PROGRESS_TIMEOUT_S`. A total of ``0`` means "we do not know",
+    which is exactly what a silent progress stream tells us, and is what every
+    caller here already treats as "no progress information".
+    """
+    try:
+        progress = await first_stream_item(drone.mission.mission_progress(), MISSION_PROGRESS_TIMEOUT_S)
+    except Exception:
+        return 0, 0
+    return progress.current, progress.total
+
 
 @mcp.tool()
 async def print_mission_progress(ctx: Context) -> dict:
@@ -249,13 +274,9 @@ async def hold_mission_position(ctx: Context) -> dict:
     log_tool_call("hold_mission_position")
 
     try:
-        # Get current mission progress before holding
-        current_wp = 0
-        total_wp = 0
-        async for mission_progress in drone.mission.mission_progress():
-            current_wp = mission_progress.current
-            total_wp = mission_progress.total
-            break
+        # Get current mission progress before holding (bounded - see
+        # _mission_progress_or_unknown: this stream is silent between waypoints)
+        current_wp, total_wp = await _mission_progress_or_unknown(drone)
 
         # Get current position
         async for position in drone.telemetry.position():
@@ -309,13 +330,9 @@ async def resume_mission(ctx: Context) -> dict:
     log_tool_call("resume_mission")
 
     try:
-        # Get current mission progress before resuming
-        current_wp = 0
-        total_wp = 0
-        async for mission_progress in drone.mission.mission_progress():
-            current_wp = mission_progress.current
-            total_wp = mission_progress.total
-            break
+        # Get current mission progress before resuming (bounded - see
+        # _mission_progress_or_unknown: this stream is silent between waypoints)
+        current_wp, total_wp = await _mission_progress_or_unknown(drone)
 
         log_mavlink_cmd("drone.mission.start_mission")
         logger.info(
@@ -727,13 +744,17 @@ async def is_mission_finished(ctx: Context) -> dict:
         log_mavlink_cmd("drone.mission.is_mission_finished")
         finished = await drone.mission.is_mission_finished()
 
-        # Get current waypoint progress
-        current_wp = 0
-        total_wp = 0
-        async for mission_progress in drone.mission.mission_progress():
-            current_wp = mission_progress.current
-            total_wp = mission_progress.total
-            break
+        # Get current waypoint progress.
+        #
+        # ``mission_progress()`` publishes on waypoint TRANSITIONS, not on a
+        # timer, so a mission flying a long leg (or one that never started)
+        # emits nothing and an unbounded read here never returns. That is not
+        # theoretical: in the halted N=5 campaign this call hung until the
+        # client's 300 s timeout, after which the model gave up on the mission
+        # tools and polled get_position 46 times instead. Progress is the
+        # optional part of this answer - "is it finished" is the answer - so a
+        # silent stream degrades to "unknown", never to a hang.
+        current_wp, total_wp = await _mission_progress_or_unknown(drone)
 
         # Get current flight mode
         try:

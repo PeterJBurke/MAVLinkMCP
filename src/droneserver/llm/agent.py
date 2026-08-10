@@ -53,7 +53,27 @@ class Limits:
     max_turns: int = 90
     max_tool_calls: int = 250
     wall_clock_s: float = 1800.0
-    max_total_tokens: int = 2_000_000
+    #: Runaway backstop, **not** the money bound - that is ``max_cost_usd``,
+    #: which is exact and enforced against the real price of the real tokens.
+    #:
+    #: This counted 2,000,000 and was the binding limit on the only mission that
+    #: needs a monitoring loop. T4 uploads a mission plan, starts it and watches
+    #: it finish; watching costs turns, and every turn resends the server's ~98
+    #: tool schemas plus the whole conversation, so the *cumulative* input count
+    #: reaches 2M at roughly 45-60 turns - well inside the 90 turns
+    #: ``max_turns`` deliberately allows. In the halted N=5 campaign **every**
+    #: T4 trial that physically flew the L-shape was cut off by this limit
+    #: mid-flight and then scored FAIL for leaving the aircraft armed: gemini
+    #: 3.6-flash reached both legs to within 3.9 m and 0.2 m and still failed.
+    #: A documented generous turn limit undercut by an undocumented token limit
+    #: is a limit nobody chose.
+    #:
+    #: It is now above ``max_turns`` x the largest single-turn prompt ever
+    #: recorded (90 x 90,499; see
+    #: :data:`droneserver.llm.runner.LARGEST_RECORDED_PROMPT_TOKENS`), so a
+    #: trial stops on turns, wall clock or dollars - reasons a reader can price
+    #: - and this only catches a genuine runaway.
+    max_total_tokens: int = 8_500_000
     #: Dollars this single trial may spend before it is stopped. Enforced turn
     #: by turn against the running token count, so a runaway loop cannot spend
     #: the project's budget while nobody is watching.

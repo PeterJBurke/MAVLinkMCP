@@ -117,9 +117,20 @@ def check_position(
     if fence.max_radius_m > 0 and fence.home is not None:
         distance = haversine_m(fence.home[0], fence.home[1], lat, lon)
         if distance > fence.max_radius_m:
+            # The centre is named, not just the distance. The server caches the
+            # home it first read and keeps that centre for the life of the
+            # process, which is the safe behaviour - a fence that followed the
+            # vehicle could be walked outwards indefinitely, a flight at a time.
+            # But it means the centre can be somewhere nobody currently expects,
+            # and a message that only says "1046 m from home" gives the reader
+            # no way to notice. Naming the point turns a campaign-long mystery
+            # into one line. (Halted N=5 campaign, 2026-08-10: the aircraft had
+            # drifted ~990 m from a fence centred where the simulator started
+            # three days earlier, and every horizontal command was refused.)
             return FenceViolation(
                 "geofence.radius",
-                f"target is {distance:.0f} m from home, beyond the geofence radius of {fence.max_radius_m:.0f} m",
+                f"target is {distance:.0f} m from home ({fence.home[0]:.6f}, {fence.home[1]:.6f}), "
+                f"beyond the geofence radius of {fence.max_radius_m:.0f} m",
             )
     return None
 
