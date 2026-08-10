@@ -38,7 +38,14 @@ broken — it is simply missing every command, which is half of what Plan 19 ask
 for.
 
 `scripts/mavlink_relay.py` is the fix: it sits *in* the link and mirrors both
-directions verbatim to a UDP port. Run as `mavlink-relay.service` on llmuavdev;
+directions verbatim to a UDP port. It is the one part of the capture layer that
+is not passive, so `tests/test_mavlink_relay.py` holds it to byte-exact,
+in-order delivery through deliberately fragmented writes, and to surviving a
+mirror that has died. Note what the mirror is: **both directions copied into
+one UDP stream**, in whatever chunks the pumps read, so a datagram boundary is
+not a message boundary. pymavlink reassembles across datagrams, but a lost or
+reordered datagram costs the tap whatever frames straddled it and nothing in
+the tlog says so. Run as `mavlink-relay.service` on llmuavdev;
 `droneserver-staging` points at it (`MAVLINK_ADDRESS=127.0.0.1`,
 `MAVLINK_PORT=5679`), so the relay must be up before the server.
 
@@ -64,6 +71,15 @@ Even with rotation, the autopilot keeps the file open past disarm, so
 trial, not merely written during it. A mission that never arms therefore keeps
 no `.BIN` — correct: there is no flight log, because there was no flight.
 
+That test compares a birth time from the **simulator's** clock with a trial
+start from **this host's**. The harness measures the offset over the same SSH
+connection before each fetch (`remote_clock_offset_s`), subtracts it, and
+records it as the manifest's `clock_offset_ms` — but keep the two boxes on NTP
+anyway. A simulator running a few seconds fast stamps the *previous* flight's
+log into this trial's window; that is blocker B-3 reached by another route, and
+it is silent. The harness prints a warning when the offset exceeds two seconds
+or cannot be measured at all.
+
 ### 4. Check the files, not the exit code
 
 `capture_session.py` deliberately swallows recorder start failures so a capture
@@ -75,26 +91,41 @@ Both harnesses now verify each bundle themselves
 `capture_status: complete | degraded[...]`, and print `capture: N/M trial(s)
 degraded` at the end of a run. **`--require-complete-capture` makes a degraded
 bundle exit non-zero (4)** — pass it for any run whose data is meant to be
-kept. The checks are the ones whose absence hid the defects on this page: the
-tlog must carry both directions, `telemetry.csv` must clear a row floor, the
-manifest must list every file at its true size, `events.jsonl` must parse, and
-a trial whose telemetry shows the aircraft armed must have retained a dataflash
-log.
+kept. The checks are the ones whose absence hid the defects on this page, plus
+the ones whose absence let a demonstrably incomplete bundle pass anyway:
+
+- `mavlink.jsonl` must carry **both directions**, and when the vehicle is seen
+  to arm the ground-station side must contain something other than HEARTBEATs.
+  A ground station heartbeats once a second whether or not the tap is on a path
+  carrying its commands, so "sent > 0" alone proved nothing.
+- `telemetry.csv` must clear a row floor, **carry actual vehicle state** (a
+  recorder that never connects still writes perfectly regular empty rows), have
+  no gap over 5 s between consecutive rows (ten rows spread over a twelve-minute
+  trial used to pass), keep `sample_age_s` fresh (sample-and-hold turns a dead
+  link into a stationary aircraft), and reach the end of the trial.
+- the manifest must list every file at its true size, list **nothing that is
+  not there**, and every `sha256` must re-verify against the bytes on disk.
+- `events.jsonl` must parse.
+- a trial that armed — per the telemetry, the vehicle's HEARTBEATs **or** the
+  derived events — must have retained a dataflash log. Asking all three matters
+  because the telemetry is exactly the witness that goes silent when the
+  recorder fails, and its silence used to excuse the missing log.
 
 That is a machine check, not a substitute for looking. After the first trial of
-any new topology, verify by hand as well:
+any new topology, look at the bundle yourself:
 
 ```bash
-python - <<'PY'
-import json, collections, hashlib, pathlib
+uv run python - <<'PY'
+import collections, json, pathlib
+from droneserver.capture.verify import verify_bundle
 d = pathlib.Path("benchmark_runs/<run>/T1/trial_1")
-dirs = collections.Counter(json.loads(l)["direction"] for l in (d/"mavlink.jsonl").open())
-print("mavlink by direction:", dict(dirs))          # BOTH recv and sent must be non-zero
-print("telemetry rows:", sum(1 for _ in (d/"telemetry.csv").open()) - 1)
-man = json.loads((d/"manifest.json").read_text())
-for a in man["artifacts"]:                           # every hash must re-verify
-    ok = hashlib.sha256((d/a["name"]).read_bytes()).hexdigest() == a["sha256"]
-    print(f"{a['name']:20} {a['bytes']:>10} {ok}")
+check = verify_bundle(d, require_transcript=False)   # hashes are re-computed here
+for c in check.checks:
+    print(f"{'ok  ' if c.ok else 'FAIL'} {c.name:16} {c.detail}")
+sent = collections.Counter(
+    json.loads(l)["msg_type"] for l in (d/"mavlink.jsonl").open() if json.loads(l)["direction"] == "sent"
+)
+print("what the server actually sent:", dict(sent))  # not just HEARTBEAT
 PY
 ```
 
