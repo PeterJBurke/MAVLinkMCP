@@ -230,3 +230,41 @@ def test_unknown_mode_gets_default_color():
     assert tkml.mode_color("BANANARAMA") == tkml.DEFAULT_COLOR
     assert tkml.mode_color(None) == tkml.DEFAULT_COLOR
     assert tkml.mode_color("guided") == tkml.MODE_COLORS["GUIDED"]
+
+
+# --- the palette has to speak the vocabulary the telemetry is written in ----
+
+
+def test_the_modes_the_recorder_actually_writes_are_coloured():
+    """telemetry.csv carries MavSDK's neutral names, not ArduPilot's.
+
+    Measured on the canonical T10 bundle before this map existed: 7627 of 7627
+    fixes fell through to tkml.DEFAULT_COLOR, so the whole 12-minute track rendered
+    opaque white while the document's legend advertised GUIDED blue and AUTO
+    green.
+    """
+    assert tkml.mode_color("OFFBOARD") == tkml.MODE_COLORS["GUIDED"]
+    assert tkml.mode_color("MISSION") == tkml.MODE_COLORS["AUTO"]
+    assert tkml.mode_color("RETURN_TO_LAUNCH") == tkml.MODE_COLORS["RTL"]
+    assert tkml.mode_color("HOLD") == tkml.MODE_COLORS["LOITER"]
+    assert tkml.mode_color("offboard") == tkml.MODE_COLORS["GUIDED"]
+    # The autopilot's own names keep working, and a genuine unknown stays white.
+    assert tkml.mode_color("GUIDED") == tkml.MODE_COLORS["GUIDED"]
+    assert tkml.mode_color("UNKNOWN") == tkml.DEFAULT_COLOR
+
+
+def test_a_mavsdk_named_track_is_not_rendered_white(tmp_path):
+    csv_path = tmp_path / "telemetry.csv"
+    csv_path.write_text(
+        "t_iso,t_rel_s,lat_deg,lon_deg,abs_alt_m,flight_mode\n"
+        "2026-08-09T19:00:00+00:00,0.0,33.6,-117.8,100.0,OFFBOARD\n"
+        "2026-08-09T19:00:01+00:00,1.0,33.6001,-117.8,110.0,OFFBOARD\n"
+        "2026-08-09T19:00:02+00:00,2.0,33.6002,-117.8,120.0,MISSION\n"
+        "2026-08-09T19:00:03+00:00,3.0,33.6003,-117.8,120.0,MISSION\n",
+        encoding="utf-8",
+    )
+    out = tkml.telemetry_to_kml(csv_path, tmp_path / "doc.kml", name="t", kmz=False)
+    text = out.read_text(encoding="utf-8")
+    assert tkml.MODE_COLORS["GUIDED"] in text
+    assert tkml.MODE_COLORS["AUTO"] in text
+    assert tkml.DEFAULT_COLOR not in text

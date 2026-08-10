@@ -129,6 +129,34 @@ def _get(obj, attr):
     return getattr(obj, attr, None) if obj is not None else None
 
 
+def _battery_percent(reported):
+    """MavSDK's ``remaining_percent`` as an actual percentage, 0-100.
+
+    The field is *documented* as a 0.0-1.0 fraction and this recorder duly
+    multiplied it by 100. ArduCopter through mavsdk 3.0.1 reports a PERCENTAGE
+    (measured: 77.0 for a 77% battery - see
+    ``droneserver.missions.runner._battery_fraction``, which has normalised it
+    for the auto-actions since before this recorder existed), so every
+    ``battery_pct`` in every captured bundle came out a hundred times too big:
+    the canonical T10 run records 4100.0 to 7000.0 for a battery that went from
+    70% to 41%.
+
+    A reading above 1.0 can only be a percentage; below it, take the documented
+    fraction. That mis-reads a genuinely 0.8%-charged battery as 80%, which is
+    the same trade the mission runner already makes and is not a state any
+    trial flies in.
+    """
+    if reported is None:
+        return None
+    try:
+        value = float(reported)
+    except (TypeError, ValueError):
+        return None
+    if value < 0 or math.isnan(value) or math.isinf(value):
+        return None
+    return value if value > 1.0 else value * 100.0
+
+
 class TelemetryRecorder:
     """Fixed-rate CSV recorder of the drone's MavSDK telemetry state.
 
@@ -306,9 +334,7 @@ class TelemetryRecorder:
         else:
             groundspeed = None
 
-        # battery remaining_percent is 0.0-1.0 in MavSDK -> percent.
-        batt_remaining = _get(batt, "remaining_percent")
-        battery_pct = None if batt_remaining is None else batt_remaining * 100.0
+        battery_pct = _battery_percent(_get(batt, "remaining_percent"))
 
         values = {
             "t_iso": datetime.now(timezone.utc).isoformat(),

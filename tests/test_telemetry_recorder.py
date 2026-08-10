@@ -210,3 +210,26 @@ async def test_stop_is_idempotent(tmp_path, monkeypatch):
     await rec.start()
     await rec.stop()
     await rec.stop()  # second stop must be a harmless no-op
+
+
+# --- battery units ---------------------------------------------------------
+
+
+def test_a_percentage_battery_reading_is_not_multiplied_again():
+    """MavSDK documents a 0-1 fraction; ArduCopter sends a percentage.
+
+    The recorder trusted the documentation, so every captured bundle records
+    a battery a hundred times too full: the canonical T10 run
+    (20260809T195956Z_T10_capture_final3) has battery_pct running from 7000.0
+    down to 4100.0 for a battery that went from 70% to 41%. The mission runner
+    has normalised the same field since before this recorder existed
+    (``droneserver.missions.runner._battery_fraction``).
+    """
+    assert tr._battery_percent(0.87) == 87.0  # documented fraction
+    assert tr._battery_percent(77.0) == 77.0  # what ArduCopter actually sends
+    assert tr._battery_percent(100.0) == 100.0
+    assert tr._battery_percent(1.0) == 100.0  # a full battery, either way
+    assert tr._battery_percent(0.0) == 0.0
+    assert tr._battery_percent(None) is None
+    assert tr._battery_percent(-1.0) is None
+    assert tr._battery_percent("n/a") is None

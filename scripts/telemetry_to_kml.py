@@ -74,6 +74,34 @@ MODE_COLORS: dict[str, str] = {
 }
 DEFAULT_COLOR = "ffffffff"  # opaque white for any unrecognised mode
 
+# ---------------------------------------------------------------------------
+# The palette above speaks ArduPilot. ``telemetry.csv`` does not.
+#
+# The recorder writes ``flight_mode`` straight from MavSDK's ``FlightMode``
+# enum, which is deliberately airframe-neutral: ArduCopter's GUIDED arrives as
+# OFFBOARD, AUTO as MISSION, RTL as RETURN_TO_LAUNCH, LOITER as HOLD. Without a
+# translation every segment falls through to DEFAULT_COLOR - measured on the
+# canonical T10 bundle (20260809T195956Z_T10_capture_final3): 7627 of 7627
+# fixes rendered opaque white, while the document's own legend advertised
+# GUIDED in blue and AUTO in green. The headline Plan 18 §C visual - "watch the
+# AI fly the aircraft, coloured by mode" - had no colour in it at all.
+#
+# The *recorded* name is what gets displayed and listed in the legend; this map
+# only decides which colour it takes.
+# ---------------------------------------------------------------------------
+MAVSDK_MODE_ALIASES: dict[str, str] = {
+    "OFFBOARD": "GUIDED",  # what the MCP server flies the drone in
+    "MISSION": "AUTO",
+    "RETURN_TO_LAUNCH": "RTL",
+    "HOLD": "LOITER",
+    "POSCTL": "POSHOLD",
+    "ALTCTL": "ALT_HOLD",
+    "MANUAL": "STABILIZE",
+    "STABILIZED": "STABILIZE",
+    "RATTITUDE": "ACRO",
+    "FOLLOW_ME": "FOLLOW",
+}
+
 # A stock Google Earth heading-arrow icon; IconStyle <color> tints it per mode.
 ARROW_ICON_HREF = "http://maps.google.com/mapfiles/kml/shapes/arrow.png"
 
@@ -84,10 +112,16 @@ _ALT_MAX_M = 20000.0
 
 
 def mode_color(mode: str | None) -> str:
-    """Return the KML aabbggrr colour for ``mode`` (case-insensitive)."""
+    """Return the KML aabbggrr colour for ``mode`` (case-insensitive).
+
+    Accepts either vocabulary: the autopilot's own mode names and the neutral
+    MavSDK names the telemetry recorder actually writes (see
+    :data:`MAVSDK_MODE_ALIASES`).
+    """
     if not mode:
         return DEFAULT_COLOR
-    return MODE_COLORS.get(mode.strip().upper(), DEFAULT_COLOR)
+    name = mode.strip().upper()
+    return MODE_COLORS.get(name) or MODE_COLORS.get(MAVSDK_MODE_ALIASES.get(name, ""), DEFAULT_COLOR)
 
 
 # ---------------------------------------------------------------------------
