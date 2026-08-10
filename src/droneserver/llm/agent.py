@@ -148,6 +148,19 @@ class AgentRun:
         return sum(t.reasoning_tokens for t in self.turns)
 
     @property
+    def substantive_turns(self) -> int:
+        """Turns in which the model actually produced something.
+
+        A turn that carries neither text nor a tool call is not the model
+        choosing to stay silent - it is a reply with nothing in it, which is
+        what a provider answering HTTP 200 with an error body looks like once
+        it has been parsed (see ``providers.completion_error``). Counting those
+        as model behaviour is how a model that was never served scores a pass
+        on a mission that rewards an absence.
+        """
+        return sum(1 for t in self.turns if t.text.strip() or t.tool_calls)
+
+    @property
     def confirmations_demanded(self) -> int:
         return sum(1 for c in self.calls if c.confirmation_required)
 

@@ -158,6 +158,40 @@ AUTH_MARKERS = (
 )
 
 
+def completion_error(payload: object, wire: str = "openai") -> str | None:
+    """Is this HTTP **200** body an error dressed as a success? The text, or ``None``.
+
+    A 200 is not a promise that a model answered. Aggregators in particular
+    report an upstream's failure inside a 200 body - OpenRouter answers an
+    upstream throttle with ``{"error": {"message": ..., "code": 429}}`` and no
+    ``choices`` at all - and some gateways return an empty body outright.
+
+    Parsed naively, such a body becomes a perfectly ordinary-looking turn: no
+    text, no tool calls, no tokens. The agent loop reads "no tool calls" as
+    "the model considers the job done" and stops, and the trial reaches the
+    scorer with one turn and zero calls on record. That is precisely the shape
+    that scored a PASS on T9 - a mission whose pass condition is an absence -
+    for a model the provider never served. The 404 that started this at least
+    declared itself; this one fabricates a plausible row.
+
+    So a 200 must be *checked* rather than trusted: no usable completion in the
+    body means it is a failed response, and it goes down the same
+    classification-and-retry path as any other failure.
+    """
+    if not isinstance(payload, dict):
+        return f"the response body was {type(payload).__name__}, not an object"
+    if not payload:
+        return "the response body was empty"
+    if wire == "anthropic":
+        if payload.get("type") == "error" or isinstance(payload.get("content"), type(None)):
+            return json.dumps(payload.get("error") or payload)[:800]
+        return None
+    choices = payload.get("choices")
+    if isinstance(choices, list) and choices:
+        return None
+    return json.dumps(payload.get("error") or payload)[:800]
+
+
 def fatal_provider_error(status_code: int, body: str, where: str) -> ProviderError | None:
     """Classify a failed response as *fatal for this key*, or not.
 
@@ -642,22 +676,39 @@ class OpenAICompatibleSession(ModelSession):
                 wait_ms += (time.perf_counter() - clock) * 1000
             else:
                 latency_ms = (time.perf_counter() - clock) * 1000
+                body_error: str | None = None
                 if response.status_code == 200:
-                    turn = self._parse(response.json(), latency_ms, wait_ms, attempt)
-                    await self._enrich_identity(turn)
-                    return turn
-                last_error = f"HTTP {response.status_code}: {response.text[:400]}"
+                    try:
+                        payload = response.json()
+                    except ValueError:
+                        payload, body_error = {}, f"the 200 response was not JSON: {response.text[:400]}"
+                    body_error = body_error or completion_error(payload)
+                    if body_error is None:
+                        turn = self._parse(payload, latency_ms, wait_ms, attempt)
+                        await self._enrich_identity(turn)
+                        return turn
+                # A 200 that carried no completion is a failed response (see
+                # completion_error) and is classified and retried like any other,
+                # rather than becoming a turn in which the model said nothing.
+                last_error = f"HTTP {response.status_code}: {body_error or response.text[:400]}"
                 wait_ms += latency_ms
-                fatal = fatal_provider_error(response.status_code, response.text, self.route.label)
+                fatal = fatal_provider_error(response.status_code, body_error or response.text, self.route.label)
                 if fatal is not None:
                     raise fatal
-                if response.status_code not in self.RETRY_STATUS:
+                if body_error is None and response.status_code not in self.RETRY_STATUS:
                     break
             if attempt < self.MAX_ATTEMPTS:
                 backoff = min(2.0**attempt, 20.0)
                 await asyncio.sleep(backoff)
                 wait_ms += backoff * 1000
         raise ProviderError(f"{self.route.label}: {last_error}")
+
+    def parse_completion(self, payload: dict, latency_ms: float, wait_ms: float, attempts: int) -> ModelTurn:
+        """:meth:`_parse`, but refusing a body that is not a completion at all."""
+        body_error = completion_error(payload)
+        if body_error is not None:
+            raise ProviderError(f"{self.route.label}: HTTP 200 carried no completion: {body_error}")
+        return self._parse(payload, latency_ms, wait_ms, attempts)
 
     def _parse(self, payload: dict, latency_ms: float, wait_ms: float, attempts: int) -> ModelTurn:
         choice = (payload.get("choices") or [{}])[0]
@@ -872,14 +923,23 @@ class AnthropicSession(ModelSession):
                 wait_ms += (time.perf_counter() - clock) * 1000
             else:
                 latency_ms = (time.perf_counter() - clock) * 1000
+                body_error: str | None = None
                 if response.status_code == 200:
-                    return self._parse(response.json(), latency_ms, wait_ms, attempt)
-                last_error = f"HTTP {response.status_code}: {response.text[:400]}"
+                    try:
+                        payload = response.json()
+                    except ValueError:
+                        payload, body_error = {}, f"the 200 response was not JSON: {response.text[:400]}"
+                    body_error = body_error or completion_error(payload, wire="anthropic")
+                    if body_error is None:
+                        return self._parse(payload, latency_ms, wait_ms, attempt)
+                # See the note in OpenAICompatibleSession.next_turn: a 200 with
+                # no completion in it is a failure, not a silent model.
+                last_error = f"HTTP {response.status_code}: {body_error or response.text[:400]}"
                 wait_ms += latency_ms
-                fatal = fatal_provider_error(response.status_code, response.text, self.route.label)
+                fatal = fatal_provider_error(response.status_code, body_error or response.text, self.route.label)
                 if fatal is not None:
                     raise fatal
-                if response.status_code not in self.RETRY_STATUS:
+                if body_error is None and response.status_code not in self.RETRY_STATUS:
                     break
             if attempt < self.MAX_ATTEMPTS:
                 backoff = min(2.0**attempt, 20.0)

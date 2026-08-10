@@ -52,6 +52,26 @@ def _validate_imported_mission(mission_items) -> dict | None:
     if not fence.active:
         return None
 
+    # A radius fence is INERT until home is known: check_position skips the
+    # radius branch when fence.home is None, so every waypoint on Earth is
+    # inside it. The tool path refuses instead (geofence.home_unknown, review
+    # item S8) and so does the managed-mission runner; this path - the only one
+    # that also uploads the plan's OWN geofence and rally points - did not.
+    if fence.max_radius_m > 0 and fence.home is None:
+        return {
+            "status": "rejected",
+            "error": (
+                "a radius geofence is configured but the drone's home position has not been read "
+                "yet, so the imported plan cannot be checked against it"
+            ),
+            "rule": "geofence.home_unknown.imported_plan",
+            "remedy": (
+                "Wait for a GPS/home fix (get_home_position) and import again. Nothing was uploaded "
+                "to the drone; the plan was refused rather than flown unfenced."
+            ),
+            "safety_layer": "droneserver.safety",
+        }
+
     # Altitude frames again: a QGC plan mixes them. seq 0 is the HOME
     # placeholder (its AMSL altitude is not a commanded target), frames 0/5 are
     # AMSL, frames 3/6 are relative to home, 10/11 are terrain-relative.

@@ -180,6 +180,16 @@ def abandon_reason(result: TrialResult, void_streak: int) -> str:
     return ""
 
 
+def _model_behaved(run: AgentRun | None) -> bool:
+    """Did the model do anything at all in this trial?
+
+    Used to keep the VOID streak pointed at the fault it was built for. A run
+    that made a tool call, or produced any text, was served - so however the
+    trial ended, the provider is not the thing to give up on.
+    """
+    return run is not None and bool(run.calls or run.substantive_turns)
+
+
 def _claim_agrees(mission_id: str, claim: str, passed: bool) -> bool:
     """Did the model's own verdict match what the telemetry shows?"""
     expected = EXPECTED_CLAIM_ON_PASS.get(mission_id, "complete")
@@ -625,7 +635,13 @@ async def run_llm_suite(config: SuiteConfig, log=print) -> list[TrialResult]:
                 # Is there any point in flying the next trial? Two ways there
                 # is not, and both abandon this MODEL's run - never the whole
                 # campaign, which moves on to the next model.
-                void_streak = void_streak + 1 if result.not_evaluated else 0
+                # Only a trial in which the MODEL produced nothing counts
+                # towards the streak. VOID also covers trials the instruments
+                # failed to measure (an unwatched flight recorder), and
+                # abandoning a healthy model's remaining trials because our own
+                # telemetry key was rate-limited would throw away the run this
+                # streak exists to protect.
+                void_streak = void_streak + 1 if result.not_evaluated and not _model_behaved(result.run) else 0
                 unusable = abandon_reason(result, void_streak)
                 if unusable:
                     result.provider_stop = unusable
@@ -741,7 +757,14 @@ async def _run_trial(
     # What the scorer needs to tell "the model did nothing" from "the model was
     # never there" (see verdicts.not_evaluated).
     extra["model_turns"] = len(run.turns)
+    #: Turns that carried text or a tool call. A billed turn containing neither
+    #: is not the model choosing silence - see AgentRun.substantive_turns.
+    extra["model_substantive_turns"] = run.substantive_turns
     extra["model_error"] = run.error or ""
+    #: Set only when the PROVIDER ended the run (out of credit, key rejected).
+    #: A trial cut off that way is not a result about the model, whatever it had
+    #: managed to do first.
+    extra["provider_unusable"] = run.provider_unusable
 
     capture_status = await _finalize_capture(config, trial_capture, ctx, mission_id, trial, run, capture_started, log)
 
