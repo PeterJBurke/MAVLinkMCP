@@ -16,7 +16,11 @@ trial could cost at its configured limits, and **refuses to start if the total
 could cross the cap**. Projection deliberately uses uncached input pricing and
 the full turn and output allowance, so it over-estimates: a cap that is only
 respected on average is not a cap. A trial is also stopped mid-flight if its
-own running cost passes a per-trial ceiling.
+own running cost passes a per-trial ceiling - and *that* ceiling, not the
+turn-by-turn arithmetic, is the real bound on a trial, so the projection is
+capped by it (see :func:`project_trial_cost_usd`). Over-estimating without
+limit is not free either: it strands the tail of every key's budget and stops
+an arm of the campaign with money still on it.
 
 **Where prices come from.** Not from memory. ``docs/model_prices.json`` is
 fetched from OpenRouter's public model catalogue, which publishes per-million
@@ -304,7 +308,11 @@ def price_for(prices: dict[str, Price], model: str) -> Price:
 
 
 def project_trial_cost_usd(
-    price: Price, max_turns: int, prompt_tokens_per_turn: int, output_tokens_per_turn: int
+    price: Price,
+    max_turns: int,
+    prompt_tokens_per_turn: int,
+    output_tokens_per_turn: int,
+    ceiling_usd: float | None = None,
 ) -> float:
     """A deliberate over-estimate of what one trial could cost.
 
@@ -315,12 +323,31 @@ def project_trial_cost_usd(
     the write rate, not the base rate, so the projection is made against that;
     before this was fixed the guard's "worst case" was cheaper than a real
     Anthropic turn.
+
+    ``ceiling_usd`` is the per-trial ceiling the harness *itself* enforces
+    (:attr:`droneserver.llm.agent.Limits.max_cost_usd`, ``--max-trial-cost-usd``,
+    $5 by default), and passing it matters as much as the premium above did.
+    Without it the projection for ``claude-opus-5`` at the shipped defaults is
+
+        90 turns x (40 000 x $6.25/M + 4 000 x $25/M) = **$31.50**
+
+    for a trial that really costs about **$0.78** and that the harness stops
+    dead at $5. A guard demanding six times the largest trial its own code
+    permits does not make the cap safer - it strands the last $31.50 of every
+    key and BUDGET-stops a campaign arm with money still on it, which is a way
+    of losing trials rather than a way of saving money.
+
+    So where a ceiling is enforced the projection is capped at that ceiling
+    **plus one more worst-case turn**: the ceiling is tested between turns, so
+    the turn already in flight when it is crossed still completes. Nothing
+    beyond that turn can be bought.
     """
-    if price.cache_write > price.input:
-        return max_turns * price.cost_usd(
-            prompt_tokens_per_turn, 0, output_tokens_per_turn, cache_write_tokens=prompt_tokens_per_turn
-        )
-    return max_turns * price.cost_usd(prompt_tokens_per_turn, 0, output_tokens_per_turn)
+    written = prompt_tokens_per_turn if price.cache_write > price.input else 0
+    per_turn = price.cost_usd(prompt_tokens_per_turn, 0, output_tokens_per_turn, cache_write_tokens=written)
+    every_turn = max_turns * per_turn
+    if ceiling_usd is None:
+        return every_turn
+    return min(every_turn, ceiling_usd + per_turn)
 
 
 @dataclass
@@ -395,6 +422,14 @@ class SpendLedger:
         trial that might have been affordable, under-stating it exhausts a
         balance mid-flight. Missing or unreadable file means zero, with no
         error - a correction that cannot be read must not stop a run.
+
+        "Unreadable" has to mean every way a file can be unreadable, not just
+        the permission errors: only ``OSError`` was caught here, so a
+        corrections file that was not valid UTF-8 - a half-finished write, a
+        file from some other tool - raised ``UnicodeDecodeError`` straight out
+        of the budget guard and ended the campaign at the next trial. The whole
+        point of this method returning zero on failure is that it can never do
+        that.
         """
         path = self.corrections_path
         if not path.exists():
@@ -407,7 +442,7 @@ class SpendLedger:
                         continue
                     with contextlib.suppress(TypeError, ValueError):
                         total += float(row.get("correction_upper_usd") or 0.0)
-        except OSError:
+        except (OSError, UnicodeDecodeError, csv.Error):
             return 0.0
         return total
 
@@ -488,8 +523,8 @@ class SpendLedger:
         cost_usd: float,
         run_dir: str,
         note: str = "",
-        cache_write_tokens: int = 0,
-        uncounted_reasoning_tokens: int = 0,
+        cache_write_tokens: int | None = 0,
+        uncounted_reasoning_tokens: int | None = 0,
     ) -> float:
         """Append one trial's spend. Returns the key's new cumulative total.
 
@@ -498,6 +533,17 @@ class SpendLedger:
         the column remains checkable against the ``cost_usd`` column above it.
         The correction is applied where it belongs - in the guard, via
         :meth:`spent_by`.
+
+        ``cache_write_tokens`` and ``uncounted_reasoning_tokens`` take ``None``
+        for **"this run never measured that quantity"**, which is written as an
+        empty cell - exactly what the pre-2026-08-09 rows carry. That is not the
+        same fact as ``0`` ("measured, and there were none"), and the difference
+        is load-bearing: ``scripts/ledger_cache_write_correction.py`` bounds the
+        under-billing of every row whose split is blank and treats every row
+        that has a number as already exact. A run whose split was never
+        measured but recorded as ``0`` therefore escapes the correction
+        entirely, and the guard goes back to believing an Anthropic total this
+        project has documented as ~13% low.
         """
         cumulative = self.recorded_by(key) + cost_usd
         with self.path.open("a", newline="", encoding="utf-8") as fh:

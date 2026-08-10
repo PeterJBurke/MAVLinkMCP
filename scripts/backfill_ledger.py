@@ -17,6 +17,28 @@ from pathlib import Path
 from droneserver.llm.spend import DEFAULT_LEDGER, DEFAULT_PRICE_FILE, SpendLedger, key_id, load_prices, price_for
 
 
+def measured(row: dict, column: str) -> int | None:
+    """What this run measured for ``column``, or ``None`` if it never did.
+
+    The distinction is the whole reason this helper exists. A run made before
+    the cache-write columns existed has no ``cache_write_tokens`` at all, and
+    writing ``0`` for it would claim the split *was* measured and was nil.
+    ``scripts/ledger_cache_write_correction.py`` reads exactly that claim: it
+    skips every row that carries a number and bounds only the blank ones. So a
+    backfilled ``0`` quietly exempts a pre-fix Anthropic run from the very
+    correction that exists for it, and the budget guard is optimistic again on
+    the key that already ran out of credit mid-campaign. ``None`` is written as
+    an empty cell, which is what those rows honestly are.
+    """
+    raw = row.get(column)
+    if raw is None or not str(raw).strip():
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="backfill the spend ledger from completed runs")
     parser.add_argument("--runs", default="llm_runs", help="directory of run directories")
@@ -44,19 +66,21 @@ def main() -> int:
         for row in csv.DictReader(missions.open(newline="", encoding="utf-8")):
             if (str(run_dir), row["mission_id"], row["trial"]) in already:
                 continue
-            # Runs made before the cache-write columns existed have no value
-            # for them, and 0 is the only honest reading: the split was not
-            # measured. Such a row's cost is therefore a LOWER bound on a
-            # provider that charges a cache-write premium - which is exactly
-            # why the ledger is corrected in a separate file rather than
-            # rewritten (docs/benchmark_runs/spend_ledger_corrections.md).
+            # Runs made before the cache-write columns existed measured no
+            # split, so the row is priced as if there were none and its cost is
+            # a LOWER bound on a provider that charges a cache-write premium.
+            # The blank the row carries is what makes that bound recoverable -
+            # see measured() above and
+            # docs/benchmark_runs/spend_ledger_corrections.md.
+            cache_write = measured(row, "cache_write_tokens")
+            uncounted_reasoning = measured(row, "uncounted_reasoning_tokens")
             try:
                 cost = price.cost_usd(
                     int(row["input_tokens"] or 0),
                     int(row["cached_input_tokens"] or 0),
                     int(row["output_tokens"] or 0),
-                    cache_write_tokens=int(row.get("cache_write_tokens") or 0),
-                    uncounted_reasoning_tokens=int(row.get("uncounted_reasoning_tokens") or 0),
+                    cache_write_tokens=cache_write or 0,
+                    uncounted_reasoning_tokens=uncounted_reasoning or 0,
                 )
             except ValueError:
                 continue
@@ -71,10 +95,10 @@ def main() -> int:
                 trial=int(row["trial"]),
                 input_tokens=int(row["input_tokens"] or 0),
                 cached_input_tokens=int(row["cached_input_tokens"] or 0),
-                cache_write_tokens=int(row.get("cache_write_tokens") or 0),
+                cache_write_tokens=cache_write,
                 output_tokens=int(row["output_tokens"] or 0),
                 reasoning_tokens=int(row["reasoning_tokens"] or 0),
-                uncounted_reasoning_tokens=int(row.get("uncounted_reasoning_tokens") or 0),
+                uncounted_reasoning_tokens=uncounted_reasoning,
                 cost_usd=cost,
                 run_dir=str(run_dir),
                 note=f"backfilled ({row['verdict']})",

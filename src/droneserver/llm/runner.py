@@ -373,16 +373,28 @@ def _run_cost(config: SuiteConfig, run: AgentRun) -> float:
     )
 
 
+#: Largest single-turn prompt this project has ever recorded, over the 4,285
+#: turns in ``llm_runs/*/turns.csv`` as of 2026-08-10 (a 90-turn minimax-m3
+#: trial). Kept as a number rather than a feeling because the estimate below is
+#: only defensible against measured turns.
+LARGEST_RECORDED_PROMPT_TOKENS = 90_499
+
+
 def _prompt_token_estimate(ctx: dict) -> int:
     """Rough size of one request to the model, in tokens.
 
     Used only to project a worst-case trial cost for the budget guard, so it
-    errs high: the drone server publishes 98 tools whose schemas run to about
-    22,000 tokens, and the conversation grows on top of that. 40,000 is a
-    deliberate over-estimate; under-estimating here would let a run slip past
-    the cap.
+    must err high: the drone server publishes 98 tools whose schemas run to
+    about 22,000 tokens, and the conversation grows on top of that every turn.
+
+    This said 40,000 and called it "a deliberate over-estimate". It was not one.
+    Of the 4,285 turns recorded to date, **890 - one in five - exceeded it**,
+    the largest by 2.26x (see :data:`LARGEST_RECORDED_PROMPT_TOKENS`). The
+    figure now sits above every turn ever measured, which is what the word
+    over-estimate has to mean if the projection is to bound the turn that is
+    still in flight when a trial's cost ceiling is crossed.
     """
-    return int(ctx.get("prompt_token_estimate", 40_000))
+    return int(ctx.get("prompt_token_estimate", 100_000))
 
 
 def _record_spend(config: SuiteConfig, result: TrialResult, log) -> None:
@@ -564,6 +576,11 @@ async def run_llm_suite(config: SuiteConfig, log=print) -> list[TrialResult]:
                         config.limits.max_turns,
                         prompt_tokens_per_turn=_prompt_token_estimate(ctx),
                         output_tokens_per_turn=4000,
+                        # The ceiling this harness enforces turn by turn is the
+                        # real bound on a trial; without it the guard demanded
+                        # $31.50 of headroom for a $0.78 trial it would itself
+                        # have stopped at $5.
+                        ceiling_usd=config.limits.max_cost_usd,
                     )
                     try:
                         left = config.ledger.check_before_trial(config.key_id, projected)
@@ -586,6 +603,15 @@ async def run_llm_suite(config: SuiteConfig, log=print) -> list[TrialResult]:
                         break
                     if not await _recover_link(config, harness, log):
                         break
+                    # The attempt being abandoned still called the model, and
+                    # the provider still billed for it. Only the retry used to
+                    # reach the ledger, so a link failure quietly bought a whole
+                    # mission's tokens off the books - and the guard, which is
+                    # the thing standing between this project and another
+                    # exhausted key, went on believing the lower number. The
+                    # trial that gets REPORTED is still the retry; this row is
+                    # the money, marked LINK for what it was.
+                    _record_spend(config, result, log)
                     log(f"[{_utc()}] retrying {mission_id} trial {trial} after a link recovery")
                     result = await _run_trial(
                         config, harness, ctx, prompts[mission_id], mission_id, trial, agent_version, log
