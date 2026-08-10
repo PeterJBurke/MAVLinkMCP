@@ -21,7 +21,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from droneserver.capture.manifest import write_manifest
-from droneserver.capture.verify import verify_bundle
+from droneserver.capture.verify import REQUIRED_ARTIFACTS, TRANSCRIPT_ARTIFACT, verify_bundle
 
 VEHICLE_SYSID = 1
 
@@ -531,3 +531,15 @@ def test_a_live_link_reports_its_worst_sample_age_and_passes(tmp_path):
     assert check.complete, check.problems
     telemetry = [c for c in check.checks if c.name == "telemetry.csv"][0]
     assert "worst sample age 0.1s" in telemetry.detail
+
+
+def test_every_artifact_the_module_calls_required_has_a_check(tmp_path):
+    """REQUIRED_ARTIFACTS was decorative - nothing read it.
+
+    A name could be added to the Plan 19 required list and no check would
+    appear, which is the failure mode this whole module exists to prevent.
+    """
+    check = verify_bundle(complete_bundle(tmp_path), require_transcript=True)
+    checked = {c.name for c in check.checks}
+    assert set(REQUIRED_ARTIFACTS) <= checked
+    assert TRANSCRIPT_ARTIFACT in checked
