@@ -18,9 +18,12 @@ present, and each one is non-trivial in the specific way that its own failure
 mode would betray.
 
 ===========================  ==================================================
-``manifest.json``            parses, and **lists every other file in the
-                             directory** at its true size. A file written after
-                             the manifest is a file nobody can verify.
+``manifest.json``            parses, **lists every other file in the directory**
+                             at its true size, lists nothing that is *not* there,
+                             and every recorded ``sha256`` matches the bytes on
+                             disk. A file written after the manifest is a file
+                             nobody can verify; a hash nobody re-computes is a
+                             promise, not a check.
 ``mavlink.tlog``             non-empty.
 ``mavlink.jsonl``            carries **both directions**: at least one message
                              from the vehicle's sysid and at least one from any
@@ -29,13 +32,21 @@ mode would betray.
                              path - the exact shape of blocker B-6, where a
                              plain MAVProxy ``--out`` forward yielded a
                              perfectly valid-looking tlog containing no commands
-                             at all.
-``telemetry.csv``            enough rows *for a trial of this length*, and
-                             recording all the way to the end of it. Catches a
-                             MavSDK recorder that never connected (a header and
-                             nothing else) and one that connected and then died
-                             mid-flight - which no fixed row count could tell
-                             from a short mission. T7-T9 last seconds and
+                             at all. A ground-station side consisting only of
+                             HEARTBEATs is *not* evidence that commands were
+                             captured, so when the vehicle is seen to arm - the
+                             arm command demonstrably crossed this wire - the
+                             ground-station side must carry something other than
+                             heartbeats.
+``telemetry.csv``            enough rows *for a trial of this length*, rows that
+                             actually carry vehicle state, no long gap between
+                             consecutive rows, and recording all the way to the
+                             end of the trial. Catches a MavSDK recorder that
+                             never connected (which still emits perfectly
+                             evenly-spaced rows - every cell empty), one whose
+                             sampler stalled (ten rows spread over twelve
+                             minutes used to pass), and one that connected and
+                             then died mid-flight. T7-T9 last seconds and
                              legitimately produce single-figure row counts.
 ``audit_slice.csv``          present and non-empty (it is absent entirely when
                              the harness was run without ``--audit-log``, which
@@ -44,23 +55,33 @@ mode would betray.
 ``events.jsonl``             present, and every line parses as JSON.
 ``transcript.jsonl``         when required (LLM-in-the-loop trials): present,
                              every line parses, and the role counts are reported.
-dataflash ``.BIN`` / ``.ulg``  required **only if the telemetry shows the
-                             aircraft armed**. A mission that never arms writes
-                             no autopilot log, and demanding one there would
-                             mean copying somebody else's flight; but a trial
-                             that *did* fly and kept no log is degraded.
+dataflash ``.BIN`` / ``.ulg``  required **only if the aircraft is seen to have
+                             armed** - in the telemetry, in the vehicle's own
+                             HEARTBEATs, or in the derived events. A mission that
+                             never arms writes no autopilot log, and demanding
+                             one there would mean copying somebody else's
+                             flight; but a trial that *did* fly and kept no log
+                             is degraded. Reading the arm evidence from three
+                             places matters because the one that used to be
+                             consulted - the telemetry - is exactly the artifact
+                             that is empty when the recorder never connected,
+                             and an empty telemetry file was therefore able to
+                             excuse a missing dataflash log on a trial that flew.
 ===========================  ==================================================
 
-Nothing here re-hashes the artifacts: ``write_manifest`` hashed them moments
-earlier from the same bytes. What is checked instead is *coverage* - that the
-manifest knows about every file - and size agreement, which is what catches an
-artifact appearing after the manifest was sealed.
+The manifest's ``sha256`` values are re-computed here from the bytes on disk.
+``write_manifest`` hashed the same files moments earlier, so in-run this only
+ever catches an artifact that changed *after* the manifest was sealed - but this
+verifier is also what a third party runs on the downloaded archive, where
+re-hashing is the whole point. Size agreement alone cannot see a same-length
+substitution or a log that was corrupted in transit.
 
 This module is pure stdlib and reads only. It imports neither pymavlink nor
 mavsdk, so it can be used (and tested) anywhere.
 """
 
 import csv
+import hashlib
 import json
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -98,6 +119,38 @@ MIN_TELEMETRY_COVERAGE = 0.8
 #: of recorder start-up and shut-down is a large fraction of a short trial and
 #: says nothing about the recorder's health.
 COVERAGE_MIN_TRIAL_S = 30.0
+
+#: Longest acceptable interval between two consecutive ``telemetry.csv`` rows.
+#: The recorder emits at 10 Hz; every trial ever flown on this project has a
+#: worst-case inter-row gap under 0.2 s, so five seconds is two orders of
+#: magnitude of headroom and still catches the failure the row *count* cannot:
+#: a sampler that stalled or a recorder restarted mid-trial. Without it, ten
+#: rows spread evenly over a twelve-minute trial satisfied both the row floor
+#: (which is capped at :data:`DEFAULT_MIN_TELEMETRY_ROWS`) and the coverage
+#: check, and the bundle was reported complete.
+MAX_TELEMETRY_GAP_S = 5.0
+
+#: Columns whose emptiness in *every* row means the recorder produced a shape
+#: without a recording. A MavSDK recorder that never connects still runs its
+#: timer and writes perfectly evenly-spaced rows with every cell blank, so the
+#: row count, the coverage and the gap all look healthy.
+TELEMETRY_STATE_COLUMNS = (
+    "lat_deg",
+    "lon_deg",
+    "abs_alt_m",
+    "rel_alt_m",
+    "flight_mode",
+    "armed",
+    "in_air",
+)
+
+#: MAV_MODE_FLAG_SAFETY_ARMED, the bit in HEARTBEAT.base_mode that says the
+#: aircraft is armed. Duplicated from :mod:`droneserver.capture.events` to keep
+#: this module pure stdlib and importable anywhere.
+_MAV_MODE_FLAG_SAFETY_ARMED = 0x80
+
+#: Event categories that mean the aircraft left the ground under power.
+_FLEW_EVENT_CATEGORIES = ("arm", "takeoff")
 
 
 @dataclass
@@ -145,7 +198,15 @@ def _count_lines(path: Path) -> int:
         return sum(1 for _ in fh)
 
 
-def _check_manifest(trial_dir: Path) -> Check:
+def _sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _check_manifest(trial_dir: Path, *, verify_hashes: bool = True) -> Check:
     path = trial_dir / "manifest.json"
     if not path.is_file():
         return Check("manifest.json", False, "missing")
@@ -157,7 +218,10 @@ def _check_manifest(trial_dir: Path) -> Check:
     artifacts = document.get("artifacts")
     if not isinstance(artifacts, list):
         return Check("manifest.json", False, "no artifacts list")
-    listed = {a.get("name"): a.get("bytes") for a in artifacts if isinstance(a, dict)}
+    # A nameless entry is not an artifact anyone can look up; str() keeps the
+    # key space comparable with the paths found on disk.
+    listed = {str(a.get("name")): a.get("bytes") for a in artifacts if isinstance(a, dict)}
+    hashes = {str(a.get("name")): a.get("sha256") for a in artifacts if isinstance(a, dict)}
 
     on_disk = {
         p.relative_to(trial_dir).as_posix(): p.stat().st_size
@@ -167,10 +231,37 @@ def _check_manifest(trial_dir: Path) -> Check:
     unlisted = sorted(set(on_disk) - set(listed))
     if unlisted:
         return Check("manifest.json", False, f"does not list {', '.join(unlisted)}")
+    # The other direction: an artifact the manifest swears to that is not in
+    # the bundle. Nothing else notices - the per-file checks above only look at
+    # the files they know by name - so an archive can lose a screenshot, a
+    # transcript or a dataflash log between hashing and shipping and still be
+    # reported complete.
+    vanished = sorted(set(listed) - set(on_disk))
+    if vanished:
+        return Check("manifest.json", False, f"lists {', '.join(vanished)}, which is not in the bundle")
     stale = sorted(n for n, size in on_disk.items() if listed.get(n) != size)
     if stale:
         return Check("manifest.json", False, f"recorded size differs on {', '.join(stale)}")
-    return Check("manifest.json", True, f"lists {len(listed)} artifact(s)")
+
+    detail = f"lists {len(listed)} artifact(s)"
+    if not verify_hashes:
+        return Check("manifest.json", True, detail + " (sha256 not re-computed)")
+    mismatched, unhashable = [], []
+    for name in sorted(on_disk):
+        recorded = hashes.get(name)
+        if not isinstance(recorded, str) or not recorded:
+            mismatched.append(f"{name} (no sha256 recorded)")
+            continue
+        try:
+            if _sha256(trial_dir / name) != recorded:
+                mismatched.append(name)
+        except OSError as e:
+            unhashable.append(f"{name} ({type(e).__name__})")
+    if mismatched:
+        return Check("manifest.json", False, f"sha256 does not match on {', '.join(mismatched)}")
+    if unhashable:
+        return Check("manifest.json", False, f"could not re-hash {', '.join(unhashable)}")
+    return Check("manifest.json", True, detail + ", all sha256 verified")
 
 
 def _check_tlog(trial_dir: Path) -> Check:
@@ -183,19 +274,29 @@ def _check_tlog(trial_dir: Path) -> Check:
     return Check("mavlink.tlog", True, f"{size} bytes")
 
 
-def _check_mavlink_directions(trial_dir: Path, vehicle_sysid: int) -> Check:
-    """Both halves of the link, or the capture is a telemetry recording.
+@dataclass
+class _MavlinkEvidence:
+    """What one read of ``mavlink.jsonl`` establishes about the trial."""
 
-    ``direction`` is the tap's own label (vehicle sysid -> ``recv``, anything
-    else -> ``sent``); the sysids are counted alongside so the detail line says
-    *who* was heard, not merely that two labels appeared.
-    """
+    present: bool = False
+    unreadable: str = ""
+    recv: int = 0
+    sent: int = 0
+    sysids: dict[int, int] = field(default_factory=dict)
+    bad_lines: int = 0
+    #: Ground-station-side messages that are not HEARTBEAT - i.e. plausible
+    #: commands. A heartbeat is not evidence that a command was captured.
+    gcs_non_heartbeat: int = 0
+    #: The vehicle's own HEARTBEAT reported MAV_MODE_FLAG_SAFETY_ARMED.
+    vehicle_armed: bool = False
+
+
+def _read_mavlink(trial_dir: Path) -> _MavlinkEvidence:
     path = trial_dir / "mavlink.jsonl"
+    evidence = _MavlinkEvidence()
     if not path.is_file():
-        return Check("mavlink.jsonl", False, "missing")
-    directions: dict[str, int] = {}
-    sysids: dict[int, int] = {}
-    bad_lines = 0
+        return evidence
+    evidence.present = True
     try:
         with path.open(encoding="utf-8") as fh:
             for line in fh:
@@ -204,19 +305,56 @@ def _check_mavlink_directions(trial_dir: Path, vehicle_sysid: int) -> Check:
                 try:
                     record = json.loads(line)
                 except json.JSONDecodeError:
-                    bad_lines += 1
+                    evidence.bad_lines += 1
                     continue
-                directions[record.get("direction", "?")] = directions.get(record.get("direction", "?"), 0) + 1
+                direction = record.get("direction", "?")
+                msg_type = str(record.get("msg_type") or "").upper()
+                if direction == "recv":
+                    evidence.recv += 1
+                    base_mode = (record.get("fields") or {}).get("base_mode")
+                    if (
+                        msg_type == "HEARTBEAT"
+                        and isinstance(base_mode, (int, float))
+                        and int(base_mode) & _MAV_MODE_FLAG_SAFETY_ARMED
+                    ):
+                        evidence.vehicle_armed = True
+                elif direction == "sent":
+                    evidence.sent += 1
+                    if msg_type != "HEARTBEAT":
+                        evidence.gcs_non_heartbeat += 1
                 sysid = record.get("sysid")
                 if isinstance(sysid, int):
-                    sysids[sysid] = sysids.get(sysid, 0) + 1
+                    evidence.sysids[sysid] = evidence.sysids.get(sysid, 0) + 1
     except OSError as e:
-        return Check("mavlink.jsonl", False, f"unreadable ({type(e).__name__}: {e})")
+        evidence.unreadable = f"{type(e).__name__}: {e}"
+    return evidence
 
-    recv, sent = directions.get("recv", 0), directions.get("sent", 0)
-    detail = f"recv={recv} sent={sent} sysids={dict(sorted(sysids.items()))}"
-    if bad_lines:
-        detail += f" ({bad_lines} unparsable line(s))"
+
+def _check_mavlink_directions(evidence: _MavlinkEvidence, vehicle_sysid: int, *, flew: bool) -> Check:
+    """Both halves of the link, or the capture is a telemetry recording.
+
+    ``direction`` is the tap's own label (vehicle sysid -> ``recv``, anything
+    else -> ``sent``); the sysids are counted alongside so the detail line says
+    *who* was heard, not merely that two labels appeared.
+
+    ``sent > 0`` on its own proves only that *something* other than the vehicle
+    was on the wire, and the ground station heartbeats once a second whether or
+    not any command is being forwarded. So when the aircraft is known to have
+    armed, the ground-station side must carry at least one non-HEARTBEAT
+    message: the arm command crossed this wire, and a capture that does not
+    contain it is not a record of what the model commanded.
+    """
+    if not evidence.present:
+        return Check("mavlink.jsonl", False, "missing")
+    if evidence.unreadable:
+        return Check("mavlink.jsonl", False, f"unreadable ({evidence.unreadable})")
+
+    recv, sent = evidence.recv, evidence.sent
+    detail = (
+        f"recv={recv} sent={sent} commands={evidence.gcs_non_heartbeat} sysids={dict(sorted(evidence.sysids.items()))}"
+    )
+    if evidence.bad_lines:
+        detail += f" ({evidence.bad_lines} unparsable line(s))"
     if recv == 0 and sent == 0:
         return Check("mavlink.jsonl", False, "no messages recorded")
     if sent == 0:
@@ -228,23 +366,56 @@ def _check_mavlink_directions(trial_dir: Path, vehicle_sysid: int) -> Check:
         )
     if recv == 0:
         return Check("mavlink.jsonl", False, f"one direction only - nothing from the vehicle [{detail}]")
+    if flew and evidence.gcs_non_heartbeat == 0:
+        return Check(
+            "mavlink.jsonl",
+            False,
+            "the ground-station side is HEARTBEATs and nothing else, yet the aircraft armed - the command "
+            f"that armed it crossed this wire and was not captured [{detail}]",
+        )
     return Check("mavlink.jsonl", True, detail)
 
 
-def _read_telemetry(trial_dir: Path) -> tuple[int, bool, float]:
-    """``(data row count, did any row report armed, last t_rel_s)``."""
+@dataclass
+class _TelemetryEvidence:
+    """What one read of ``telemetry.csv`` establishes about the trial."""
+
+    rows: int = 0
+    armed: bool = False
+    last_t: float = 0.0
+    #: Longest interval between consecutive rows, and when it ended.
+    max_gap: float = 0.0
+    max_gap_at: float = 0.0
+    #: Any row carried a value in any of :data:`TELEMETRY_STATE_COLUMNS`.
+    has_state: bool = False
+    #: The file has at least one of those columns, so ``has_state`` means
+    #: something. A CSV without them cannot be judged this way and says so
+    #: rather than passing silently.
+    state_columns_present: bool = False
+
+
+def _read_telemetry(trial_dir: Path) -> _TelemetryEvidence:
     path = trial_dir / "telemetry.csv"
-    rows, armed, last_t = 0, False, 0.0
+    evidence = _TelemetryEvidence()
+    previous_t: float | None = None
     with path.open(newline="", encoding="utf-8") as fh:
-        for record in csv.DictReader(fh):
-            rows += 1
+        reader = csv.DictReader(fh)
+        evidence.state_columns_present = any(c in (reader.fieldnames or ()) for c in TELEMETRY_STATE_COLUMNS)
+        for record in reader:
+            evidence.rows += 1
             if str(record.get("armed", "")).strip().lower() in ("true", "1"):
-                armed = True
+                evidence.armed = True
+            if not evidence.has_state:
+                evidence.has_state = any(str(record.get(c, "") or "").strip() for c in TELEMETRY_STATE_COLUMNS)
             try:
-                last_t = max(last_t, float(record.get("t_rel_s") or 0.0))
+                t = float(record.get("t_rel_s") or 0.0)
             except (TypeError, ValueError):
-                pass
-    return rows, armed, last_t
+                continue
+            evidence.last_t = max(evidence.last_t, t)
+            if previous_t is not None and t - previous_t > evidence.max_gap:
+                evidence.max_gap, evidence.max_gap_at = t - previous_t, t
+            previous_t = t
+    return evidence
 
 
 def _trial_duration_s(trial_dir: Path) -> float | None:
@@ -259,28 +430,37 @@ def _trial_duration_s(trial_dir: Path) -> float | None:
     return seconds if seconds > 0 else None
 
 
-def _check_telemetry(trial_dir: Path, min_rows: int) -> tuple[Check, bool]:
-    """Enough rows for a trial of this length, recorded all the way to its end.
+def _check_telemetry(trial_dir: Path, min_rows: int) -> tuple[Check, _TelemetryEvidence]:
+    """Enough rows for a trial of this length, carrying state, with no long gap,
+    recorded all the way to the end.
 
     A fixed row count cannot serve both a twelve-minute survey and a two-second
     parameter read, so the floor is the caller's ceiling or one row per second
-    of trial, whichever is smaller, and the real test of a long trial is
-    *coverage*: a recorder that connected and then died leaves a plausible
-    number of rows that all stop early.
+    of trial, whichever is smaller. That floor is a weak instrument on its own -
+    it is capped at ten rows, which a twelve-minute trial clears with one sample
+    a minute - so three other things are asked of the file: that its rows carry
+    vehicle state at all (a recorder that never connected writes beautifully
+    regular empty rows), that no two consecutive rows are far apart (a sampler
+    that stalled), and that the recording reaches the end of the trial (a
+    recorder that connected and then died).
     """
     path = trial_dir / "telemetry.csv"
     if not path.is_file():
-        return Check("telemetry.csv", False, "missing"), False
+        return Check("telemetry.csv", False, "missing"), _TelemetryEvidence()
     try:
-        rows, armed, last_t = _read_telemetry(trial_dir)
+        evidence = _read_telemetry(trial_dir)
     except (OSError, csv.Error) as e:
-        return Check("telemetry.csv", False, f"unreadable ({type(e).__name__}: {e})"), False
+        return Check("telemetry.csv", False, f"unreadable ({type(e).__name__}: {e})"), _TelemetryEvidence()
 
+    rows, armed, last_t = evidence.rows, evidence.armed, evidence.last_t
     duration = _trial_duration_s(trial_dir)
     floor = min_rows if duration is None else max(1, min(min_rows, int(duration)))
     detail = f"{rows} rows, armed={armed}"
     if duration is not None:
         detail += f", spanning {last_t:.0f}s of a {duration:.0f}s trial"
+    detail += f", worst gap {evidence.max_gap:.1f}s"
+    if not evidence.state_columns_present:
+        detail += " (no state columns to check)"
 
     if rows < floor:
         return Check(
@@ -289,15 +469,29 @@ def _check_telemetry(trial_dir: Path, min_rows: int) -> tuple[Check, bool]:
             f"{rows} row(s), below the floor of {floor} for a {duration:.0f}s trial"
             if duration is not None
             else f"{rows} row(s), below the floor of {floor}",
-        ), armed
+        ), evidence
+    if evidence.state_columns_present and not evidence.has_state:
+        return Check(
+            "telemetry.csv",
+            False,
+            f"{rows} row(s) and not one carries any vehicle state (position, mode, armed all empty) - "
+            "the recorder ran but never connected to the drone",
+        ), evidence
+    if evidence.max_gap > MAX_TELEMETRY_GAP_S:
+        return Check(
+            "telemetry.csv",
+            False,
+            f"a {evidence.max_gap:.0f}s hole in the recording ending at t={evidence.max_gap_at:.0f}s "
+            f"({detail}) - the recorder stopped sampling mid-trial",
+        ), evidence
     if duration is not None and duration >= COVERAGE_MIN_TRIAL_S and last_t < MIN_TELEMETRY_COVERAGE * duration:
         return Check(
             "telemetry.csv",
             False,
             f"the recording stops {duration - last_t:.0f}s before the trial ends "
             f"({detail}) - the recorder died mid-trial",
-        ), armed
-    return Check("telemetry.csv", True, detail), armed
+        ), evidence
+    return Check("telemetry.csv", True, detail), evidence
 
 
 def _check_jsonl(trial_dir: Path, name: str) -> Check:
@@ -342,6 +536,32 @@ def _check_audit_slice(trial_dir: Path) -> Check:
     return Check("audit_slice.csv", True, f"{rows} audit row(s)")
 
 
+def _flew_per_events(trial_dir: Path) -> bool:
+    """Did the derived event narrative record an arm or a takeoff?
+
+    Third witness to the same fact, for a bundle whose ``mavlink.jsonl`` is
+    absent and whose telemetry is empty. Never raises: unreadable events are
+    simply no evidence.
+    """
+    path = trial_dir / "events.jsonl"
+    if not path.is_file():
+        return False
+    try:
+        with path.open(encoding="utf-8") as fh:
+            for line in fh:
+                if not line.strip():
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(record, dict) and record.get("category") in _FLEW_EVENT_CATEGORIES:
+                    return True
+    except OSError:
+        return False
+    return False
+
+
 def _check_dataflash(trial_dir: Path, expected: bool) -> Check:
     logs = [p for p in trial_dir.iterdir() if p.is_file() and p.suffix.lower() in DATAFLASH_SUFFIXES]
     if logs:
@@ -364,6 +584,7 @@ def verify_bundle(
     min_telemetry_rows: int = DEFAULT_MIN_TELEMETRY_ROWS,
     vehicle_sysid: int = 1,
     expect_dataflash: bool | None = None,
+    verify_hashes: bool = True,
 ) -> BundleCheck:
     """Verify one trial's bundle on disk. See the module docstring.
 
@@ -375,7 +596,11 @@ def verify_bundle(
             smaller (see :func:`_check_telemetry`).
         vehicle_sysid: the autopilot's MAVLink sysid, for the direction check.
         expect_dataflash: force the dataflash expectation. ``None`` (default)
-            derives it from the telemetry: expected iff the aircraft armed.
+            derives it from the evidence that the aircraft armed, in *any* of
+            the telemetry, the vehicle's HEARTBEATs or the derived events.
+        verify_hashes: re-compute each artifact's sha256 and compare it with the
+            manifest. On by default; pass ``False`` only where the cost of
+            re-reading very large logs matters more than the guarantee.
 
     Never raises. A verification that cannot run is itself reported as a failed
     check, because a verifier that throws would be one more silent failure.
@@ -385,17 +610,23 @@ def verify_bundle(
     if not trial_dir.is_dir():
         return BundleCheck(trial_dir, [Check("trial directory", False, "missing")])
 
-    telemetry_check, armed = _check_telemetry(trial_dir, min_telemetry_rows)
+    telemetry_check, telemetry = _check_telemetry(trial_dir, min_telemetry_rows)
+    mavlink = _read_mavlink(trial_dir)
+    # Did this trial fly? Asked of every witness, because the failure being
+    # guarded against is precisely one witness going silent: an empty telemetry
+    # file used to mean "never armed", which waived the dataflash requirement on
+    # a trial that flew and lost its autopilot log.
+    flew = telemetry.armed or mavlink.vehicle_armed or _flew_per_events(trial_dir)
 
     checks.append(_check_tlog(trial_dir))
-    checks.append(_check_mavlink_directions(trial_dir, vehicle_sysid))
+    checks.append(_check_mavlink_directions(mavlink, vehicle_sysid, flew=flew))
     checks.append(telemetry_check)
     checks.append(_check_audit_slice(trial_dir))
     checks.append(_check_jsonl(trial_dir, "events.jsonl"))
     if require_transcript:
         checks.append(_check_jsonl(trial_dir, TRANSCRIPT_ARTIFACT))
-    checks.append(_check_dataflash(trial_dir, armed if expect_dataflash is None else expect_dataflash))
+    checks.append(_check_dataflash(trial_dir, flew if expect_dataflash is None else expect_dataflash))
     # Last: it asserts that every file above is listed, so it must run after
     # nothing else is going to be written.
-    checks.append(_check_manifest(trial_dir))
+    checks.append(_check_manifest(trial_dir, verify_hashes=verify_hashes))
     return BundleCheck(trial_dir, checks)

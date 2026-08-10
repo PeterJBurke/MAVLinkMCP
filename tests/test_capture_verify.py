@@ -325,3 +325,172 @@ def test_every_required_artifact_is_actually_checked(tmp_path, required):
     check = verify_bundle(trial_dir)
     assert not check.complete
     assert any(p.startswith(f"{required}: ") for p in check.problems)
+
+
+# --- the silent failures the first version of this verifier passed ----------
+#
+# Each of the five below was demonstrated against ``verify_bundle`` as it stood
+# on 2026-08-09: every one of them reported ``complete``.
+
+
+def _reseal(trial_dir, seconds=20.0):
+    """Rewrite the manifest over whatever the test has just changed."""
+    started = datetime(2026, 8, 9, 19, 0, 0, tzinfo=timezone.utc)
+    write_manifest(
+        trial_dir,
+        {
+            "started_ts": started.isoformat(),
+            "ended_ts": (started + timedelta(seconds=seconds)).isoformat(),
+        },
+    )
+
+
+def _append_mavlink(trial_dir, record):
+    with (trial_dir / "mavlink.jsonl").open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(record) + "\n")
+
+
+def _armed_heartbeat():
+    """The vehicle's own heartbeat with MAV_MODE_FLAG_SAFETY_ARMED set."""
+    return {
+        "ts": "2026-08-09T19:00:02+00:00",
+        "t_rel_s": 2.0,
+        "direction": "recv",
+        "msg_type": "HEARTBEAT",
+        "sysid": VEHICLE_SYSID,
+        "compid": 1,
+        "seq": 99,
+        "fields": {"base_mode": 0x81, "custom_mode": 4},
+    }
+
+
+def _gcs_heartbeat():
+    return {
+        "ts": "2026-08-09T19:00:01+00:00",
+        "t_rel_s": 1.0,
+        "direction": "sent",
+        "msg_type": "HEARTBEAT",
+        "sysid": 245,
+        "compid": 190,
+        "seq": 1,
+        "fields": {},
+    }
+
+
+def test_a_recorder_that_never_connected_is_not_a_recording(tmp_path):
+    """Evenly-spaced rows, every cell empty - and a real flight underneath.
+
+    A MavSDK recorder whose ``connect`` never succeeds still runs its sampling
+    timer, so the file has the right shape, the right row count and full
+    coverage of the trial. It was passing. Worse, its empty ``armed`` column was
+    read as "the aircraft never armed", which waived the dataflash requirement
+    on a trial that flew - so a bundle with no telemetry AND no autopilot log
+    was reported complete. This is the exact content of ``T6/trial_1`` in the
+    canonical T1-T9 run: two rows, timestamps only.
+    """
+    trial_dir = complete_bundle(tmp_path, dataflash=False, telemetry_rows=0)
+    header = "t_iso,t_rel_s,lat_deg,lon_deg,abs_alt_m,rel_alt_m,flight_mode,armed,in_air\n"
+    body = "".join(f"2026-08-09T19:00:{i:02d}+00:00,{i}.0,,,,,,,\n" for i in range(20))
+    (trial_dir / "telemetry.csv").write_text(header + body, encoding="utf-8")
+    _append_mavlink(trial_dir, _armed_heartbeat())
+    _reseal(trial_dir)
+
+    check = verify_bundle(trial_dir)
+    assert not check.complete
+    assert any("not one carries any vehicle state" in p for p in check.problems)
+    # …and the flight is still known to have happened, from the vehicle's own
+    # heartbeats, so the missing dataflash log is reported too.
+    assert any(p.startswith("dataflash: the aircraft armed") for p in check.problems)
+
+
+def test_a_flight_is_recognised_from_the_heartbeats_when_the_telemetry_is_empty(tmp_path):
+    """Arming is a fact about the aircraft, not about one recorder."""
+    trial_dir = complete_bundle(tmp_path, armed=False, dataflash=False)
+    _append_mavlink(trial_dir, _armed_heartbeat())
+    _reseal(trial_dir)
+    check = verify_bundle(trial_dir)
+    assert any(p.startswith("dataflash: the aircraft armed") for p in check.problems)
+
+
+def test_a_sampler_that_stalled_leaves_a_hole_the_row_count_cannot_see(tmp_path):
+    """Ten rows spread over a twelve-minute trial used to be "complete".
+
+    The row floor is capped at ten and the coverage check only asks that the
+    *last* row is near the end, so a recording of one sample a minute satisfied
+    both.
+    """
+    trial_dir = complete_bundle(tmp_path, telemetry_rows=10, telemetry_step_s=74.0, trial_seconds=740.0)
+    check = verify_bundle(trial_dir)
+    assert not check.complete
+    assert any("hole in the recording" in p for p in check.problems)
+
+
+def test_a_ten_hz_recording_is_not_reported_as_holey(tmp_path):
+    """The real thing: 0.1 s between rows, worst-case gap ~0.2 s."""
+    trial_dir = complete_bundle(tmp_path, telemetry_rows=200, telemetry_step_s=0.1, trial_seconds=20.0)
+    assert verify_bundle(trial_dir).complete
+
+
+def test_a_ground_station_side_of_pure_heartbeats_is_not_evidence_of_commands(tmp_path):
+    """One heartbeat a second satisfied "both directions" on its own.
+
+    A ground station heartbeats whether or not the tap is on a path that
+    carries its commands, so ``sent > 0`` proves nothing. If the aircraft
+    armed, the arm command crossed this wire and has to be in the file.
+    """
+    trial_dir = complete_bundle(tmp_path, sent=0)
+    _append_mavlink(trial_dir, _gcs_heartbeat())
+    _reseal(trial_dir)
+    check = verify_bundle(trial_dir)
+    assert not check.complete
+    assert any("HEARTBEATs and nothing else" in p for p in check.problems)
+
+
+def test_a_trial_that_never_armed_may_legitimately_send_no_commands(tmp_path):
+    """T6 and T8: every tool call was refused, so nothing reached the wire."""
+    trial_dir = complete_bundle(tmp_path, armed=False, dataflash=False, sent=0)
+    _append_mavlink(trial_dir, _gcs_heartbeat())
+    _reseal(trial_dir)
+    check = verify_bundle(trial_dir)
+    assert not any("HEARTBEATs and nothing else" in p for p in check.problems), check.problems
+
+
+def test_an_artifact_that_vanished_after_the_manifest_is_degraded(tmp_path):
+    """The manifest swears to a file that is not in the bundle.
+
+    Only files the verifier knows by name were ever looked for, so an archive
+    could lose a screenshot, a transcript or a dataflash log between hashing
+    and shipping and still be reported complete.
+    """
+    trial_dir = complete_bundle(tmp_path)
+    (trial_dir / "extra_screenshot.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    _reseal(trial_dir)
+    (trial_dir / "extra_screenshot.png").unlink()
+    check = verify_bundle(trial_dir)
+    assert not check.complete
+    assert any("extra_screenshot.png, which is not in the bundle" in p for p in check.problems)
+
+
+def test_an_artifact_rewritten_at_the_same_length_is_degraded(tmp_path):
+    """Size agreement is not integrity: the sha256 has to be re-computed.
+
+    A third party checking the downloaded archive is the whole audience for
+    this check - a dataflash log corrupted in transit keeps its length.
+    """
+    trial_dir = complete_bundle(tmp_path)
+    log = trial_dir / "T1_t1.BIN"
+    log.write_bytes(b"\x00" * log.stat().st_size)
+    check = verify_bundle(trial_dir)
+    assert not check.complete
+    assert any("sha256 does not match on T1_t1.BIN" in p for p in check.problems)
+    # …and the same bundle passes when the caller explicitly opts out.
+    assert verify_bundle(trial_dir, verify_hashes=False).complete
+
+
+def test_the_manifest_check_says_whether_hashes_were_verified(tmp_path):
+    """A check that was skipped must never read as a check that passed."""
+    trial_dir = complete_bundle(tmp_path)
+    verified = [c for c in verify_bundle(trial_dir).checks if c.name == "manifest.json"][0]
+    skipped = [c for c in verify_bundle(trial_dir, verify_hashes=False).checks if c.name == "manifest.json"][0]
+    assert "all sha256 verified" in verified.detail
+    assert "sha256 not re-computed" in skipped.detail
