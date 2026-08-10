@@ -2,6 +2,7 @@
 
 import json
 import os
+import time
 from pathlib import Path
 
 from droneserver.capture.manifest import (
@@ -9,6 +10,7 @@ from droneserver.capture.manifest import (
     RemoteDataflashError,
     gather_versions,
     parse_remote_spec,
+    remote_clock_offset_s,
     retain_dataflash,
     retain_remote_dataflash,
     sha256_file,
@@ -268,3 +270,62 @@ def test_retain_remote_falls_back_to_mtime_without_a_birth_time(tmp_path, monkey
     _fake_subprocess(monkeypatch, "0 1786000300.0 4096 /logs/00000007.BIN\n")
     dest = retain_remote_dataflash("sitl:/logs", tmp_path, "T1_t1", min_mtime=1786000200.0)
     assert dest is not None and dest.name == "T1_t1.BIN"
+
+
+# --- two clocks ------------------------------------------------------------
+#
+# The birth-time guard compares a stamp from the SIMULATOR's clock with a trial
+# start read from OURS. Nothing forced them to agree, and Plan 19 §0 asks for
+# the offset to be measured per trial - which nothing did, so every manifest
+# shipped `clock_offset_ms: null`.
+
+
+def test_a_simulator_clock_running_ahead_smuggles_in_the_previous_flight(tmp_path, monkeypatch):
+    """The exact shape of blocker B-3, reached through the clock instead.
+
+    The log was born 30 s BEFORE this trial started - it is the previous
+    flight's - but the simulator's clock is 60 s fast, so its birth stamp lands
+    inside the trial window and the guard waves it through.
+    """
+    trial_start = 1_786_000_000.0
+    born_before_the_trial = trial_start - 30.0
+    skew = 60.0
+    listing = f"{born_before_the_trial + skew} {born_before_the_trial + skew} 4096 /logs/00000007.BIN\n"
+
+    _fake_subprocess(monkeypatch, listing)
+    assert retain_remote_dataflash("sitl:/logs", tmp_path, "T1_t1", min_mtime=trial_start) is not None
+
+    _fake_subprocess(monkeypatch, listing)
+    assert retain_remote_dataflash("sitl:/logs", tmp_path, "T2_t1", min_mtime=trial_start, clock_offset_s=skew) is None
+
+
+def test_a_log_genuinely_written_during_the_trial_survives_the_correction(tmp_path, monkeypatch):
+    trial_start = 1_786_000_000.0
+    skew = 60.0
+    born = trial_start + 5.0
+    _fake_subprocess(monkeypatch, f"{born + skew} {born + skew} 4096 /logs/00000008.BIN\n")
+    dest = retain_remote_dataflash("sitl:/logs", tmp_path, "T1_t1", min_mtime=trial_start, clock_offset_s=skew)
+    assert dest is not None and dest.exists()
+
+
+def test_the_clock_offset_is_measured_not_assumed(monkeypatch):
+    import subprocess
+
+    def run(cmd, **kwargs):
+        assert cmd[0] == "ssh" and cmd[-1] == "date +%s.%N"
+        return _FakeCompleted(stdout=f"{time.time() + 42.0:.6f}\n")
+
+    monkeypatch.setattr(subprocess, "run", run)
+    offset = remote_clock_offset_s("sitl:/logs")
+    assert offset is not None and 41.0 < offset < 43.0
+
+
+def test_an_unmeasurable_clock_offset_is_none_not_zero(monkeypatch):
+    """None means "unknown", which the caller must not read as "in sync"."""
+    import subprocess
+
+    monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: _FakeCompleted(returncode=255, stderr="no route"))
+    assert remote_clock_offset_s("sitl:/logs") is None
+    monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: _FakeCompleted(stdout="not a number\n"))
+    assert remote_clock_offset_s("sitl:/logs") is None
+    assert remote_clock_offset_s("no-colon-here") is None

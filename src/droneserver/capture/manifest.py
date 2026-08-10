@@ -120,6 +120,51 @@ class RemoteDataflashError(RuntimeError):
     """The remote log directory could not be listed or the copy failed."""
 
 
+def remote_clock_offset_s(spec: str, *, timeout_s: float = 30.0, ssh: str = "ssh") -> float | None:
+    """Seconds the remote clock is *ahead* of ours, or ``None`` if unmeasurable.
+
+    Plan 19 §0 asks for this per trial ("record the host<->SITL clock offset")
+    and nothing measured it, so every manifest shipped ``clock_offset_ms:
+    null``. It is not only provenance: :func:`retain_remote_dataflash` decides
+    whether a log belongs to this trial by comparing a *remote* birth time with
+    a *local* trial-start time. Those are two different clocks. A simulator host
+    running a couple of seconds ahead makes the previous flight's log look as
+    though it were created during this trial - the wrong-log-silently failure
+    the guard exists to prevent, back again by another route.
+
+    Measured as ``remote_now - local_now`` with the local reading taken as the
+    midpoint of the round trip, so the error is at most half the SSH latency.
+    Never raises: an unmeasurable offset is reported as ``None`` and the caller
+    falls back to trusting the two clocks, which is where it started.
+    """
+    import subprocess
+    import time
+
+    try:
+        target, _ = parse_remote_spec(spec)
+    except ValueError:
+        return None
+    before = time.time()
+    try:
+        proc = subprocess.run(
+            [ssh, "-o", "BatchMode=yes", target, "date +%s.%N"],
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    after = time.time()
+    if proc.returncode != 0:
+        return None
+    try:
+        remote = float(proc.stdout.strip())
+    except ValueError:
+        return None
+    return remote - (before + after) / 2.0
+
+
 def parse_remote_spec(spec: str) -> tuple[str, str]:
     """Split ``user@host:/path/to/logs`` into ``(ssh_target, directory)``.
 
@@ -140,6 +185,7 @@ def retain_remote_dataflash(
     *,
     min_mtime: float | None = None,
     max_bytes: int | None = None,
+    clock_offset_s: float | None = None,
     timeout_s: float = 300.0,
     ssh: str = "ssh",
 ) -> Path | None:
@@ -159,6 +205,14 @@ def retain_remote_dataflash(
       never armed would otherwise be handed the previous flight's still-growing
       ``.BIN``, with the manifest swearing to it. **A mission that does not arm
       correctly retains nothing.**
+    - ``clock_offset_s`` (from :func:`remote_clock_offset_s`) is what makes that
+      comparison legitimate. ``min_mtime`` is read from the harness's clock and
+      the birth time from the simulator's, and nothing forces the two to agree:
+      a simulator host running a few seconds ahead stamps the *previous*
+      flight's log into this trial's window and hands it over, with the manifest
+      swearing to it. The offset is subtracted from the remote stamp before the
+      comparison. ``None`` means it could not be measured, and the two clocks
+      are trusted as before.
     - ``max_bytes`` rejects an implausibly large log rather than spending
       minutes copying, e.g., a continuously-logging session's multi-gigabyte
       file.
@@ -206,6 +260,9 @@ def retain_remote_dataflash(
         # birth <= 0 means the filesystem does not record one; fall back to the
         # weaker "written during the trial" test rather than refusing outright.
         stamp = birth if birth > 0 else mtime
+        # Both stamps come off the simulator's clock; min_mtime comes off ours.
+        if clock_offset_s:
+            stamp -= clock_offset_s
         if stamp < min_mtime:
             return None
     if max_bytes is not None and size > max_bytes:

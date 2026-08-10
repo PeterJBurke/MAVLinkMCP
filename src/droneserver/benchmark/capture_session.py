@@ -78,6 +78,7 @@ from droneserver.capture import (
     annotate_manifest,
     derive_events,
     gather_versions,
+    remote_clock_offset_s,
     retain_dataflash,
     retain_remote_dataflash,
     verify_bundle,
@@ -112,12 +113,26 @@ def _iso(ts: float) -> str:
     return datetime.fromtimestamp(ts, timezone.utc).isoformat()
 
 
+#: Addresses that name this machine rather than the simulator's. The capture
+#: topology puts a local relay in the link (scripts/mavlink_relay.py), so the
+#: endpoints the recorders are given are loopback in the normal case.
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "0.0.0.0", "::1", "::"})
+
+
 def _host_of(address: str) -> str | None:
     """Best-effort host component of a MAVLink address for the manifest.
 
     Handles the shapes the recorders accept: ``udp://:14540``,
     ``tcp://127.0.0.1:5760``, ``udpin:127.0.0.1:14650``. Returns ``None`` when
-    the address binds any interface (no explicit host) or cannot be parsed.
+    the address binds any interface (no explicit host), names *this* machine,
+    or cannot be parsed.
+
+    Loopback is excluded because this value is only ever used to fill
+    ``sitl_host`` - which machine the simulator ran on. Under the documented
+    relay topology the endpoints are ``127.0.0.1`` on both sides, so guessing
+    from them would write "the simulator ran on this host" into the permanent
+    record of every trial that forgot ``--sitl-host``. No answer is better than
+    a confident wrong one.
     """
     if not address:
         return None
@@ -126,7 +141,9 @@ def _host_of(address: str) -> str | None:
         rest = rest.split(":", 1)[1]
     host = rest.rsplit(":", 1)[0] if ":" in rest else rest
     host = host.strip("/")
-    return host or None
+    if not host or host.lower() in _LOOPBACK_HOSTS:
+        return None
+    return host
 
 
 class CaptureConfig:
@@ -229,6 +246,10 @@ class TrialCapture:
         self._recorder: TelemetryRecorder | None = None
         self._loop: _AsyncLoopThread | None = None
         self.transcript: TranscriptWriter | None = None
+        #: Seconds the simulator's clock is ahead of ours, measured once per
+        #: trial when the dataflash log is fetched from another machine. None
+        #: until measured (or when it could not be).
+        self.clock_offset_s: float | None = None
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -343,6 +364,7 @@ class TrialCapture:
         #    inheriting the previous flight's log.
         trial_name = f"{mission_id}_t{trial_idx}"
         if self.config.dataflash_remote:
+            self._measure_clock_offset()
             try:
                 kept = retain_remote_dataflash(
                     self.config.dataflash_remote,
@@ -350,6 +372,7 @@ class TrialCapture:
                     trial_name,
                     min_mtime=started_ts,
                     max_bytes=MAX_DATAFLASH_BYTES,
+                    clock_offset_s=self.clock_offset_s,
                 )
                 if kept is None:
                     print(
@@ -414,6 +437,32 @@ class TrialCapture:
         return check
 
     # -- helpers -----------------------------------------------------------
+
+    def _measure_clock_offset(self) -> None:
+        """How far the simulator's clock is from ours (Plan 19 §0, §6).
+
+        Asked before the dataflash log is fetched, because that fetch decides
+        which log belongs to this trial by comparing the simulator's birth time
+        with our trial-start time - two clocks. It is also the ``clock_offset_ms``
+        the manifest has always carried as null.
+        """
+        try:
+            self.clock_offset_s = remote_clock_offset_s(self.config.dataflash_remote)
+        except Exception as e:  # noqa: BLE001 - provenance must not break a trial
+            print(f"[capture] remote_clock_offset_s error: {type(e).__name__}: {e}", flush=True)
+            self.clock_offset_s = None
+        if self.clock_offset_s is None:
+            print(
+                "[capture] could not measure the simulator's clock offset; the dataflash guard "
+                "is comparing two clocks that nothing has reconciled",
+                flush=True,
+            )
+        elif abs(self.clock_offset_s) > 2.0:
+            print(
+                f"[capture] the simulator's clock is {self.clock_offset_s:+.1f}s from this host's - "
+                "logs across the two machines cannot be joined on time until that is fixed",
+                flush=True,
+            )
 
     def _write_prompt_turns(
         self, mission, context: dict, system_prompt: str | None = None, user_prompt: str | None = None
@@ -625,7 +674,9 @@ class TrialCapture:
             "host": socket.gethostname(),
             "sitl_host": cfg.sitl_host or _host_of(cfg.telemetry_address) or _host_of(cfg.mavlink_endpoint),
             "droneserver_commit": cfg.droneserver_commit,
-            "clock_offset_ms": None,  # not measured by the harness
+            # Measured against the simulator host when the dataflash log is
+            # fetched from it; null when there is no remote to measure against.
+            "clock_offset_ms": None if self.clock_offset_s is None else round(self.clock_offset_s * 1000.0, 1),
             "started_ts": _iso(started_ts),
             "ended_ts": _iso(ended_ts),
             # context the harness already resolved (home fix, what we flew).

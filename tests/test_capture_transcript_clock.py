@@ -144,3 +144,30 @@ def test_a_turn_written_as_it_happens_says_so(tmp_path):
     writer = TranscriptWriter(tmp_path, t0=T0)
     writer.turn("system", content="you fly a drone")
     assert _records(tmp_path)[0]["ts_source"] == "live"
+
+
+# --- provenance the manifest must not invent -------------------------------
+
+
+def test_the_simulator_host_is_never_guessed_from_a_loopback_endpoint(tmp_path):
+    """ "Which machine flew this?" is not answerable from a local relay.
+
+    The documented capture topology puts scripts/mavlink_relay.py in the link,
+    so both recorder endpoints are 127.0.0.1 and neither names the simulator's
+    machine. Guessing wrote "the simulator ran on this host" into the permanent
+    record of any trial run without --sitl-host.
+    """
+    from droneserver.benchmark.capture_session import _host_of
+
+    assert _host_of("tcp://127.0.0.1:5679") is None
+    assert _host_of("udpin:127.0.0.1:14650") is None
+    assert _host_of("udp://:14540") is None
+    assert _host_of("udp://localhost:14540") is None
+    # A real remote endpoint still names its machine.
+    assert _host_of("tcp://100.80.7.20:5760") == "100.80.7.20"
+    assert _host_of("udpin:llmuavsitl:14650") == "llmuavsitl"
+
+    capture = TrialCapture(CaptureConfig(), tmp_path, t0=T0)
+    meta = capture._manifest_meta("run", "T1", 1, {}, T0, T0 + 10.0)
+    assert meta["sitl_host"] is None
+    assert meta["clock_offset_ms"] is None
