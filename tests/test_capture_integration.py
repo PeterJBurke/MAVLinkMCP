@@ -15,7 +15,10 @@ Two things are asserted:
    CSVs exist and NO per-trial directory is created.
 """
 
+import contextlib
 import json
+
+import pytest
 
 from droneserver.benchmark import runner
 from droneserver.benchmark.client import CallRecord
@@ -75,7 +78,7 @@ class _FakeTap:
 class _FakeRecorder:
     """No-op async TelemetryRecorder: writes a tiny telemetry.csv."""
 
-    def __init__(self, system_address, out_dir, rate_hz=10.0, t0=None):
+    def __init__(self, system_address, out_dir, rate_hz=10.0, t0=None, raw_source=None):
         from pathlib import Path
 
         self.out_dir = Path(out_dir)
@@ -191,3 +194,124 @@ def test_capture_disabled_is_unchanged(tmp_path, monkeypatch):
     assert (out_dir / "summary.md").exists()
     # ...and NO per-trial directory was created.
     assert not (out_dir / "T1").exists()
+
+
+# --- the shared capture loop ------------------------------------------------
+
+
+def test_the_capture_loop_is_shared_by_every_trial_and_survives_them():
+    """One event loop per process, not one per trial.
+
+    ``grpc.aio`` - which MavSDK speaks over - starts a completion-queue poller
+    bound to whichever event loop existed when the first channel was created,
+    and posts every completion into it with ``call_soon_threadsafe`` for the
+    life of the process. Close that loop at the end of trial 1 and every
+    subsequent completion lands in a dead loop::
+
+        RuntimeError: Event loop is closed
+          grpc/_cython/_cygrpc/aio/completion_queue.pyx:170  _handle_events
+
+    which is the flood the 2026-08-10 verification flight produced: 22
+    tracebacks across eight missions. Closing the channel first does not help -
+    the poller is refcounted globally and this grpc release does not retire it
+    on ``Channel.close``. The loop must simply outlive the channels.
+    """
+    from droneserver.benchmark import capture_session as cs
+
+    cs.shutdown_capture_loop()
+    try:
+        first = cs.capture_loop()
+        assert first.alive
+        for _ in range(3):  # three "trials"
+            assert cs.capture_loop() is first, "a per-trial loop is the bug itself"
+            assert first.run(_ping()) == "pong"
+    finally:
+        cs.shutdown_capture_loop()
+
+    assert not first.alive
+    # A closed loop is replaced rather than handed out dead.
+    try:
+        second = cs.capture_loop()
+        assert second is not first and second.alive
+    finally:
+        cs.shutdown_capture_loop()
+
+
+async def _ping():
+    return "pong"
+
+
+def test_closing_the_capture_loop_drains_what_is_still_scheduled():
+    """A subscriber left suspended in ``async for`` is finalised while the loop
+    still runs; otherwise it resurfaces as "Task was destroyed but it is
+    pending" - eight of them across the same eight missions."""
+    import asyncio
+
+    from droneserver.benchmark import capture_session as cs
+
+    cs.shutdown_capture_loop()
+    loop = cs.capture_loop()
+    state = {"cancelled": False, "closed": False}
+
+    async def _stream():
+        try:
+            while True:
+                yield 1
+        finally:
+            state["closed"] = True
+
+    async def _subscriber():
+        try:
+            async for _ in _stream():
+                await asyncio.sleep(0.01)
+        except asyncio.CancelledError:
+            state["cancelled"] = True
+            raise
+
+    async def _spawn():
+        asyncio.ensure_future(_subscriber())
+        await asyncio.sleep(0.05)
+
+    loop.run(_spawn())
+    cs.shutdown_capture_loop()
+
+    assert state["cancelled"], "a task left running was not cancelled before the loop closed"
+    assert state["closed"], "the async generator was never finalised (shutdown_asyncgens)"
+
+
+def test_real_grpc_channels_across_trials_leave_the_log_clean():
+    """End-to-end against the actual library that produced the flood.
+
+    Three "trials", each opening and closing a real ``grpc.aio`` channel on the
+    shared capture loop - the shape of a run, minus the drone. The gRPC
+    completion-queue poller reports into the loop it adopted, so anything it
+    could not deliver arrives at that loop's exception handler. Nothing may.
+    """
+    import asyncio
+
+    grpc = pytest.importorskip("grpc")
+
+    from droneserver.benchmark import capture_session as cs
+    from droneserver.capture.telemetry_recorder import _close_channel
+
+    cs.shutdown_capture_loop()
+    loop = cs.capture_loop()
+    errors: list[dict] = []
+    loop._loop.call_soon_threadsafe(loop._loop.set_exception_handler, lambda _l, ctx: errors.append(ctx))
+
+    async def _open():
+        channel = grpc.aio.insecure_channel("127.0.0.1:59999")  # nothing listens; we never call
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(channel.channel_ready(), timeout=0.3)
+        return channel
+
+    try:
+        for _ in range(3):
+            channel = loop.run(_open(), timeout=30)
+            loop.run(_close_channel(channel), timeout=30)
+    finally:
+        cs.shutdown_capture_loop()
+
+    messages = [str(e.get("message", "")) + str(e.get("exception", "")) for e in errors]
+    assert not any("Event loop is closed" in m for m in messages), messages
+    assert not any("Task was destroyed" in m for m in messages), messages

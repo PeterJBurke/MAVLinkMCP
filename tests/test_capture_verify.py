@@ -21,7 +21,13 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from droneserver.capture.manifest import write_manifest
-from droneserver.capture.verify import REQUIRED_ARTIFACTS, TRANSCRIPT_ARTIFACT, verify_bundle
+from droneserver.capture.telemetry_recorder import COLUMNS
+from droneserver.capture.verify import (
+    REQUIRED_ARTIFACTS,
+    TELEMETRY_REQUIRED_COLUMNS,
+    TRANSCRIPT_ARTIFACT,
+    verify_bundle,
+)
 
 VEHICLE_SYSID = 1
 
@@ -58,12 +64,63 @@ def _write_mavlink(trial_dir, *, recv=5, sent=2):
     (trial_dir / "mavlink.tlog").write_bytes(b"\x00" * 64 * (recv + sent))
 
 
-def _write_telemetry(trial_dir, rows=20, armed=True, step_s=1.0):
-    header = "t_iso,t_rel_s,lat_deg,lon_deg,rel_alt_m,armed,in_air\n"
-    body = "".join(
-        f"2026-08-09T19:00:{i:02d}+00:00,{i * step_s:.1f},33.6,-117.8,{i}.0,{armed},{armed}\n" for i in range(rows)
-    )
-    (trial_dir / "telemetry.csv").write_text(header + body, encoding="utf-8")
+#: One plausible value per telemetry column, so the fixture writes a file with
+#: the real Plan 19 §3b schema rather than the seven columns the checks
+#: happened to look at. Verified against the recorder's own COLUMNS below, so a
+#: new column cannot be added to the recorder without this failing.
+_TELEMETRY_VALUES = {
+    "lat_deg": "33.6",
+    "lon_deg": "-117.8",
+    "abs_alt_m": "58.0",
+    "rel_alt_m": "20.0",
+    "flight_mode": "GUIDED",
+    "roll_deg": "0.4",
+    "pitch_deg": "-0.2",
+    "yaw_deg": "91.0",
+    "vn_ms": "0.1",
+    "ve_ms": "0.2",
+    "vd_ms": "-0.05",
+    "groundspeed_ms": "0.22",
+    "airspeed_ms": "0.25",
+    "gps_fix_type": "FIX_3D",
+    "num_satellites": "10",
+    "hdop": "1.21",
+    "vdop": "2.0",
+    "battery_v": "12.6",
+    "battery_pct": "88.0",
+    "throttle_pct": "49.0",
+    "home_lat": "33.6",
+    "home_lon": "-117.8",
+    "home_alt": "38.0",
+    "ekf_ok": "True",
+    "geofence_ok": "True",
+    "sample_age_s": "0.05",
+}
+
+
+def _write_telemetry(trial_dir, rows=20, armed=True, step_s=1.0, blank_columns=(), sample_age=None):
+    """A telemetry.csv with the full recorder schema.
+
+    ``blank_columns`` empties the named columns in every row - how a bundle
+    looks when a documented quantity was never recorded. ``sample_age`` may be
+    a number or a function of the row index, for the held-sample cases.
+    """
+    values = dict(_TELEMETRY_VALUES)
+    for column in blank_columns:
+        values[column] = ""
+    lines = [",".join(COLUMNS)]
+    for i in range(rows):
+        row = dict(values)
+        row["t_iso"] = f"2026-08-09T19:00:{i % 60:02d}+00:00"
+        row["t_rel_s"] = f"{i * step_s:.1f}"
+        if "armed" not in blank_columns:
+            row["armed"] = str(armed)
+        if "in_air" not in blank_columns:
+            row["in_air"] = str(armed)
+        if sample_age is not None:
+            row["sample_age_s"] = str(sample_age(i) if callable(sample_age) else sample_age)
+        lines.append(",".join(str(row.get(c, "")) for c in COLUMNS))
+    (trial_dir / "telemetry.csv").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def _write_events(trial_dir, rows=3):
@@ -110,6 +167,7 @@ def complete_bundle(
     transcript=True,
     telemetry_rows=20,
     telemetry_step_s=1.0,
+    telemetry_blank_columns=(),
     trial_seconds=20.0,
     **mavlink,
 ):
@@ -117,7 +175,13 @@ def complete_bundle(
     trial_dir = tmp_path / "T1" / "trial_1"
     trial_dir.mkdir(parents=True)
     _write_mavlink(trial_dir, **mavlink)
-    _write_telemetry(trial_dir, rows=telemetry_rows, armed=armed, step_s=telemetry_step_s)
+    _write_telemetry(
+        trial_dir,
+        rows=telemetry_rows,
+        armed=armed,
+        step_s=telemetry_step_s,
+        blank_columns=telemetry_blank_columns,
+    )
     _write_audit_slice(trial_dir)
     _write_events(trial_dir)
     if transcript:
@@ -506,13 +570,8 @@ def test_a_link_that_died_mid_flight_is_not_a_stationary_aircraft(tmp_path):
     column that tells the two apart.
     """
     trial_dir = complete_bundle(tmp_path, telemetry_rows=0)
-    header = "t_iso,t_rel_s,lat_deg,lon_deg,flight_mode,armed,in_air,sample_age_s\n"
-    rows = []
-    for i in range(200):
-        # Live for the first five seconds, then frozen for the remaining fifteen.
-        age = 0.05 if i < 50 else round((i - 50) * 0.1, 2)
-        rows.append(f"2026-08-09T19:00:00+00:00,{i * 0.1:.1f},33.6,-117.8,GUIDED,True,True,{age}\n")
-    (trial_dir / "telemetry.csv").write_text(header + "".join(rows), encoding="utf-8")
+    # Live for the first five seconds, then frozen for the remaining fifteen.
+    _write_telemetry(trial_dir, rows=200, step_s=0.1, sample_age=lambda i: 0.05 if i < 50 else round((i - 50) * 0.1, 2))
     _reseal(trial_dir)
 
     check = verify_bundle(trial_dir)
@@ -522,9 +581,7 @@ def test_a_link_that_died_mid_flight_is_not_a_stationary_aircraft(tmp_path):
 
 def test_a_live_link_reports_its_worst_sample_age_and_passes(tmp_path):
     trial_dir = complete_bundle(tmp_path, telemetry_rows=0)
-    header = "t_iso,t_rel_s,lat_deg,lon_deg,flight_mode,armed,in_air,sample_age_s\n"
-    rows = "".join(f"2026-08-09T19:00:00+00:00,{i * 0.1:.1f},33.6,-117.8,GUIDED,True,True,0.12\n" for i in range(200))
-    (trial_dir / "telemetry.csv").write_text(header + rows, encoding="utf-8")
+    _write_telemetry(trial_dir, rows=200, step_s=0.1, sample_age=0.12)
     _reseal(trial_dir)
 
     check = verify_bundle(trial_dir)
@@ -543,3 +600,73 @@ def test_every_artifact_the_module_calls_required_has_a_check(tmp_path):
     checked = {c.name for c in check.checks}
     assert set(REQUIRED_ARTIFACTS) <= checked
     assert TRANSCRIPT_ARTIFACT in checked
+
+
+# --- the schema the data dictionary promises -------------------------------
+
+
+def test_columns_the_dictionary_promises_and_the_data_never_carries(tmp_path):
+    """The defect this check exists for.
+
+    ``hdop``, ``vdop``, ``ekf_ok`` and ``geofence_ok`` were empty in every row
+    of every mission of every bundle this project ever captured - MavSDK's
+    telemetry plugin exposes none of them - while Plan 19 §3b listed them as
+    required columns and ``verify_bundle`` reported every one of those bundles
+    complete. Shipping a Zenodo package whose data dictionary describes columns
+    that are always blank is exactly the reproducibility criticism the revision
+    exists to answer, so an unkept promise is now a degraded bundle.
+    """
+    blank = ("hdop", "vdop", "ekf_ok", "geofence_ok")
+    trial_dir = complete_bundle(tmp_path, telemetry_blank_columns=blank)
+    check = verify_bundle(trial_dir, require_transcript=True)
+
+    assert not check.complete
+    problem = [p for p in check.problems if p.startswith("telemetry.csv schema")]
+    assert problem, check.problems
+    for column in blank:
+        assert column in problem[0]
+    # The recording itself is fine - it is the schema that is not.
+    assert [c for c in check.checks if c.name == "telemetry.csv"][0].ok
+
+
+def test_a_column_dropped_from_the_header_is_caught_too(tmp_path):
+    """Deleting the column instead of populating it is not a fix either: the
+    header must still declare everything Plan 19 §3b lists."""
+    trial_dir = complete_bundle(tmp_path)
+    path = trial_dir / "telemetry.csv"
+    lines = path.read_text(encoding="utf-8").splitlines()
+    drop = COLUMNS.index("hdop")
+    path.write_text(
+        "\n".join(",".join(c for i, c in enumerate(line.split(",")) if i != drop) for line in lines) + "\n",
+        encoding="utf-8",
+    )
+    _reseal(trial_dir)
+
+    check = verify_bundle(trial_dir, require_transcript=True)
+    assert not check.complete
+    assert any("the header is missing hdop" in p for p in check.problems)
+
+
+def test_the_schema_check_does_not_bury_a_recorder_that_never_connected(tmp_path):
+    """An empty recording already fails for the real reason; listing all
+    twenty-three columns underneath it would hide that."""
+    trial_dir = complete_bundle(tmp_path, telemetry_blank_columns=[c for c in COLUMNS if c not in ("t_iso", "t_rel_s")])
+    check = verify_bundle(trial_dir, require_transcript=True)
+
+    assert not check.complete
+    assert any("never connected to the drone" in p for p in check.problems)
+    schema = [c for c in check.checks if c.name == "telemetry.csv schema"][0]
+    assert schema.ok and "never connected" in schema.detail
+
+
+def test_a_bundle_carrying_every_promised_column_passes(tmp_path):
+    check = verify_bundle(complete_bundle(tmp_path), require_transcript=True)
+    schema = [c for c in check.checks if c.name == "telemetry.csv schema"][0]
+    assert schema.ok, schema.detail
+    assert f"all {len(TELEMETRY_REQUIRED_COLUMNS)} required columns populated" in schema.detail
+
+
+def test_every_required_column_is_one_the_recorder_actually_writes(tmp_path):
+    """The required list and the recorder's schema cannot drift apart: a column
+    required here but absent from COLUMNS would degrade every future bundle."""
+    assert set(TELEMETRY_REQUIRED_COLUMNS) <= set(COLUMNS)

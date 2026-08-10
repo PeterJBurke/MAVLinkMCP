@@ -57,13 +57,20 @@ in a dedicated background thread; ``TrialCapture`` drives the recorder's async
 ``start()``/``stop()`` onto that loop with
 ``asyncio.run_coroutine_threadsafe(...).result()``. The subscriber + sampler
 tasks the recorder spawns then live on that loop and tick independently of the
-(synchronous) mission code. This is the simplest correct approach: one owned
-loop per trial, no interaction with whatever loop ``client.call`` uses
-internally (``BenchmarkClient`` spins up its own throwaway loop per call via
-``asyncio.run``).
+(synchronous) mission code. It never interacts with whatever loop
+``client.call`` uses internally (``BenchmarkClient`` spins up its own throwaway
+loop per call via ``asyncio.run``).
+
+**There is exactly one such loop per process, shared by every trial** - see
+:func:`capture_loop` for why. A loop per trial is what produced the
+``RuntimeError: Event loop is closed`` flood on the 2026-08-10 verification
+flight, because ``grpc.aio``'s completion-queue poller binds to the first loop
+it ever sees and keeps posting into it. The run closes the loop once, at the
+end, via :func:`shutdown_capture_loop`.
 """
 
 import asyncio
+import atexit
 import socket
 import threading
 from datetime import datetime, timezone
@@ -197,28 +204,76 @@ class CaptureConfig:
         self.sitl_host = sitl_host
 
 
+#: How long :meth:`_AsyncLoopThread.close` will spend draining before it stops
+#: the loop regardless.
+DRAIN_TIMEOUT_S = 10.0
+
+#: Turns of the loop given to callbacks that other threads posted with
+#: ``call_soon_threadsafe`` - notably gRPC's completion-queue poller - after
+#: everything of ours has been cancelled. Each is a real (short) sleep, because
+#: a zero-sleep only drains callbacks already queued, not ones in flight.
+_DRAIN_TICKS = 4
+_DRAIN_TICK_S = 0.05
+
+
 class _AsyncLoopThread:
     """A private asyncio event loop running in a daemon thread.
 
     See the module docstring: this is how the async TelemetryRecorder keeps
     ticking while the synchronous mission runs. ``run()`` submits a coroutine
-    and blocks for its result; ``close()`` stops the loop and joins the thread.
+    and blocks for its result; ``close()`` drains, stops the loop and joins the
+    thread.
+
+    **One of these per process, not per trial** - see :func:`capture_loop`.
     """
 
     def __init__(self) -> None:
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(target=self._run, name="capture-loop", daemon=True)
+        self._closed = False
         self._thread.start()
 
     def _run(self) -> None:
         asyncio.set_event_loop(self._loop)
         self._loop.run_forever()
 
+    @property
+    def alive(self) -> bool:
+        return not self._closed and self._thread.is_alive()
+
     def run(self, coro, timeout: float = 90.0):
         """Run ``coro`` on the background loop and block for its result."""
         return asyncio.run_coroutine_threadsafe(coro, self._loop).result(timeout)
 
+    async def _drain(self) -> None:
+        """Leave nothing scheduled on this loop before it is closed.
+
+        Cancel and await whatever tasks are left, close the async generators
+        that the recorder's ``async for`` subscriptions leave suspended (only
+        ``asyncio.run`` does that for you; ``run_forever`` + ``stop`` does not,
+        and a generator finalised later shows up as "Task was destroyed but it
+        is pending"), then turn the loop a few more times so callbacks posted
+        from other threads get to run while the loop is still open.
+        """
+        pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        await self._loop.shutdown_asyncgens()
+        for _ in range(_DRAIN_TICKS):
+            await asyncio.sleep(_DRAIN_TICK_S)
+
     def close(self) -> None:
+        """Drain, then stop the loop and join the thread. Idempotent."""
+        if self._closed:
+            return
+        self._closed = True
+        if self._thread.is_alive():
+            try:
+                asyncio.run_coroutine_threadsafe(self._drain(), self._loop).result(DRAIN_TIMEOUT_S)
+            except Exception:  # noqa: BLE001 - shutdown is best-effort
+                pass
         try:
             self._loop.call_soon_threadsafe(self._loop.stop)
         except RuntimeError:
@@ -226,8 +281,62 @@ class _AsyncLoopThread:
         self._thread.join(timeout=5.0)
         try:
             self._loop.close()
-        except Exception:
+        except Exception:  # noqa: BLE001
             pass
+
+
+#: The process-wide capture loop and the lock that creates it exactly once.
+_CAPTURE_LOOP: _AsyncLoopThread | None = None
+_CAPTURE_LOOP_LOCK = threading.Lock()
+
+
+def capture_loop() -> _AsyncLoopThread:
+    """The one event loop every trial's telemetry recorder runs on.
+
+    **Why one per process and not one per trial.** ``grpc.aio`` - which MavSDK
+    speaks to its backend over - initialises a global completion-queue poller
+    the first time any channel is created, and that poller captures *the event
+    loop that happened to be current at the time*, for the life of the process.
+    It then posts every completion into that loop with
+    ``call_soon_threadsafe``. Give each trial its own loop and close it at the
+    end of the trial, and from trial 2 onwards every completion lands in a dead
+    loop::
+
+        RuntimeError: Event loop is closed
+          grpc/_cython/_cygrpc/aio/completion_queue.pyx:170  _handle_events
+          asyncio/base_events.py:840                          call_soon_threadsafe
+
+    which is exactly the 22 tracebacks the 2026-08-10 verification flight
+    produced across eight missions. Closing the channel first does *not* help:
+    the poller is refcounted globally and only ``shutdown_grpc_aio()`` retires
+    it, which this grpc release does not call from ``Channel.close``. The loop
+    the poller adopted must therefore simply outlive every channel - so it is
+    created once, shared by every trial, and closed at the end of the run.
+
+    Per-trial cleanup still matters and still happens, in
+    :meth:`droneserver.capture.telemetry_recorder.TelemetryRecorder._close_system`:
+    the channel and the mavsdk_server subprocess are closed per trial so ~1700
+    of them do not accumulate.
+    """
+    global _CAPTURE_LOOP
+    with _CAPTURE_LOOP_LOCK:
+        if _CAPTURE_LOOP is None or not _CAPTURE_LOOP.alive:
+            _CAPTURE_LOOP = _AsyncLoopThread()
+            atexit.register(shutdown_capture_loop)
+        return _CAPTURE_LOOP
+
+
+def shutdown_capture_loop() -> None:
+    """Drain and close the shared capture loop. Idempotent; safe if never used.
+
+    Called at the end of a run by both harnesses, and registered with
+    :mod:`atexit` as the backstop for anything that exits another way.
+    """
+    global _CAPTURE_LOOP
+    with _CAPTURE_LOOP_LOCK:
+        loop, _CAPTURE_LOOP = _CAPTURE_LOOP, None
+    if loop is not None:
+        loop.close()
 
 
 class TrialCapture:
@@ -291,14 +400,19 @@ class TrialCapture:
             )
             self._tap = None
 
-        # Async telemetry recorder on its own background event loop.
+        # Async telemetry recorder, on the process-wide capture loop (see
+        # capture_loop() for why it is not per-trial). The tap is handed over as
+        # the recorder's raw source: four of the columns Plan 19 §3b requires
+        # are not in the MavSDK telemetry plugin but are on the wire the tap is
+        # already reading (GPS DOP, the autopilot's EKF/geofence health bits).
         try:
-            self._loop = _AsyncLoopThread()
+            self._loop = capture_loop()
             self._recorder = TelemetryRecorder(
                 self.config.telemetry_address,
                 self.trial_dir,
                 rate_hz=self.config.rate_hz,
                 t0=self.t0,
+                raw_source=self._tap,
             )
             self._loop.run(self._recorder.start(), timeout=90)
         except Exception as e:  # noqa: BLE001
@@ -308,26 +422,29 @@ class TrialCapture:
                 flush=True,
             )
             self._recorder = None
-            if self._loop is not None:
-                self._loop.close()
-                self._loop = None
+            self._loop = None
 
     def stop(self) -> None:
         """Stop the streaming recorders. Called from the caller's finally, so a
-        mission crash still flushes the tap and the telemetry CSV."""
+        mission crash still flushes the tap and the telemetry CSV.
+
+        The recorder goes first and the tap second, because the recorder reads
+        the tap's latest wire messages for its DOP and health columns: stopping
+        the tap first would blank them on the recorder's final rows. The
+        shared event loop is *not* closed here - it belongs to the run, not to
+        the trial (:func:`shutdown_capture_loop`).
+        """
+        if self._recorder is not None and self._loop is not None:
+            try:
+                self._loop.run(self._recorder.stop(), timeout=60)
+            except Exception as e:  # noqa: BLE001
+                print(f"[capture] TelemetryRecorder.stop error: {type(e).__name__}: {e}", flush=True)
+        self._loop = None
         if self._tap is not None:
             try:
                 self._tap.stop()
             except Exception as e:  # noqa: BLE001
                 print(f"[capture] MavlinkTap.stop error: {type(e).__name__}: {e}", flush=True)
-        if self._recorder is not None and self._loop is not None:
-            try:
-                self._loop.run(self._recorder.stop(), timeout=30)
-            except Exception as e:  # noqa: BLE001
-                print(f"[capture] TelemetryRecorder.stop error: {type(e).__name__}: {e}", flush=True)
-        if self._loop is not None:
-            self._loop.close()
-            self._loop = None
 
     def finalize(
         self,

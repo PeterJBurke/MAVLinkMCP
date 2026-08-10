@@ -204,19 +204,57 @@ class FakeCaptureRecorder:
     #: Set per-test: does the fake flight report the aircraft as armed?
     armed = False
 
-    def __init__(self, system_address, out_dir, rate_hz=10.0, t0=None):
+    def __init__(self, system_address, out_dir, rate_hz=10.0, t0=None, raw_source=None):
         from pathlib import Path
 
         self.out_dir = Path(out_dir)
 
+    #: A plausible value for every column, because verify_bundle now enforces
+    #: the full Plan 19 §3b schema: a bundle whose telemetry is missing a
+    #: documented column is degraded, and a fake that writes seven columns
+    #: would make this test assert the opposite of what a real trial produces.
+    VALUES = {
+        "lat_deg": "33.6",
+        "lon_deg": "-117.8",
+        "abs_alt_m": "58.0",
+        "rel_alt_m": "0.0",
+        "flight_mode": "GUIDED",
+        "roll_deg": "0.1",
+        "pitch_deg": "0.1",
+        "yaw_deg": "90.0",
+        "vn_ms": "0.0",
+        "ve_ms": "0.0",
+        "vd_ms": "0.0",
+        "groundspeed_ms": "0.0",
+        "airspeed_ms": "0.0",
+        "gps_fix_type": "FIX_3D",
+        "num_satellites": "10",
+        "hdop": "1.21",
+        "vdop": "2.0",
+        "battery_v": "12.6",
+        "battery_pct": "88.0",
+        "throttle_pct": "0.0",
+        "in_air": "False",
+        "home_lat": "33.6",
+        "home_lon": "-117.8",
+        "home_alt": "38.0",
+        "ekf_ok": "True",
+        "geofence_ok": "True",
+        "sample_age_s": "0.05",
+    }
+
     async def start(self):
+        from droneserver.capture.telemetry_recorder import COLUMNS
+
         self.out_dir.mkdir(parents=True, exist_ok=True)
-        header = "t_iso,t_rel_s,lat_deg,lon_deg,rel_alt_m,armed,in_air\n"
-        body = "".join(
-            f"2026-08-09T19:00:{i:02d}+00:00,{i / 10:.1f},33.6,-117.8,0.0,{FakeCaptureRecorder.armed},False\n"
-            for i in range(30)
-        )
-        (self.out_dir / "telemetry.csv").write_text(header + body, encoding="utf-8")
+        lines = [",".join(COLUMNS)]
+        for i in range(30):
+            row = dict(self.VALUES)
+            row["t_iso"] = f"2026-08-09T19:00:{i:02d}+00:00"
+            row["t_rel_s"] = f"{i / 10:.1f}"
+            row["armed"] = str(FakeCaptureRecorder.armed)
+            lines.append(",".join(row.get(c, "") for c in COLUMNS))
+        (self.out_dir / "telemetry.csv").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     async def stop(self):
         pass

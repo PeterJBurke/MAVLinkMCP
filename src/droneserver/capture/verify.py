@@ -38,6 +38,13 @@ mode would betray.
                              arm command demonstrably crossed this wire - the
                              ground-station side must carry something other than
                              heartbeats.
+``telemetry.csv`` *schema*   every column the Plan 19 §3b data dictionary
+                             promises is present in the header AND carries a
+                             value in at least one row. ``hdop``, ``vdop``,
+                             ``ekf_ok`` and ``geofence_ok`` were empty in every
+                             row of every bundle this project ever captured,
+                             and the bundles were reported complete: the
+                             dictionary described columns the data never had.
 ``telemetry.csv``            enough rows *for a trial of this length*, rows that
                              actually carry vehicle state, rows that were fed by
                              a live link (``sample_age_s``) rather than held
@@ -144,6 +151,54 @@ TELEMETRY_STATE_COLUMNS = (
     "flight_mode",
     "armed",
     "in_air",
+)
+
+#: Columns the Plan 19 §3b data dictionary promises will carry data, checked
+#: here so a promise cannot survive unkept. Every one of these must be
+#: non-empty in **at least one row** of a trial whose recorder had a live link.
+#:
+#: This check exists because ``hdop``, ``vdop``, ``ekf_ok`` and ``geofence_ok``
+#: were empty in every row of every mission of every bundle ever captured -
+#: they are not in the MavSDK telemetry plugin - and ``verify_bundle`` called
+#: those bundles complete. A Zenodo data dictionary describing four columns
+#: that are always blank is precisely the reproducibility criticism this
+#: package exists to answer, so the schema is now enforced rather than
+#: documented.
+#:
+#: Deliberately NOT required, because a blank is honest rather than a gap:
+#:
+#: - ``flight_mode`` / ``armed`` / ``in_air`` - MavSDK delivers these one to two
+#:   seconds after subscribing, which a two-second trial (T7) can end before.
+#:   That the recorder connected at all is covered by
+#:   :data:`TELEMETRY_STATE_COLUMNS`.
+#: - ``airspeed_ms`` - a vehicle with no airspeed sensor publishes no honest
+#:   value (see the recorder's module docstring).
+#: - ``sample_age_s`` - empty until the first sample of anything arrives, which
+#:   is the correct reading of "nothing has gone stale yet".
+TELEMETRY_REQUIRED_COLUMNS = (
+    "lat_deg",
+    "lon_deg",
+    "abs_alt_m",
+    "rel_alt_m",
+    "roll_deg",
+    "pitch_deg",
+    "yaw_deg",
+    "vn_ms",
+    "ve_ms",
+    "vd_ms",
+    "groundspeed_ms",
+    "gps_fix_type",
+    "num_satellites",
+    "hdop",
+    "vdop",
+    "battery_v",
+    "battery_pct",
+    "throttle_pct",
+    "home_lat",
+    "home_lon",
+    "home_alt",
+    "ekf_ok",
+    "geofence_ok",
 )
 
 #: MAV_MODE_FLAG_SAFETY_ARMED, the bit in HEARTBEAT.base_mode that says the
@@ -398,17 +453,30 @@ class _TelemetryEvidence:
     #: something. A CSV without them cannot be judged this way and says so
     #: rather than passing silently.
     state_columns_present: bool = False
+    #: Required columns (:data:`TELEMETRY_REQUIRED_COLUMNS`) that the header
+    #: does not even declare, and those that it declares but no row fills.
+    absent_columns: list[str] = field(default_factory=list)
+    unpopulated_columns: list[str] = field(default_factory=list)
 
 
 def _read_telemetry(trial_dir: Path) -> _TelemetryEvidence:
     path = trial_dir / "telemetry.csv"
     evidence = _TelemetryEvidence()
     previous_t: float | None = None
+    populated: set[str] = set()
     with path.open(newline="", encoding="utf-8") as fh:
         reader = csv.DictReader(fh)
-        evidence.state_columns_present = any(c in (reader.fieldnames or ()) for c in TELEMETRY_STATE_COLUMNS)
+        fields = reader.fieldnames or ()
+        evidence.state_columns_present = any(c in fields for c in TELEMETRY_STATE_COLUMNS)
+        evidence.absent_columns = [c for c in TELEMETRY_REQUIRED_COLUMNS if c not in fields]
+        declared = [c for c in TELEMETRY_REQUIRED_COLUMNS if c in fields]
         for record in reader:
             evidence.rows += 1
+            # Which promised columns this file ever fills. Cheap: a column drops
+            # out of the search as soon as one row carries it.
+            for column in declared:
+                if column not in populated and str(record.get(column, "") or "").strip():
+                    populated.add(column)
             if str(record.get("armed", "")).strip().lower() in ("true", "1"):
                 evidence.armed = True
             if not evidence.has_state:
@@ -428,6 +496,7 @@ def _read_telemetry(trial_dir: Path) -> _TelemetryEvidence:
             if previous_t is not None and t - previous_t > evidence.max_gap:
                 evidence.max_gap, evidence.max_gap_at = t - previous_t, t
             previous_t = t
+    evidence.unpopulated_columns = [c for c in declared if c not in populated]
     return evidence
 
 
@@ -515,6 +584,41 @@ def _check_telemetry(trial_dir: Path, min_rows: int) -> tuple[Check, _TelemetryE
             f"({detail}) - the recorder died mid-trial",
         ), evidence
     return Check("telemetry.csv", True, detail), evidence
+
+
+def _check_telemetry_schema(evidence: _TelemetryEvidence) -> Check:
+    """Does the file carry every column the data dictionary promises?
+
+    Separate from :func:`_check_telemetry` so the answer is reported in its own
+    right: a recording can be the right length, live and gap-free and still be
+    missing a documented quantity, which is exactly how four always-blank
+    columns shipped in every bundle this project has ever produced.
+
+    Only asked of a file whose recorder genuinely connected. When no row
+    carries any vehicle state at all, ``_check_telemetry`` has already failed
+    the trial for the real reason, and listing twenty-three empty columns
+    underneath it would bury it.
+    """
+    name = "telemetry.csv schema"
+    if evidence.rows == 0:
+        return Check(name, True, "no rows to check")
+    if evidence.absent_columns:
+        return Check(
+            name,
+            False,
+            f"the header is missing {', '.join(evidence.absent_columns)} - Plan 19 §3b requires "
+            f"{len(TELEMETRY_REQUIRED_COLUMNS)} populated columns",
+        )
+    if not evidence.has_state:
+        return Check(name, True, "not checked - the recorder never connected (see telemetry.csv)")
+    if evidence.unpopulated_columns:
+        return Check(
+            name,
+            False,
+            f"{', '.join(evidence.unpopulated_columns)} empty in every one of {evidence.rows} row(s) - "
+            "the data dictionary promises these and the data does not carry them",
+        )
+    return Check(name, True, f"all {len(TELEMETRY_REQUIRED_COLUMNS)} required columns populated")
 
 
 def _check_jsonl(trial_dir: Path, name: str) -> Check:
@@ -644,6 +748,7 @@ def verify_bundle(
     checks.append(_check_tlog(trial_dir))
     checks.append(_check_mavlink_directions(mavlink, vehicle_sysid, flew=flew))
     checks.append(telemetry_check)
+    checks.append(_check_telemetry_schema(telemetry))
     checks.append(_check_audit_slice(trial_dir))
     checks.append(_check_jsonl(trial_dir, "events.jsonl"))
     if require_transcript:

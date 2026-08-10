@@ -136,6 +136,19 @@ RECEIVED_MSG_TYPES = (
 #: MAVLink sysid of the autopilot in the standard reproducibility topology.
 DEFAULT_VEHICLE_SYSID = 1
 
+#: Message types whose most recent decoded fields are kept in memory (see
+#: :meth:`MavlinkTap.snapshot`). Everything is still written to disk; this is a
+#: small live view for the telemetry recorder, which needs values that the
+#: MavSDK telemetry plugin does not expose but that are right here on the wire:
+#:
+#: - ``GPS_RAW_INT`` -> ``eph``/``epv``, the GPS HDOP/VDOP (Plan 19 §3b).
+#: - ``SYS_STATUS``  -> the autopilot's own per-subsystem health bits, which is
+#:   where ``ekf_ok`` (AHRS) and ``geofence_ok`` come from.
+#: - ``VFR_HUD``     -> ``throttle``, the autopilot's throttle percentage.
+#:
+#: Kept deliberately short: every entry costs a dict assignment per message.
+SNAPSHOT_MSG_TYPES = frozenset({"GPS_RAW_INT", "SYS_STATUS", "VFR_HUD"})
+
 TLOG_NAME = "mavlink.tlog"
 JSONL_NAME = "mavlink.jsonl"
 
@@ -275,6 +288,10 @@ class MavlinkTap:
         self._stop = threading.Event()
         self._lock = threading.Lock()
 
+        #: Latest decoded ``fields`` per :data:`SNAPSHOT_MSG_TYPES` message type,
+        #: vehicle-originated only. Read through :meth:`snapshot`.
+        self._snapshot: dict[str, dict] = {}
+
         #: Observability counters (read after stop() in tests / summaries).
         self.message_count = 0
         self.decode_errors = 0
@@ -394,6 +411,14 @@ class MavlinkTap:
                 self.decode_errors += 1
                 return
 
+            # Live view for the telemetry recorder. Updated before the file
+            # write so a full disk costs us the archive, not the recording, and
+            # only for the vehicle's own messages: a ground station may emit
+            # SYS_STATUS or VFR_HUD of its own, and its health bits are not the
+            # aircraft's.
+            if record.direction == "recv" and record.msg_type in SNAPSHOT_MSG_TYPES:
+                self._snapshot[record.msg_type] = record.fields
+
             try:
                 if self._jsonl_fh is not None:
                     self._jsonl_fh.write(line + "\n")
@@ -402,6 +427,26 @@ class MavlinkTap:
                 return
 
             self.message_count += 1
+
+    # -- live view ---------------------------------------------------------
+
+    def snapshot(self) -> dict[str, dict]:
+        """The most recent decoded ``fields`` for each :data:`SNAPSHOT_MSG_TYPES` type.
+
+        A shallow copy of the index; the per-message ``fields`` dicts are never
+        mutated after :func:`decode_message` builds them, so sharing them is
+        safe. Returns ``{}`` until the first such message is heard - the caller
+        must treat a missing key as "not observed yet", never as a zero.
+
+        This is the recorder's window onto values MavSDK does not surface
+        (GPS DOP, the autopilot's own EKF/geofence health bits, throttle). It
+        is read at the recorder's sampling rate from a different thread, hence
+        the lock.
+        """
+        with self._lock:
+            return dict(self._snapshot)
+
+    # -- internals ---------------------------------------------------------
 
     def _flush_files(self) -> None:
         for fh in (self._tlog_fh, self._jsonl_fh):

@@ -38,26 +38,60 @@ climb without bound, so a stale hold is visible in the artifact itself instead
 of being indistinguishable from a hover. It is empty until the first sample
 ever arrives (nothing to be stale yet).
 
-Columns MavSDK does NOT expose are written empty every row and documented here
-so downstream analysis does not mistake them for missing data:
+Two sources, one row (the ``raw_source``)
+-----------------------------------------
+Most columns are MavSDK values. Four of the columns Plan 19 §3b requires are
+**not in the MavSDK telemetry plugin at all**, and for the whole life of this
+recorder they were written empty on every row of every trial - a data
+dictionary describing columns the data never carried. They are, however, on the
+MAVLink wire that the :class:`~droneserver.capture.mavlink_tap.MavlinkTap` is
+already recording a few feet away, so the tap is passed in as ``raw_source``
+and each row reads its latest decoded messages:
 
-- ``hdop`` / ``vdop`` - MavSDK ``gps_info`` reports only ``num_satellites`` and
-  ``fix_type``; the horizontal/vertical dilution-of-precision values are not in
-  the plugin. (They live in the raw ``GPS_RAW_INT`` MAVLink message, captured by
-  the separate MAVLink tap.)
-- ``throttle_pct`` - only published on fixed-wing via ``fixedwing_metrics``;
-  empty on a multirotor that does not emit that topic.
-- ``airspeed_ms`` - likewise from ``fixedwing_metrics``; empty when absent.
-- ``ekf_ok`` - MavSDK's ``health`` stream exposes calibration/position-lock
-  flags but no single EKF-status boolean, so this is left empty here (the raw
-  ``EKF_STATUS_REPORT`` is in the MAVLink tap).
-- ``geofence_ok`` - not surfaced by the MavSDK telemetry plugin; left empty.
+===============  ==========================  ===================================
+column           MAVLink source              meaning
+===============  ==========================  ===================================
+``hdop``         ``GPS_RAW_INT.eph`` / 100   GPS horizontal dilution of precision
+``vdop``         ``GPS_RAW_INT.epv`` / 100   GPS vertical dilution of precision
+``ekf_ok``       ``SYS_STATUS`` AHRS bit     the autopilot's own AHRS/EKF health
+``geofence_ok``  ``SYS_STATUS`` GEOFENCE bit the autopilot's own fence health
+``throttle_pct`` ``VFR_HUD.throttle``        throttle, 0-100 %
+===============  ==========================  ===================================
 
-Every other column is a real MavSDK value.
+``ekf_ok`` / ``geofence_ok`` are the autopilot's *own* health bits, not a
+predicate this module invents from estimator variances: ``SYS_STATUS`` carries
+a present/enabled/health triple per subsystem, and these columns report the
+health bit **only when the autopilot says the subsystem is present**, and stay
+empty otherwise. That distinction matters - a firmware that does not report a
+geofence at all must leave a blank, not a confident ``False``.
+
+``throttle_pct`` is taken from the wire because MavSDK's
+``fixedwing_metrics.throttle_percentage`` is a **0-1 fraction** despite its
+name (measured: 0.49 while ``VFR_HUD.throttle`` said 49), so every bundle
+captured before this recorded a throttle a hundred times too small, rounded to
+one decimal - 0.5 for a hovering copter. The same 100x confusion as
+``battery_pct`` (see :func:`_battery_percent`), through a different door. When
+no ``raw_source`` is available the MavSDK value is scaled by the same
+fraction-or-percentage rule rather than trusted blind.
+
+Without a ``raw_source`` (the tap failed to start, or a caller that has none)
+those columns fall back to empty, exactly as before - the recorder is fail-soft
+everywhere. :func:`droneserver.capture.verify.verify_bundle` is what notices,
+and reports the trial degraded.
+
+Columns that can still legitimately be empty, documented so downstream analysis
+does not mistake them for lost data:
+
+- ``airspeed_ms`` - from MavSDK ``fixedwing_metrics``. ArduCopter *does* publish
+  it, but with no airspeed sensor the value is a synthesised estimate, not a
+  measurement; on a vehicle that publishes no such topic it is empty.
+- any column whose topic has not delivered its first sample yet - the first
+  second or so of a trial, before MavSDK's subscriptions warm up.
 """
 
 import asyncio
 import csv
+import inspect
 import math
 import time
 from datetime import datetime, timezone
@@ -108,8 +142,32 @@ COLUMNS = [
     "sample_age_s",
 ]
 
-#: Columns MavSDK's telemetry plugin cannot fill; written empty every row.
-UNAVAILABLE_COLUMNS = ("hdop", "vdop", "ekf_ok", "geofence_ok")
+#: Columns MavSDK's telemetry plugin cannot fill. They are read from the
+#: MAVLink wire instead (see the module docstring, ``raw_source``); without a
+#: raw source they are empty, and verify_bundle reports the trial degraded.
+WIRE_SOURCED_COLUMNS = ("hdop", "vdop", "ekf_ok", "geofence_ok")
+
+#: MAVLink message types :meth:`TelemetryRecorder._build_row` reads out of the
+#: ``raw_source`` snapshot. Kept in step with
+#: :data:`droneserver.capture.mavlink_tap.SNAPSHOT_MSG_TYPES`.
+RAW_SOURCE_MSG_TYPES = ("GPS_RAW_INT", "SYS_STATUS", "VFR_HUD")
+
+#: ``GPS_RAW_INT.eph``/``epv`` are UINT16 hundredths of a DOP unit, with
+#: UINT16_MAX meaning "unknown". Anything at or above it is not a measurement.
+_DOP_UNKNOWN = 65535
+
+#: MAV_SYS_STATUS_SENSOR bits. The autopilot reports a present / enabled /
+#: health triple against each; we read health, gated on present.
+_SYS_STATUS_GEOFENCE = 0x00100000  # MAV_SYS_STATUS_GEOFENCE
+_SYS_STATUS_AHRS = 0x00200000  # MAV_SYS_STATUS_AHRS (the EKF / attitude estimator)
+
+#: Grace given to the gRPC channel to finish in-flight calls on close.
+CHANNEL_CLOSE_GRACE_S = 2.0
+
+#: Ceiling on the whole MavSDK teardown. It runs inside ``stop()``, which runs
+#: in the trial's ``finally``, so it must be bounded however badly gRPC is
+#: behaving.
+SYSTEM_CLOSE_TIMEOUT_S = 15.0
 
 # (topic key, telemetry-stream method name). Each stream runs in its own task
 # and stores its most-recent item under the topic key in ``self._latest``.
@@ -173,6 +231,118 @@ def _battery_percent(reported):
     return value if value > 1.0 else value * 100.0
 
 
+def _dop(gps_raw: dict | None, field: str):
+    """``GPS_RAW_INT.eph``/``epv`` as a dilution-of-precision number.
+
+    The wire value is hundredths of a DOP unit (121 -> HDOP 1.21) with
+    UINT16_MAX for "the receiver did not report one". Returns "" for absent,
+    unparsable or unknown, so a blank cell always means *not measured* and
+    never means zero - a HDOP of 0.0 would read as a perfect fix.
+    """
+    if not gps_raw:
+        return ""
+    try:
+        value = int(gps_raw.get(field))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return ""
+    if value < 0 or value >= _DOP_UNKNOWN:
+        return ""
+    return round(value / 100.0, 2)
+
+
+def _sensor_health(sys_status: dict | None, bit: int):
+    """One subsystem's health, as the autopilot itself reports it.
+
+    ``SYS_STATUS`` carries three bitmasks - present, enabled, health - over the
+    MAV_SYS_STATUS_SENSOR bits. This returns the health bit **only when the
+    autopilot declares the subsystem present**; otherwise "" (unknown), because
+    a firmware that does not report a geofence at all has not told us the fence
+    is unhealthy. Note "present but not enabled" still yields a health reading:
+    that is ArduPilot's normal state for a fence that is configured but off,
+    and the health bit is meaningful there.
+    """
+    if not sys_status:
+        return ""
+    try:
+        present = int(sys_status.get("onboard_control_sensors_present") or 0)
+        health = int(sys_status.get("onboard_control_sensors_health") or 0)
+    except (TypeError, ValueError):
+        return ""
+    if not present & bit:
+        return ""
+    return bool(health & bit)
+
+
+def _throttle_percent(vfr_hud: dict | None, mavsdk_value):
+    """Throttle as an actual percentage, 0-100.
+
+    Prefers ``VFR_HUD.throttle`` off the wire, which ArduPilot and PX4 both
+    send as an integer percentage. MavSDK's ``fixedwing_metrics``
+    ``throttle_percentage`` is - despite the name and the documentation - a 0-1
+    fraction: measured 0.49 on the same tick that ``VFR_HUD`` reported 49. So
+    the fallback applies the same fraction-or-percentage rule as
+    :func:`_battery_percent`, which mis-reads a genuine 0.8% throttle as 80% -
+    a state no trial flies in, and far better than recording 40% hover as 0.4.
+    """
+    if vfr_hud:
+        try:
+            wire = float(vfr_hud.get("throttle"))  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            wire = None
+        if wire is not None and not (math.isnan(wire) or math.isinf(wire)) and wire >= 0:
+            return wire
+    if mavsdk_value is None:
+        return None
+    try:
+        value = float(mavsdk_value)
+    except (TypeError, ValueError):
+        return None
+    if value < 0 or math.isnan(value) or math.isinf(value):
+        return None
+    return value if value > 1.0 else value * 100.0
+
+
+async def _close_channel(channel) -> None:
+    """``await channel.close(grace)``, tolerating older/synchronous channels."""
+    try:
+        result = channel.close(grace=CHANNEL_CLOSE_GRACE_S)
+    except TypeError:  # a channel whose close() takes no grace argument
+        result = channel.close()
+    if inspect.isawaitable(result):
+        await result
+
+
+def _grpc_channel(system):
+    """The gRPC channel a mavsdk ``System`` talks to its backend over.
+
+    mavsdk keeps no reference to it. ``AsyncPluginManager`` is a local variable
+    inside ``System._init_plugins``, and each plugin stores only the generated
+    stub built from ``manager.channel``; the stub's multicallables are the last
+    objects holding the channel (``grpc.aio`` stores it on each as
+    ``_channel``). Since nothing else can reach it, a channel that is never
+    closed here is never closed at all - see :meth:`TelemetryRecorder._close_system`.
+
+    Deliberately tolerant of every mavsdk/grpc version: anything unexpected
+    yields ``None`` and the caller simply skips the close.
+    """
+    plugins = getattr(system, "_plugins", None)
+    if not isinstance(plugins, dict):
+        return None
+    for plugin in plugins.values():
+        stub = getattr(plugin, "_stub", None)
+        if stub is None:
+            continue
+        try:
+            members = vars(stub).values()
+        except TypeError:  # a stub without a __dict__
+            continue
+        for member in members:
+            channel = getattr(member, "_channel", None)
+            if channel is not None and callable(getattr(channel, "close", None)):
+                return channel
+    return None
+
+
 class TelemetryRecorder:
     """Fixed-rate CSV recorder of the drone's MavSDK telemetry state.
 
@@ -194,8 +364,14 @@ class TelemetryRecorder:
         out_dir: Path,
         rate_hz: float = 10.0,
         t0: float | None = None,
+        raw_source: Any = None,
     ):
         self.system_address = system_address
+        #: Anything with a ``snapshot() -> {msg_type: fields}`` method - in
+        #: practice the trial's :class:`~droneserver.capture.mavlink_tap.MavlinkTap`.
+        #: Supplies the columns MavSDK does not expose (see module docstring).
+        #: ``None`` leaves those columns empty rather than guessing.
+        self.raw_source = raw_source
         self.out_dir = Path(out_dir)
         self.path = self.out_dir / "telemetry.csv"
         # Timer rate; the spec calls for >= 10 Hz. Guard against non-positive.
@@ -256,7 +432,24 @@ class TelemetryRecorder:
         self._sampler = asyncio.ensure_future(self._sampling_loop())
 
     async def stop(self) -> None:
-        """Cancel all tasks, flush the final buffered data, and close the CSV."""
+        """Shut down in the one order that leaves nothing behind.
+
+        1. **Cancel the subscriber and sampler tasks** and await them, so no
+           task is still iterating a MavSDK stream.
+        2. **Flush and close the CSV** - the artifact is safe before anything
+           that can hang is attempted.
+        3. **Close the gRPC channel and stop the mavsdk_server** behind it
+           (:meth:`_close_system`).
+
+        Step 3 used to be missing entirely: the channel and the server
+        subprocess were left to garbage collection, so every trial leaked a
+        mavsdk_server process, its stdout-logging thread and an open channel,
+        and the gRPC completion-queue poller went on posting callbacks into an
+        event loop the harness had already closed - 22 ``RuntimeError: Event
+        loop is closed`` tracebacks over an eight-mission flight. The other
+        half of that fix is on the caller's side, in
+        :class:`droneserver.benchmark.capture_session._AsyncLoopThread`.
+        """
         if self._stopped:
             return
         self._stopped = True
@@ -284,6 +477,52 @@ class TelemetryRecorder:
                 pass
             self._file = None
             self._writer = None
+
+        await self._close_system()
+
+    async def _close_system(self) -> None:
+        """Close the MavSDK gRPC channel and reap the mavsdk_server subprocess.
+
+        mavsdk's ``System`` has no public shutdown. It exposes
+        ``_stop_mavsdk_server()``, which kills the subprocess it spawned, and
+        its ``__del__`` calls that - so the process does eventually die, at an
+        unpredictable moment, and only once the interpreter gets round to
+        collecting the object. Two things are wrong with leaving it there:
+        ``Popen.kill()`` without a ``wait()`` leaves a zombie, and the gRPC
+        channel is not touched at all.
+
+        So this: close the channel (found via :func:`_grpc_channel`, since
+        mavsdk keeps no reference), kill the server, and **reap it**, so the
+        port is free and the process table is clean before the next trial
+        starts its own. Bounded by :data:`SYSTEM_CLOSE_TIMEOUT_S` and silent on
+        failure - a recorder must never be the reason a trial dies, and by this
+        point every byte of telemetry is already on disk.
+        """
+        system, self._system = self._system, None
+        if system is None:
+            return
+
+        channel = _grpc_channel(system)
+        if channel is not None:
+            try:
+                await asyncio.wait_for(_close_channel(channel), timeout=SYSTEM_CLOSE_TIMEOUT_S)
+            except Exception:  # noqa: BLE001 - teardown is best-effort by design
+                pass
+
+        # Grab the handle before _stop_mavsdk_server(), which re-runs __init__
+        # on the System and drops it.
+        process = getattr(system, "_server_process", None)
+        stop_server = getattr(system, "_stop_mavsdk_server", None)
+        if callable(stop_server):
+            try:
+                stop_server()
+            except Exception:  # noqa: BLE001
+                pass
+        if process is not None and hasattr(process, "wait"):
+            try:
+                process.wait(timeout=SYSTEM_CLOSE_TIMEOUT_S)
+            except Exception:  # noqa: BLE001 - already killed; never block a trial
+                pass
 
     # -- background tasks --------------------------------------------------
 
@@ -332,8 +571,27 @@ class TelemetryRecorder:
             # A serialisation / IO hiccup must not kill the timer or the caller.
             return
 
+    def _raw_snapshot(self) -> dict:
+        """Latest wire messages from the ``raw_source``; ``{}`` if it has none.
+
+        Never raises: a tap that has died, or was never given, simply leaves
+        the wire-sourced columns empty for this row.
+        """
+        source = self.raw_source
+        if source is None:
+            return {}
+        try:
+            snapshot = source.snapshot()
+        except Exception:  # noqa: BLE001 - a row must always be written
+            return {}
+        return snapshot if isinstance(snapshot, dict) else {}
+
     def _build_row(self) -> list:
         latest = self._latest
+        raw = self._raw_snapshot()
+        gps_raw = raw.get("GPS_RAW_INT")
+        sys_status = raw.get("SYS_STATUS")
+        vfr_hud = raw.get("VFR_HUD")
         pos = latest.get("position")
         att = latest.get("attitude")
         vel = latest.get("velocity")
@@ -355,6 +613,7 @@ class TelemetryRecorder:
             groundspeed = None
 
         battery_pct = _battery_percent(_get(batt, "remaining_percent"))
+        throttle_pct = _throttle_percent(vfr_hud, _get(fw, "throttle_percentage"))
 
         values = {
             "t_iso": datetime.now(timezone.utc).isoformat(),
@@ -375,17 +634,20 @@ class TelemetryRecorder:
             "airspeed_ms": _round(_get(fw, "airspeed_m_s"), 3),
             "gps_fix_type": "" if gps is None else str(_get(gps, "fix_type")),
             "num_satellites": "" if (sats := _get(gps, "num_satellites")) is None else int(sats),
-            "hdop": "",  # not exposed by MavSDK gps_info
-            "vdop": "",  # not exposed by MavSDK gps_info
+            # Not in the MavSDK plugin: read off the wire via the tap.
+            "hdop": _dop(gps_raw, "eph"),
+            "vdop": _dop(gps_raw, "epv"),
             "battery_v": _round(_get(batt, "voltage_v"), 3),
             "battery_pct": _round(battery_pct, 1),
-            "throttle_pct": _round(_get(fw, "throttle_percentage"), 1),
+            "throttle_pct": _round(throttle_pct, 1),
             "in_air": "" if in_air is None else bool(in_air),
             "home_lat": _round(_get(home, "latitude_deg"), 7),
             "home_lon": _round(_get(home, "longitude_deg"), 7),
             "home_alt": _round(_get(home, "absolute_altitude_m"), 3),
-            "ekf_ok": "",  # no single EKF-status flag in MavSDK
-            "geofence_ok": "",  # not surfaced by MavSDK telemetry
+            # The autopilot's own health bits, gated on it declaring the
+            # subsystem present (see _sensor_health).
+            "ekf_ok": _sensor_health(sys_status, _SYS_STATUS_AHRS),
+            "geofence_ok": _sensor_health(sys_status, _SYS_STATUS_GEOFENCE),
             # How old the newest value in this row is. Every other column is
             # sample-and-hold, so without this a dead link is indistinguishable
             # from a stationary aircraft.

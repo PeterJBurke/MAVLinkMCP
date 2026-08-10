@@ -15,7 +15,7 @@ import asyncio
 import csv
 
 from droneserver.capture import telemetry_recorder as tr
-from droneserver.capture.telemetry_recorder import COLUMNS, TelemetryRecorder
+from droneserver.capture.telemetry_recorder import COLUMNS, WIRE_SOURCED_COLUMNS, TelemetryRecorder
 
 # --- scripted MavSDK telemetry sample objects -----------------------------
 
@@ -58,6 +58,35 @@ class _Home:
 class _FixedWing:
     airspeed_m_s = 6.5
     throttle_percentage = 42.0
+
+
+class _FakeTap:
+    """Stand-in for MavlinkTap: the wire messages the recorder reads per row.
+
+    The field values are copied from a real trial
+    (``benchmark_runs/20260810T004133Z_postaudit_verify/T1/trial_1/mavlink.jsonl``):
+    eph 121 / epv 200, and the SYS_STATUS bitmasks ArduCopter 4.5.7 SITL sends.
+    """
+
+    SYS_STATUS = {
+        "onboard_control_sensors_present": 1399979055,
+        "onboard_control_sensors_enabled": 1382153263,
+        "onboard_control_sensors_health": 1467087919,
+    }
+
+    def __init__(self, messages=None):
+        self.messages = (
+            messages
+            if messages is not None
+            else {
+                "GPS_RAW_INT": {"eph": 121, "epv": 200, "fix_type": 6},
+                "SYS_STATUS": dict(self.SYS_STATUS),
+                "VFR_HUD": {"throttle": 49, "airspeed": 0.33},
+            }
+        )
+
+    def snapshot(self):
+        return dict(self.messages)
 
 
 async def _agen(*items):
@@ -183,8 +212,8 @@ async def test_header_and_mocked_values(tmp_path, monkeypatch):
     assert float(row[col["t_rel_s"]]) >= 0.0
     assert row[col["t_iso"]].endswith("+00:00")  # UTC ISO-8601
 
-    # Columns MavSDK cannot provide are empty on every data row.
-    for name in ("hdop", "vdop", "ekf_ok", "geofence_ok"):
+    # With no raw source the wire-sourced columns are empty rather than guessed.
+    for name in WIRE_SOURCED_COLUMNS:
         for r in rows[1:]:
             assert r[col[name]] == ""
 
@@ -233,3 +262,222 @@ def test_a_percentage_battery_reading_is_not_multiplied_again():
     assert tr._battery_percent(None) is None
     assert tr._battery_percent(-1.0) is None
     assert tr._battery_percent("n/a") is None
+
+
+# --- the four columns Plan 19 §3b promised and no bundle ever carried -------
+
+
+async def test_the_wire_sourced_columns_are_populated_from_the_tap(tmp_path, monkeypatch):
+    """hdop, vdop, ekf_ok and geofence_ok come off the MAVLink wire.
+
+    They are empty in every row of every mission of every bundle this project
+    captured before this - MavSDK's telemetry plugin has none of them - while
+    Plan 19 §3b listed them as required and verify_bundle called the bundles
+    complete. A Zenodo data dictionary describing four always-blank columns is
+    the reproducibility criticism the revision exists to answer.
+
+    The values are the ones the autopilot itself reports: GPS_RAW_INT.eph/epv
+    scaled from hundredths, and the SYS_STATUS AHRS / GEOFENCE health bits.
+    """
+    monkeypatch.setattr(tr, "System", _FakeSystem)
+
+    rec = TelemetryRecorder("udp://:14540", tmp_path, rate_hz=50.0, raw_source=_FakeTap())
+    await rec.start()
+    await asyncio.sleep(0.1)
+    await rec.stop()
+
+    rows = _read_csv(tmp_path / "telemetry.csv")
+    col = {name: i for i, name in enumerate(COLUMNS)}
+    row = rows[-1]
+
+    assert row[col["hdop"]] == "1.21"  # eph 121 -> HDOP 1.21
+    assert row[col["vdop"]] == "2.0"  # epv 200 -> VDOP 2.00
+    assert row[col["ekf_ok"]] == "True"  # SYS_STATUS AHRS health bit
+    assert row[col["geofence_ok"]] == "True"  # SYS_STATUS GEOFENCE health bit
+
+
+def test_a_dop_the_receiver_did_not_report_stays_blank():
+    """UINT16_MAX means "unknown"; 0.0 would read as a perfect fix."""
+    assert tr._dop({"eph": 121}, "eph") == 1.21
+    assert tr._dop({"epv": 200}, "epv") == 2.0
+    assert tr._dop({"eph": 65535}, "eph") == ""  # UINT16_MAX -> unknown
+    assert tr._dop({"eph": -1}, "eph") == ""
+    assert tr._dop({"eph": None}, "eph") == ""
+    assert tr._dop({}, "eph") == ""
+    assert tr._dop(None, "eph") == ""
+
+
+def test_a_subsystem_the_autopilot_does_not_report_is_blank_not_false():
+    """ "Present" gates the reading. A firmware that reports no geofence has
+    not told us the fence is unhealthy, and a confident False there would be an
+    invented claim about the aircraft."""
+    healthy = {
+        "onboard_control_sensors_present": tr._SYS_STATUS_AHRS | tr._SYS_STATUS_GEOFENCE,
+        "onboard_control_sensors_health": tr._SYS_STATUS_AHRS | tr._SYS_STATUS_GEOFENCE,
+    }
+    assert tr._sensor_health(healthy, tr._SYS_STATUS_AHRS) is True
+    assert tr._sensor_health(healthy, tr._SYS_STATUS_GEOFENCE) is True
+
+    unhealthy = {
+        "onboard_control_sensors_present": tr._SYS_STATUS_AHRS,
+        "onboard_control_sensors_health": 0,
+    }
+    assert tr._sensor_health(unhealthy, tr._SYS_STATUS_AHRS) is False
+
+    absent = {"onboard_control_sensors_present": 0, "onboard_control_sensors_health": 0}
+    assert tr._sensor_health(absent, tr._SYS_STATUS_GEOFENCE) == ""
+    assert tr._sensor_health(None, tr._SYS_STATUS_AHRS) == ""
+    assert tr._sensor_health({"onboard_control_sensors_present": "x"}, tr._SYS_STATUS_AHRS) == ""
+
+
+def test_throttle_is_a_percentage_not_a_fraction():
+    """MavSDK's ``throttle_percentage`` is a 0-1 fraction despite the name.
+
+    Measured on the 2026-08-10 verification flight: VFR_HUD said throttle 49
+    on the same tick that telemetry.csv recorded 0.5 - a hovering copter, its
+    throttle rounded to one decimal place off a value a hundred times too
+    small. The same confusion as battery_pct, through a different door.
+    """
+    # The wire wins: an integer percentage straight from the autopilot.
+    assert tr._throttle_percent({"throttle": 49}, 0.49) == 49.0
+    assert tr._throttle_percent({"throttle": 0}, 0.0) == 0.0
+    # No wire: apply the same fraction-or-percentage rule as the battery.
+    assert tr._throttle_percent(None, 0.49) == 49.0
+    assert tr._throttle_percent(None, 42.0) == 42.0
+    assert tr._throttle_percent({}, 0.49) == 49.0
+    assert tr._throttle_percent(None, None) is None
+    assert tr._throttle_percent(None, "n/a") is None
+    # A malformed wire value falls back rather than poisoning the column.
+    assert tr._throttle_percent({"throttle": "x"}, 0.49) == 49.0
+
+
+async def test_a_dead_raw_source_never_breaks_a_row(tmp_path, monkeypatch):
+    """Capture is fail-soft everywhere: a tap that throws costs four columns,
+    not the recording."""
+    monkeypatch.setattr(tr, "System", _FakeSystem)
+
+    class _BrokenTap:
+        def snapshot(self):
+            raise RuntimeError("tap died")
+
+    rec = TelemetryRecorder("udp://:14540", tmp_path, rate_hz=50.0, raw_source=_BrokenTap())
+    await rec.start()
+    await asyncio.sleep(0.05)
+    await rec.stop()
+
+    rows = _read_csv(tmp_path / "telemetry.csv")
+    col = {name: i for i, name in enumerate(COLUMNS)}
+    assert rows[0] == COLUMNS
+    assert len(rows) >= 2
+    assert rows[-1][col["hdop"]] == ""
+    assert rows[-1][col["lat_deg"]] == "47.3977419"  # everything else still recorded
+
+
+# --- teardown: the gRPC channel and the mavsdk_server behind it -------------
+
+
+class _FakeChannel:
+    def __init__(self):
+        self.closed_with = None
+
+    async def close(self, grace=None):
+        self.closed_with = grace
+
+
+class _FakeMulticallable:
+    def __init__(self, channel):
+        self._channel = channel
+
+
+class _FakeStub:
+    def __init__(self, channel):
+        self.SubscribePosition = _FakeMulticallable(channel)
+
+
+class _FakeProcess:
+    def __init__(self):
+        self.waited = False
+
+    def wait(self, timeout=None):
+        self.waited = True
+
+
+class _ClosableSystem(_FakeSystem):
+    """A System shaped like mavsdk's: plugins holding stubs holding a channel."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.channel = _FakeChannel()
+        self._plugins = {"telemetry": type("P", (), {"_stub": _FakeStub(self.channel)})()}
+        self._server_process = _FakeProcess()
+        self.server_stopped = False
+
+    def _stop_mavsdk_server(self):
+        self.server_stopped = True
+
+
+async def test_stop_closes_the_grpc_channel_and_reaps_the_server(tmp_path, monkeypatch):
+    """The teardown that was missing entirely.
+
+    mavsdk's System has no public shutdown, keeps no reference to its gRPC
+    channel, and leaves the mavsdk_server subprocess to __del__ - so every
+    trial leaked a process, its logging thread and an open channel, and the
+    gRPC poller went on posting into an event loop the harness had closed:
+    22 ``RuntimeError: Event loop is closed`` tracebacks over eight missions.
+    """
+    systems = []
+
+    def _factory(*args, **kwargs):
+        system = _ClosableSystem(*args, **kwargs)
+        systems.append(system)
+        return system
+
+    monkeypatch.setattr(tr, "System", _factory)
+
+    rec = TelemetryRecorder("udp://:14540", tmp_path, rate_hz=50.0)
+    await rec.start()
+    await asyncio.sleep(0.05)
+    await rec.stop()
+
+    system = systems[0]
+    assert system.channel.closed_with == tr.CHANNEL_CLOSE_GRACE_S, "the gRPC channel was not closed"
+    assert system.server_stopped, "the mavsdk_server subprocess was not stopped"
+    assert system._server_process.waited, "kill() without wait() leaves a zombie per trial"
+    assert rec._system is None
+    # No task may still be iterating a MavSDK stream once stop() returns.
+    assert rec._tasks == [] and rec._sampler is None
+
+
+async def test_teardown_survives_a_channel_that_will_not_close(tmp_path, monkeypatch):
+    """A recorder must never be the reason a trial dies. By this point every
+    byte of telemetry is already on disk."""
+
+    class _StuckChannel(_FakeChannel):
+        async def close(self, grace=None):
+            raise RuntimeError("channel is wedged")
+
+    class _StuckSystem(_ClosableSystem):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.channel = _StuckChannel()
+            self._plugins = {"telemetry": type("P", (), {"_stub": _FakeStub(self.channel)})()}
+
+    monkeypatch.setattr(tr, "System", _StuckSystem)
+
+    rec = TelemetryRecorder("udp://:14540", tmp_path, rate_hz=50.0)
+    await rec.start()
+    await rec.stop()  # must not raise
+    assert (tmp_path / "telemetry.csv").exists()
+
+
+def test_the_channel_is_found_where_mavsdk_hides_it():
+    """mavsdk keeps no reference to the channel: it lives on the stub's
+    multicallables and nowhere else, so a lookup that misses it means the
+    channel is never closed at all."""
+    channel = _FakeChannel()
+    system = type("S", (), {"_plugins": {"telemetry": type("P", (), {"_stub": _FakeStub(channel)})()}})()
+    assert tr._grpc_channel(system) is channel
+
+    assert tr._grpc_channel(type("S", (), {})()) is None
+    assert tr._grpc_channel(type("S", (), {"_plugins": {}})()) is None
+    assert tr._grpc_channel(type("S", (), {"_plugins": {"x": object()}})()) is None

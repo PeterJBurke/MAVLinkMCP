@@ -170,6 +170,15 @@ def run_suite(
             # Between flights, make sure we left the vehicle safe.
             _settle(client)
 
+    # The capture loop is shared by every trial (see capture_session.capture_loop)
+    # so it is the run, not the trial, that closes it. Draining it here rather
+    # than at interpreter exit means anything gRPC still had in flight is
+    # reported while the run's log is still being written.
+    if trial_capture_cls is not None:
+        from droneserver.benchmark.capture_session import shutdown_capture_loop
+
+        shutdown_capture_loop()
+
     _write_outputs(client, results, out_dir, ctx, audit_log)
     return results
 

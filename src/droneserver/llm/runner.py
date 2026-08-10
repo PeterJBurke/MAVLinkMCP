@@ -659,6 +659,14 @@ async def run_llm_suite(config: SuiteConfig, log=print) -> list[TrialResult]:
         with contextlib.suppress(Exception):
             await _settle(harness)
         await harness.aclose()
+        # The capture loop is shared by every trial, so the run closes it (see
+        # droneserver.benchmark.capture_session.capture_loop). Off the event
+        # loop: closing it joins a thread.
+        if config.capture is not None:
+            with contextlib.suppress(Exception):
+                from droneserver.benchmark.capture_session import shutdown_capture_loop
+
+                await asyncio.to_thread(shutdown_capture_loop)
 
     _write_outputs(config, results, ctx, route, window_start, agent_version)
     return results

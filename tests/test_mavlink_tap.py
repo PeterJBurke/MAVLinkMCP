@@ -272,3 +272,70 @@ def test_stop_is_idempotent_and_files_closed(tmp_path: Path):
     tap.stop()  # second call must not raise
     assert (tmp_path / JSONL_NAME).exists()
     assert (tmp_path / TLOG_NAME).exists()
+
+
+# --- the live view the telemetry recorder reads ----------------------------
+
+
+class _FakeMsg:
+    """The minimum surface :meth:`MavlinkTap._record` needs off a message."""
+
+    def __init__(self, msg_type, fields, sysid=1, compid=1, seq=0):
+        self._type, self._fields = msg_type, fields
+        self._sysid, self._compid, self._seq = sysid, compid, seq
+
+    def get_type(self):
+        return self._type
+
+    def get_srcSystem(self):
+        return self._sysid
+
+    def get_srcComponent(self):
+        return self._compid
+
+    def get_seq(self):
+        return self._seq
+
+    def to_dict(self):
+        return {"mavpackettype": self._type, **self._fields}
+
+    def get_msgbuf(self):
+        return b"\x00" * 8
+
+
+def test_the_snapshot_carries_the_columns_mavsdk_cannot_supply(tmp_path):
+    """The tap is the source for hdop/vdop/ekf_ok/geofence_ok/throttle_pct.
+
+    Those four Plan 19 §3b columns are not in the MavSDK telemetry plugin and
+    were empty in every row of every bundle ever captured. They are on this
+    wire, so the tap keeps the latest of each and the recorder reads it per row.
+    """
+    from droneserver.capture.mavlink_tap import SNAPSHOT_MSG_TYPES, MavlinkTap
+
+    tap = MavlinkTap("udpin:127.0.0.1:1", tmp_path, t0=1000.0)
+    assert tap.snapshot() == {}, "nothing heard yet must be empty, never a zero"
+
+    tap._record(_FakeMsg("GPS_RAW_INT", {"eph": 121, "epv": 200}, sysid=1))
+    tap._record(_FakeMsg("SYS_STATUS", {"onboard_control_sensors_health": 7}, sysid=1))
+    tap._record(_FakeMsg("VFR_HUD", {"throttle": 49}, sysid=1))
+    tap._record(_FakeMsg("ATTITUDE", {"roll": 0.1}, sysid=1))
+
+    snapshot = tap.snapshot()
+    assert set(snapshot) == set(SNAPSHOT_MSG_TYPES)
+    assert snapshot["GPS_RAW_INT"]["eph"] == 121
+    assert snapshot["VFR_HUD"]["throttle"] == 49
+    assert "ATTITUDE" not in snapshot, "only the types the recorder needs are held"
+
+    # Latest wins - it is a sample-and-hold view, not a log.
+    tap._record(_FakeMsg("GPS_RAW_INT", {"eph": 99, "epv": 150}, sysid=1))
+    assert tap.snapshot()["GPS_RAW_INT"]["eph"] == 99
+
+
+def test_a_ground_station_cannot_write_the_vehicles_health_bits(tmp_path):
+    """SYS_STATUS and VFR_HUD from anything but the aircraft are not the
+    aircraft's state, and ekf_ok/geofence_ok are claims about the aircraft."""
+    from droneserver.capture.mavlink_tap import MavlinkTap
+
+    tap = MavlinkTap("udpin:127.0.0.1:1", tmp_path, t0=1000.0, vehicle_sysid=1)
+    tap._record(_FakeMsg("SYS_STATUS", {"onboard_control_sensors_health": 0}, sysid=255))
+    assert tap.snapshot() == {}
