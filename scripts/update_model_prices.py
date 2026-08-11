@@ -36,6 +36,56 @@ XAI_CATALOGUE = "https://api.x.ai/v1/language-models"
 XAI_UNITS_PER_USD_PER_MILLION = 10_000
 DEFAULT_OUT = Path("docs/model_prices.json")
 
+#: Prices for models **no reseller lists**, read by hand from the vendor's own
+#: pricing page. These are merged AFTER the catalogue fetch so that re-running
+#: this script can never silently drop them - which is exactly what would
+#: happen otherwise, because OpenRouter does not carry these models and the
+#: whole file is rewritten on every refresh. That failure has already bitten
+#: once: gemini-robotics-er-2-preview was in the campaign's accepted matrix but
+#: had no price on file, so run_llm_missions.py exited 2 ("no price ... the
+#: $100 per-key cap cannot be enforced without one") and skipped it.
+#:
+#: Each entry names its source and the date it was read. ``setdefault`` is used
+#: on merge, so if a reseller ever DOES start listing one of these, the fresh
+#: catalogue price wins and the hand-entry becomes a harmless fallback.
+#:
+#: units: USD per 1,000,000 tokens, matching the rest of the table.
+MANUAL_PRICES: dict[str, dict[str, Any]] = {
+    "gemini-robotics-er-2-preview": {
+        "input": 2.0,
+        "output": 10.0,
+        "cached_input": 0.2,
+        # Google prices context caching as STORAGE ($1.00 / 1M tokens / hour),
+        # not a per-token write premium, and reports no cache-write token count
+        # on its usage object, so there is nothing to bill at a premium: 0.0
+        # reads as "base input rate" and is never actually reached. See
+        # droneserver.llm.spend.Price.cache_write.
+        "cache_write": 0.0,
+        "supports_tools": True,
+        "source": "https://ai.google.dev/gemini-api/docs/pricing (read 2026-08-11)",
+    },
+}
+#: Vendor mirror prefixes to also file a manual price under, so `--model
+#: google/gemini-...` resolves exactly as the reseller-prefixed rows do.
+MANUAL_MIRROR_PREFIXES: dict[str, str] = {"gemini": "google"}
+
+
+def _merge_manual(prices: dict) -> int:
+    """File the hand-entered prices, and their vendor-mirror aliases.
+
+    Uses ``setdefault`` so a catalogue price for the same model always wins;
+    the manual entry only fills a gap the catalogue leaves.
+    """
+    added = 0
+    for name, row in MANUAL_PRICES.items():
+        if name not in prices:
+            prices[name] = dict(row)
+            added += 1
+        for stem, prefix in MANUAL_MIRROR_PREFIXES.items():
+            if name.startswith(stem):
+                prices.setdefault(f"{prefix}/{name}", dict(row))
+    return added
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="refresh the model price table")
@@ -89,6 +139,11 @@ def main() -> int:
         if added:
             sources.append(XAI_CATALOGUE)
             print(f"merged {added} models priced directly by xAI")
+
+    manual = _merge_manual(prices)
+    if manual:
+        sources.append("hand-entered (see MANUAL_PRICES)")
+        print(f"merged {manual} hand-entered prices no reseller lists")
 
     blob = {
         "fetched_utc": datetime.now(timezone.utc).isoformat(),

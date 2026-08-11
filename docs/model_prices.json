@@ -1087,6 +1087,14 @@
    "output": 12.0,
    "supports_tools": true
   },
+  "gemini-robotics-er-2-preview": {
+   "cache_write": 0.0,
+   "cached_input": 0.2,
+   "input": 2.0,
+   "output": 10.0,
+   "source": "https://ai.google.dev/gemini-api/docs/pricing (read 2026-08-11); Google prices caching as storage per token-hour, not a per-token write premium, and reports no cache-write count, so cache_write is inert",
+   "supports_tools": true
+  },
   "gemma-2-27b-it": {
    "cache_write": 0.0,
    "cached_input": 0.0,
@@ -1421,6 +1429,14 @@
    "cached_input": 0.075,
    "input": 0.75,
    "output": 3.75,
+   "supports_tools": true
+  },
+  "google/gemini-robotics-er-2-preview": {
+   "cache_write": 0.0,
+   "cached_input": 0.2,
+   "input": 2.0,
+   "output": 10.0,
+   "source": "https://ai.google.dev/gemini-api/docs/pricing (read 2026-08-11); Google prices caching as storage per token-hour, not a per-token write premium, and reports no cache-write count, so cache_write is inert",
    "supports_tools": true
   },
   "google/gemma-2-27b-it": {

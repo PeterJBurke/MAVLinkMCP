@@ -99,6 +99,53 @@ def test_a_stale_price_table_cannot_reintroduce_the_under_billing():
     assert price.cache_write == pytest.approx(6.25)
 
 
+def test_gemini_robotics_er_2_is_priced_in_the_shipped_table():
+    """The model the 2026-08-10 campaign skipped for want of a price is now on file.
+
+    run_llm_missions.py exits 2 ("no price ... the $100 per-key cap cannot be
+    enforced without one") for any model price_for cannot resolve, so a missing
+    entry silently drops a model from the matrix. Source for the numbers:
+    https://ai.google.dev/gemini-api/docs/pricing (Gemini Robotics-ER 2).
+    """
+    prices, _ = load_prices(PRICE_FILE)
+    for name in ("gemini-robotics-er-2-preview", "google/gemini-robotics-er-2-preview"):
+        price = price_for(prices, name)
+        assert price.input == pytest.approx(2.0), name
+        assert price.output == pytest.approx(10.0), name
+        assert price.cached_input == pytest.approx(0.2), name
+        # Google reports no cache-write token count, so there is no write premium
+        # to record and none must be invented (it is not a `claude` family model).
+        assert price.cache_write == 0.0, name
+
+
+def test_manual_prices_survive_a_catalogue_refresh():
+    """A price no reseller lists must be re-injected when the table is rebuilt.
+
+    update_model_prices.py rewrites the whole file from OpenRouter, which does
+    not carry gemini-robotics-er-2-preview; without the manual merge a refresh
+    would drop it and re-break the campaign it was added to fix.
+    """
+    import importlib.util
+
+    script = Path(__file__).resolve().parent.parent / "scripts" / "update_model_prices.py"
+    spec = importlib.util.spec_from_file_location("update_model_prices", script)
+    assert spec and spec.loader
+    ump = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ump)
+
+    # A fresh catalogue that has never heard of the robotics model.
+    prices: dict = {"gpt-5.2": {"input": 1.0, "output": 8.0}}
+    added = ump._merge_manual(prices)
+    assert added >= 1
+    assert prices["gemini-robotics-er-2-preview"]["input"] == pytest.approx(2.0)
+    # The vendor-mirror alias resolves just like the reseller-prefixed rows.
+    assert prices["google/gemini-robotics-er-2-preview"]["output"] == pytest.approx(10.0)
+    # A catalogue price for the same id must win over the hand entry.
+    prices2 = {"gemini-robotics-er-2-preview": {"input": 9.9, "output": 9.9}}
+    ump._merge_manual(prices2)
+    assert prices2["gemini-robotics-er-2-preview"]["input"] == pytest.approx(9.9)
+
+
 def test_no_premium_is_invented_for_a_provider_whose_behaviour_is_unknown():
     stale = {"some-new-model": Price(input=5.0, output=25.0)}
     assert with_cache_write_rate(stale["some-new-model"], "some-new-model").cache_write == 0.0

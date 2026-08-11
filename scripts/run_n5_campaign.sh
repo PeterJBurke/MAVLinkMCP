@@ -42,13 +42,21 @@ PER_MODEL_TIMEOUT="${PER_MODEL_TIMEOUT:-21600}"
 # between trials and logs "rerun to resume", whereas a provider cap hard-stops
 # mid-trial with no warning - the failure that destroyed 80 trials on 08-08.
 #
-# anthropic 175: one complete claude-opus-5 run is $62.01 and ~$50.34 is already
-#                spent, so the standing $100 rule cannot finish the Opus arm.
+# These caps are CUMULATIVE over each key's whole life on this project (the
+# ledger sums every past row for the key), NOT a per-run allowance - so a guard
+# has to clear everything already spent on the key PLUS the remaining work.
+#
+# anthropic 300: ~$160.59 is already counted against this key, and re-flying all
+#                three Anthropic models in full for one contiguous N=5
+#                (opus 40 + sonnet 40 + haiku 40 ~= $87 corrected) would push the
+#                cumulative to ~$248. 175 left only ~$14 of headroom and would
+#                have BUDGET-stopped the resumed Opus almost immediately. 300
+#                clears the ~$248 with margin. (Raised from 175, 2026-08-11.)
 # google     75: deliberately under Peter's $125 provider cap, so we stop first.
 # others    100: unchanged, within the standing rule.
 budget_for() {
   case "$1" in
-    anthropic) echo 175 ;;
+    anthropic) echo 300 ;;
     google)    echo 75  ;;
     *)         echo 100 ;;
   esac
