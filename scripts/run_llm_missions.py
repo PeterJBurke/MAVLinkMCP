@@ -64,7 +64,14 @@ from droneserver.benchmark.capture_cli import (
 from droneserver.llm.agent import Limits
 from droneserver.llm.prompts import mission_prompts
 from droneserver.llm.providers import ProviderError, list_openrouter_endpoints, resolve_model
-from droneserver.llm.runner import DEFAULT_START_TOLERANCE_M, LLM_SUITE, SKIPPED, SuiteConfig, run_llm_suite
+from droneserver.llm.runner import (
+    DEFAULT_CRITICAL_RATE_WINDOW_S,
+    DEFAULT_START_TOLERANCE_M,
+    LLM_SUITE,
+    SKIPPED,
+    SuiteConfig,
+    run_llm_suite,
+)
 from droneserver.llm.spend import (
     DEFAULT_BUDGET_USD,
     DEFAULT_LEDGER,
@@ -151,6 +158,15 @@ def main() -> int:
         action="store_true",
         help="do NOT return the aircraft to the launch point between trials. Only for reproducing a "
         "historical run flown without it; it is a confound, not an option",
+    )
+    parser.add_argument(
+        "--critical-rate-window-s",
+        type=float,
+        default=DEFAULT_CRITICAL_RATE_WINDOW_S,
+        help="the server's critical-tier rate-limit window (seconds). Between trials the harness waits "
+        "for the previous trial's critical calls to age out of this window, so each trial starts with a "
+        "clean critical budget - without loosening the safety limit itself. Must match the server's "
+        f"setting (default {DEFAULT_CRITICAL_RATE_WINDOW_S:.0f}s); 0 disables the pacing",
     )
     parser.add_argument("--trial-timeout-s", type=float, default=1800.0, help="wall-clock limit per trial")
     parser.add_argument("--temperature", type=float, default=None, help="sampling temperature, if the model takes one")
@@ -348,6 +364,7 @@ def main() -> int:
         link_retries=args.link_retries,
         start_tolerance_m=args.start_tolerance_m,
         reset_position_between_trials=not args.no_position_reset,
+        critical_rate_window_s=args.critical_rate_window_s,
         maps_url=args.maps_url,
         maps_api_key=args.maps_api_key,
         capture=capture_cfg,

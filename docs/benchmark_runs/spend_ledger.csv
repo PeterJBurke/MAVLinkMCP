@@ -575,3 +575,7 @@ ts_utc,provider,key_id,model,resolved_model,mission_id,trial,input_tokens,cached
 2026-08-10T10:48:16.425594+00:00,google,google:3ae2d89e552b,gemini-3.5-flash-lite,gemini-3.5-flash-lite,T9,1,23501,16090,54,0,0.002841,37.240893,41.00,3.759107,llm_runs/20260810T101956Z_driftfix-verify,PASS,0,0
 2026-08-10T10:48:23.981901+00:00,google,google:3ae2d89e552b,gemini-3.5-flash-lite,gemini-3.5-flash-lite,T9,2,23501,16090,86,0,0.002921,37.243814,41.00,3.756186,llm_runs/20260810T101956Z_driftfix-verify,PASS,0,0
 2026-08-10T10:48:30.963874+00:00,google,google:3ae2d89e552b,gemini-3.5-flash-lite,gemini-3.5-flash-lite,T9,3,23501,16090,46,0,0.002821,37.246635,41.00,3.753365,llm_runs/20260810T101956Z_driftfix-verify,PASS,0,0
+2026-08-11T01:19:49.644811+00:00,google,google:3ae2d89e552b,gemini-3.5-flash-lite,gemini-3.5-flash-lite,T7,1,216618,128551,520,0,0.031577,37.278212,45.00,7.721788,llm_runs/20260811T011931Z_pacing-verify,PASS,0,0
+2026-08-11T01:20:56.148701+00:00,google,google:3ae2d89e552b,gemini-3.5-flash-lite,gemini-3.5-flash-lite,T7,2,215854,144631,347,0,0.026573,37.304785,45.00,7.695215,llm_runs/20260811T011931Z_pacing-verify,PASS,0,0
+2026-08-11T01:22:03.088036+00:00,google,google:3ae2d89e552b,gemini-3.5-flash-lite,gemini-3.5-flash-lite,T7,3,215917,144631,347,0,0.026592,37.331377,45.00,7.668623,llm_runs/20260811T011931Z_pacing-verify,PASS,0,0
+2026-08-11T01:23:11.087634+00:00,google,google:3ae2d89e552b,gemini-3.5-flash-lite,gemini-3.5-flash-lite,T7,4,215773,144630,342,0,0.026537,37.357914,45.00,7.642086,llm_runs/20260811T011931Z_pacing-verify,PASS,0,0

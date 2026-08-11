@@ -91,6 +91,8 @@ from droneserver.llm.prompts import SYSTEM_PROMPT, mission_prompts
 from droneserver.llm.providers import ToolSpec, open_session, resolve_model
 from droneserver.llm.spend import BudgetExceeded, Price, SpendLedger, project_trial_cost_usd
 from droneserver.llm.verdicts import TRACK_HEADER, Track, Verdict, distance_m, judge
+from droneserver.safety.config import SafetySettings
+from droneserver.safety.tiers import Tier, effective_tier
 
 if TYPE_CHECKING:  # the capture layer is imported lazily, never at runtime here
     from droneserver.benchmark.capture_session import CaptureConfig
@@ -173,6 +175,103 @@ VOID_STREAK_LIMIT = 3
 #: drift stayed invisible for 300 m. It is to remove the drift, and to make a
 #: trial that cannot verify its own starting point decline to run.
 DEFAULT_START_TOLERANCE_M = 15.0
+
+#: The server's critical-tier rate-limit window, in seconds. The safety layer
+#: allows only a few CRITICAL calls (default 6) per this window *per client*,
+#: and the limiter keys on the API key's ``client_id`` - which every trial in a
+#: run shares, because they all use the same key. So the window does not reset
+#: between trials, and a trial's critical calls keep occupying the budget while
+#: the next trial starts.
+#:
+#: This is the *same family of defect as the position drift* (Plan 14 Entry 18):
+#: state from trial N deciding the outcome of trial N+1. In the drift-fix
+#: verification it surfaced as T7 (parameter read/write, a CRITICAL
+#: ``set_parameter`` on ``WPNAV_SPEED``) scoring 1/3 - not because the model
+#: failed, but because T7.1 used 5 of the 6 slots and T7.2, starting 14 s later,
+#: hit the wall on its second write. Worse, it is *model-speed dependent*: a
+#: fast, cheap model runs its trials close enough together to starve itself,
+#: while a slow model's trials are naturally spaced out - so it reads as a
+#: capability difference that is really a stopwatch artefact.
+#:
+#: The fix is harness-side and leaves the safety limit exactly as measured: the
+#: harness waits, between trials, for the previous trial's critical calls to age
+#: out of this window, so every trial *starts* with a clean critical budget. The
+#: limit itself - the property the campaign is measuring - is never touched.
+#:
+#: Read from the model's declared default rather than a class attribute:
+#: ``SafetySettings`` is a pydantic model, so the field default lives in
+#: ``model_fields`` and a bare attribute access raises. Taking it from there
+#: keeps the harness and the safety layer on one number by construction.
+DEFAULT_CRITICAL_RATE_WINDOW_S: float = float(SafetySettings.model_fields["rate_limit_critical_window_s"].default)
+
+#: Vehicle state used to classify a call's tier for pacing. Between trials the
+#: aircraft is always landed and disarmed, so "on the ground, state known" is
+#: the honest assumption, and it makes the harness's classification match what
+#: the *server* actually counted: on the ground, ``disarm_drone`` and
+#: ``clear_geofence`` are NORMAL, not critical, so the server did not spend a
+#: critical slot on them and the harness must not pace as though it had. The one
+#: that actually recurs and starves - ``set_parameter`` on a safety-critical
+#: name - escalates on the argument, not the state, so it is caught regardless;
+#: as are the always-critical tools (``kill_motors``, ``flight_logs`` erase).
+#: The only thing this misses is a genuinely airborne disarm/fence-clear, which
+#: is pathological, non-recurring, and at most one slot - never the starvation
+#: this exists to remove.
+_PACING_STATE = {"in_air": False, "unknown": False}
+
+#: Statuses of calls that never reached the server, so they consumed no
+#: rate-limit slot and must not extend the pacing deadline: an unknown tool or
+#: malformed arguments (rejected in the client) and a dropped connection.
+_DID_NOT_REACH_SERVER = {"client_rejected", "transport_error"}
+
+
+def _critical_drain_deadline(run: AgentRun | None, window_s: float) -> float:
+    """Wall-clock time by which this trial's critical-tier calls have aged out.
+
+    Returns ``0.0`` when the trial made no critical call (nothing to wait for)
+    or pacing is disabled. Otherwise it is the moment the *last* critical call
+    finished plus the rate-limit window, at which point the server's critical
+    bucket for this client is provably empty and the next trial begins with a
+    full budget.
+
+    The tier is computed with the server's own :func:`effective_tier` - imported,
+    so the harness and the safety layer cannot drift apart on what "critical"
+    means - and the call's *finish* time (``started_at + wall_ms``) is used
+    rather than its start, because the server records the bucket entry when it
+    processes the call, never before the client saw the result. Erring one round
+    trip late here can only over-wait, never starve. A call the client rejected
+    before it left this process never touched the server's limiter, so it is
+    skipped: pacing for a hallucinated tool name would be pure idle time.
+    """
+    if run is None or window_s <= 0:
+        return 0.0
+    latest = 0.0
+    for call in run.calls:
+        if call.status in _DID_NOT_REACH_SERVER:
+            continue
+        tier, _ = effective_tier(call.tool, call.arguments or {}, _PACING_STATE)
+        if tier is Tier.CRITICAL:
+            latest = max(latest, call.started_at + call.wall_ms / 1000.0)
+    return latest + window_s if latest else 0.0
+
+
+async def _pace_for_rate_limit(pace_until: float, log) -> float:
+    """Wait until the previous trial's critical budget has drained. Returns the seconds waited.
+
+    Called after the aircraft has been ferried home and settled, so all of that
+    time already counts against the window - the wait here is only the remainder,
+    and is often zero (the critical calls of a long trial have usually aged out
+    by the time it ends). It bites exactly the case it is built for: a short,
+    critical-heavy trial - T7 - flown back to back.
+    """
+    remaining = pace_until - time.time()
+    if remaining <= 0:
+        return 0.0
+    log(
+        f"[{_utc()}] pacing {remaining:.0f}s so the previous trial's critical-tier rate-limit budget "
+        f"drains before this trial starts (the safety limit is unchanged; this only spaces the trials out)"
+    )
+    await asyncio.sleep(remaining)
+    return remaining
 
 
 def abandon_reason(result: TrialResult, void_streak: int) -> str:
@@ -319,6 +418,12 @@ class SuiteConfig:
     #: Set to False only to reproduce a historical run that was flown without
     #: the between-trial reset. It is a confound, not an option.
     reset_position_between_trials: bool = True
+    #: The server's critical-tier rate-limit window. Between trials the harness
+    #: waits for the previous trial's critical calls to age out of this window,
+    #: so every trial starts with a clean critical budget without the safety
+    #: limit itself being loosened. ``0`` disables the pacing (for reproducing a
+    #: run flown without it). See :data:`DEFAULT_CRITICAL_RATE_WINDOW_S`.
+    critical_rate_window_s: float = DEFAULT_CRITICAL_RATE_WINDOW_S
     #: A second, hosted MCP server (Google Maps) to attach *only* for T6, so a
     #: model asked to fly to the nearest hospital can look the place up and then
     #: command the drone. Empty leaves T6 skipped. It is attached for T6 alone
@@ -679,6 +784,10 @@ async def run_llm_suite(config: SuiteConfig, log=print) -> list[TrialResult]:
     stop_everything = False
     #: Consecutive trials that produced nothing to judge. See VOID_STREAK_LIMIT.
     void_streak = 0
+    #: Wall-clock deadline by which the *previous* trial's critical-tier calls
+    #: have aged out of the rate-limit window. The next trial waits for it before
+    #: the model runs, so it starts with a clean critical budget. 0 = no wait.
+    pace_until = 0.0
 
     harness = LiveMCPSession(config.url, config.api_key, HARNESS_CLIENT_NAME, "2")
     await harness.__aenter__()
@@ -768,7 +877,7 @@ async def run_llm_suite(config: SuiteConfig, log=print) -> list[TrialResult]:
                         f"capped at ${projected:.2f}"
                     )
                 result = await _run_trial(
-                    config, harness, ctx, prompts[mission_id], mission_id, trial, agent_version, log
+                    config, harness, ctx, prompts[mission_id], mission_id, trial, agent_version, log, pace_until
                 )
                 for attempt in range(config.link_retries):
                     if not result.link_failure:
@@ -785,14 +894,22 @@ async def run_llm_suite(config: SuiteConfig, log=print) -> list[TrialResult]:
                     # the money, marked LINK for what it was.
                     _record_spend(config, result, log)
                     log(f"[{_utc()}] retrying {mission_id} trial {trial} after a link recovery")
+                    # No pacing on a link-failure retry: the wait already
+                    # happened on the first attempt, and this retry exists to
+                    # recover a broken link, not a spent rate-limit budget.
                     result = await _run_trial(
-                        config, harness, ctx, prompts[mission_id], mission_id, trial, agent_version, log
+                        config, harness, ctx, prompts[mission_id], mission_id, trial, agent_version, log, 0.0
                     )
                     result.harness_intervened = (
                         f"{result.harness_intervened}; " if result.harness_intervened else ""
                     ) + f"drone link was restarted before this attempt (retry {attempt + 1})"
                 results.append(result)
                 _record_spend(config, result, log)
+
+                # How long the NEXT trial must wait for this one's critical-tier
+                # calls to drain out of the rate-limit window. 0 for the many
+                # trials that make no critical call at all.
+                pace_until = _critical_drain_deadline(result.run, config.critical_rate_window_s)
 
                 # An aircraft that could not be put back on the launch point
                 # will not be back on it for the next trial either, and every
@@ -874,6 +991,7 @@ async def _run_trial(
     trial: int,
     agent_version: str,
     log,
+    pace_until: float = 0.0,
 ) -> TrialResult:
     log(f"[{_utc()}] START {mission_id} trial {trial}/{config.trials}")
     if not await harness.wait_ready(timeout_s=120):
@@ -918,6 +1036,13 @@ async def _run_trial(
             )
         if ferry_note:
             log(f"[{_utc()}] {ferry_note}; now {offset:.0f} m from it")
+
+    # Wait, if the previous trial's critical-tier calls are still occupying the
+    # rate-limit window, for them to age out - so this trial starts with a clean
+    # critical budget. Placed after the ferry (whose flight time already counts
+    # against the window) and before the recorders start, so the idle wait is
+    # not padded into this trial's capture bundle.
+    paced_s = await _pace_for_rate_limit(pace_until, log)
 
     ctx = {**ctx, **await _trial_origin(harness, ctx)}
     # Stamped on every trial so the correlation that produced the halted
@@ -1075,6 +1200,7 @@ async def _run_trial(
             "model_claim": run.model_claim,
             "start_offset_m": start_offset_m,
             "ferried_home": ferry_note or None,
+            "paced_before_trial_s": round(paced_s, 1) if paced_s else None,
         },
         run=run,
         harness_intervened=intervened,
