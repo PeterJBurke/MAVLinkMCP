@@ -341,7 +341,19 @@ def t7_parameters(c: BenchmarkClient, ctx: dict):
         return False, f"parameter read failed: {before.get('error')}", {}
     original = before.get("value")
 
-    target = float(original) + 10.0 if isinstance(original, (int, float)) else 300.0
+    # Pick a distinct target that stays INSIDE the parameter's valid range.
+    # "original + 10" overshoots bounded parameters: PX4's MPC_XY_CRUISE maxes at
+    # 12 m/s, so the autopilot clamped the write and the readback never matched
+    # (measured 2026-08-12). ``param_write_value`` lets the caller name a known
+    # in-range value for the parameter under test; when it is not given we fall
+    # back to the historical "+10", which is in range for ArduPilot's WPNAV_SPEED
+    # (cm/s) - the only parameter the default context exercises.
+    if ctx.get("param_write_value") is not None:
+        target = float(ctx["param_write_value"])
+    elif isinstance(original, (int, float)):
+        target = float(original) + 10.0
+    else:
+        target = 300.0
     wrote = c.call_confirmed("set_parameter", name=name, value=target, timeout=90)
     if wrote.get("status") != "success":
         return False, f"parameter write failed: {wrote.get('error')}", {"parameter": name}
@@ -496,5 +508,8 @@ DEFAULT_CONTEXT = {
     "long_mission_timeout_s": 3000.0,
     "fence_violation_m": 50000.0,  # 50 km - unambiguously outside any sane fence
     "param_name": "WPNAV_SPEED",
+    #: In-range value for T7 to write to ``param_name``. None => original + 10
+    #: (valid for WPNAV_SPEED; bounded params like PX4 MPC_XY_CRUISE need this).
+    "param_write_value": None,
     "home_amsl_m": 0.0,  # filled in at runtime
 }

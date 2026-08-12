@@ -229,8 +229,16 @@ def retain_remote_dataflash(
     # stat rather than find -printf, because find's %B@ is unsupported on many
     # builds (it returns -1) while stat's %W works wherever the filesystem
     # records a birth time, and reports 0 where it does not.
+    #
+    # ``-maxdepth 3`` rather than 1: ArduPilot writes its ``.BIN`` flat in the
+    # log directory, but PX4 nests logs one level down by date
+    # (``log/<YYYY-MM-DD>/HH_MM_SS.ulg``), so a depth-1 search finds nothing on
+    # a PX4 box and every PX4 trial would silently retain no dataflash log. The
+    # newest-by-mtime pick plus the ``min_mtime`` birth-time guard below still
+    # select the log written during this trial, across whatever date directory
+    # PX4 rolled over into.
     listing_cmd = (
-        f"find {directory} -maxdepth 1 -type f "
+        f"find {directory} -maxdepth 3 -type f "
         r"\( -iname '*.BIN' -o -iname '*.ulg' \) -print0 "
         r"| xargs -0 -r stat -c '%W %Y %s %n' | sort -k2 -rn | head -1"
     )

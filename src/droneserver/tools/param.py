@@ -82,7 +82,8 @@ async def set_parameter(
         value (float): New parameter value (ignored for param_type="custom").
         param_type (str): Type of parameter - "int", "float", "custom"
                           (string parameters via PARAM_EXT; PX4 only), or
-                          "auto" (default: int if no decimal).
+                          "auto" (default: probe the parameter's real type,
+                          float first then int - NOT inferred from the value).
         custom_value (str): the string value for param_type="custom".
 
     Returns:
@@ -121,18 +122,33 @@ async def set_parameter(
                 "message": f"Parameter '{name}' set to {custom_value!r}",
             }
 
-        # Get old value first
-        try:
-            if param_type == "int" or (param_type == "auto" and value == int(value)):
-                old_value = await drone.param.get_param_int(name)
-                param_type_final = "int"
-            else:
+        # Determine the parameter's REAL type before writing. Inferring int-ness
+        # from whether the new value is a whole number is wrong: a float param
+        # such as PX4's MPC_XY_CRUISE set to 15.0 would then be written via
+        # set_param_int, which the autopilot silently drops - the float keeps its
+        # old value and the readback check fails. Probe the live type instead,
+        # float first (as get_parameter does): most params are float, and
+        # get_param_float raises WRONG_TYPE for a genuine int param.
+        old_value = None
+        if param_type == "auto":
+            try:
                 old_value = await drone.param.get_param_float(name)
                 param_type_final = "float"
-        except Exception:
-            old_value = None
-            # Assume float if we can't get old value
-            param_type_final = "float" if param_type == "auto" else param_type
+            except Exception:
+                try:
+                    old_value = await drone.param.get_param_int(name)
+                    param_type_final = "int"
+                except Exception:
+                    param_type_final = "float"
+        else:
+            param_type_final = param_type
+            try:
+                if param_type == "int":
+                    old_value = await drone.param.get_param_int(name)
+                else:
+                    old_value = await drone.param.get_param_float(name)
+            except Exception:
+                old_value = None
 
         # Set new value
         if param_type_final == "int":

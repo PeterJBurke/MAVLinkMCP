@@ -71,6 +71,9 @@ class MissionRunner:
         self._pause_requested = False
         self._abort_requested = False
         self._resume_requested = False
+        # One-shot: True once we have commanded the post-mission descent, so we
+        # do not re-issue RTL on every poll after the mission items finish.
+        self._descent_commanded = False
 
     # ------------------------------------------------------------- plumbing
 
@@ -185,6 +188,7 @@ class MissionRunner:
         )
         self.record = record
         self._pause_requested = self._abort_requested = self._resume_requested = False
+        self._descent_commanded = False
         self.emit(
             "info",
             f"mission submitted with {len(waypoints)} waypoint(s)",
@@ -432,6 +436,8 @@ class MissionRunner:
                     )
 
             # ---- completion ----
+            # The definitive completion signal is firmware-agnostic: we were
+            # airborne and the vehicle is now disarmed on the ground.
             altitude = (record.last_position or {}).get("relative_altitude_m") or 0.0
             if record.last_armed and altitude > 2.0:
                 was_airborne = True
@@ -440,8 +446,22 @@ class MissionRunner:
                 self.set_phase(Phase.COMPLETED, s, reason="landed and disarmed")
                 return
 
-            if was_airborne and record.phase_enum is Phase.RUNNING and await self._mission_items_done(drone):
-                self.set_phase(Phase.LANDING, s, reason="mission items complete, descending")
+            # Getting *to* that signal differs by firmware. ArduPilot missions
+            # self-terminate with a land+disarm, so RUNNING -> disarmed happens
+            # on its own. PX4 instead loiters (HOLD) armed at the final waypoint
+            # forever, so the disarm never arrives and the mission would time out
+            # in RUNNING. When the mission items are finished we therefore command
+            # the descent ourselves - once - so both firmwares converge on the
+            # "landed and disarmed" completion above.
+            if (
+                was_airborne
+                and record.phase_enum is Phase.RUNNING
+                and not self._descent_commanded
+                and await self._mission_items_done(drone, record)
+            ):
+                self._descent_commanded = True
+                self.emit("info", "mission items complete - commanding return-to-launch", s)
+                await self._do_action(s.mission_complete_action, drone, s, reason="mission items complete")
 
         return
 
@@ -478,12 +498,35 @@ class MissionRunner:
         self._checkpoint(s)
         return ok
 
-    async def _mission_items_done(self, drone) -> bool:
-        """Advisory on ArduPilot - used only to move RUNNING -> LANDING, never
-        to declare the mission complete."""
+    async def _mission_items_done(self, drone, record: MissionRecord) -> bool:
+        """True when the vehicle has flown every mission item.
+
+        Three independent signals, any of which suffices - because no single one
+        is reliable across firmwares (measured on PX4 v1.16.2, 2026-08-12):
+
+        1. MavSDK ``is_mission_finished()`` - reliable on ArduPilot;
+        2. the last ``mission_progress`` sample reaching ``current >= total`` -
+           populated on ArduPilot, but on PX4 the progress stream falls SILENT
+           once the mission ends (it only emits on waypoint transitions), so it
+           never arrives;
+        3. the flight mode dropping into ``HOLD`` - PX4 leaves mission execution
+           and loiters when it finishes, and this is the only one of the three
+           that actually fires there. ``HOLD`` is a PX4 mode name; ArduCopter
+           stays in ``AUTO`` through a mission and has no bare ``HOLD`` mode, so
+           this cannot mis-fire on ArduPilot mid-mission.
+
+        We never declare the mission *complete* from this alone - it only
+        triggers the post-mission descent; the authoritative completion is still
+        "landed and disarmed", and the caller gates this on was_airborne + the
+        RUNNING phase so a hold can only mean the mission is over.
+        """
         with contextlib.suppress(Exception):
-            return bool(await asyncio.wait_for(drone.mission_raw.is_mission_finished(), timeout=5))
-        return False
+            if bool(await asyncio.wait_for(drone.mission_raw.is_mission_finished(), timeout=5)):
+                return True
+        total = record.total_items
+        if total > 0 and record.current_item >= total:
+            return True
+        return (record.last_flight_mode or "").upper() == "HOLD"
 
     # ------------------------------------------------------------- actions
 

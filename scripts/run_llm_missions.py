@@ -110,6 +110,22 @@ def main() -> int:
     parser.add_argument("--label", default="", help="label for this run's directory")
     parser.add_argument("--audit-log", default="", help="server audit.jsonl, to join server-side latency")
     parser.add_argument("--target-label", default="", help="what the server is flying (for the report)")
+    parser.add_argument(
+        "--param-name",
+        default="",
+        help="autopilot parameter T7 reads/writes. Default (empty) uses the "
+        "suite default WPNAV_SPEED (ArduPilot); for PX4 pass e.g. "
+        "MPC_XY_CRUISE - WPNAV_SPEED does not exist on PX4 and T7 would fail",
+    )
+    parser.add_argument(
+        "--param-write-value",
+        type=float,
+        default=None,
+        help="in-range value for T7 to write to --param-name. Default (unset) "
+        "writes original+10, valid for ArduPilot WPNAV_SPEED but overshooting "
+        "bounded PX4 params (MPC_XY_CRUISE maxes at 12 m/s, so the write is "
+        "clamped and T7 fails); pass a value inside range, e.g. 8.0",
+    )
     parser.add_argument("--include-slow", action="store_true", help="include T10 (>10 minutes)")
 
     maps = parser.add_argument_group(
@@ -368,6 +384,10 @@ def main() -> int:
         maps_url=args.maps_url,
         maps_api_key=args.maps_api_key,
         capture=capture_cfg,
+        context_overrides={
+            **({"param_name": args.param_name} if args.param_name else {}),
+            **({"param_write_value": args.param_write_value} if args.param_write_value is not None else {}),
+        },
     )
 
     print(f"model:    {route.requested_model} via {route.provider.name} ({route.routing})")

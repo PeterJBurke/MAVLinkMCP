@@ -40,6 +40,13 @@ class MissionSettings(BaseSettings):
     #: What to do if the vehicle leaves the server-side geofence mid-mission.
     geofence_breach_action: str = "rtl"  # rtl | land | hold | none
 
+    #: What to command once every mission item has been flown. ArduPilot
+    #: missions self-terminate with a land+disarm; PX4 loiters (HOLD) armed at
+    #: the final waypoint, so the server actively brings it down to reach the
+    #: "landed and disarmed" completion signal. "rtl" returns to launch first
+    #: (safest - lands at home); "land" descends in place.
+    mission_complete_action: str = "rtl"  # rtl | land
+
     #: What to do if the MAVLink link to the vehicle drops while a mission is
     #: running. "none" leaves it to the autopilot's own failsafe (which is
     #: usually the right answer - the autopilot is closer to the problem).

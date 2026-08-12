@@ -608,15 +608,17 @@ def test_every_artifact_the_module_calls_required_has_a_check(tmp_path):
 def test_columns_the_dictionary_promises_and_the_data_never_carries(tmp_path):
     """The defect this check exists for.
 
-    ``hdop``, ``vdop``, ``ekf_ok`` and ``geofence_ok`` were empty in every row
-    of every mission of every bundle this project ever captured - MavSDK's
-    telemetry plugin exposes none of them - while Plan 19 §3b listed them as
-    required columns and ``verify_bundle`` reported every one of those bundles
-    complete. Shipping a Zenodo package whose data dictionary describes columns
-    that are always blank is exactly the reproducibility criticism the revision
-    exists to answer, so an unkept promise is now a degraded bundle.
+    ``hdop`` and ``vdop`` were empty in every row of every mission of every
+    bundle this project ever captured - MavSDK's telemetry plugin exposes
+    neither - while Plan 19 §3b listed them as required columns and
+    ``verify_bundle`` reported every one of those bundles complete. They come
+    off the wire (``GPS_RAW_INT``) on every firmware, so requiring them is what
+    proves the tap's ``raw_source`` is wired to the recorder. Shipping a Zenodo
+    package whose data dictionary describes columns that are always blank is
+    exactly the reproducibility criticism the revision exists to answer, so an
+    unkept promise is now a degraded bundle.
     """
-    blank = ("hdop", "vdop", "ekf_ok", "geofence_ok")
+    blank = ("hdop", "vdop")
     trial_dir = complete_bundle(tmp_path, telemetry_blank_columns=blank)
     check = verify_bundle(trial_dir, require_transcript=True)
 
@@ -627,6 +629,26 @@ def test_columns_the_dictionary_promises_and_the_data_never_carries(tmp_path):
         assert column in problem[0]
     # The recording itself is fine - it is the schema that is not.
     assert [c for c in check.checks if c.name == "telemetry.csv"][0].ok
+
+
+def test_firmware_health_columns_blank_do_not_degrade_a_bundle(tmp_path):
+    """PX4 leaves ``ekf_ok``/``geofence_ok`` blank and that is honest.
+
+    Those two are the autopilot's own health bits, read from ``SYS_STATUS``
+    only when the autopilot declares the subsystem present. ArduPilot sets the
+    AHRS/GEOFENCE present bits and fills both columns; PX4 v1.16.2 SITL sets
+    neither (present=0x0200402f), so both are blank on every PX4 row. Requiring
+    them would degrade every PX4 bundle for telling the truth, so the schema
+    check reports them and does not fail. The wire-wiring they used to
+    co-witness is now guarded by ``hdop``/``vdop``, which PX4 does carry.
+    """
+    trial_dir = complete_bundle(tmp_path, telemetry_blank_columns=("ekf_ok", "geofence_ok"))
+    check = verify_bundle(trial_dir, require_transcript=True)
+
+    assert check.complete, check.problems
+    schema = [c for c in check.checks if c.name == "telemetry.csv schema"][0]
+    assert schema.ok
+    assert "firmware-health" in schema.detail
 
 
 def test_a_column_dropped_from_the_header_is_caught_too(tmp_path):

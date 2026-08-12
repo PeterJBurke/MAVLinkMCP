@@ -193,3 +193,90 @@ verdicts; it is now `McpTelemetryPoller`. The Plan 19 one in
 `telemetry.csv`. Both run during a captured LLM trial. Do not replace the
 poller with the recorder: every historical trial was judged by the poller, and
 swapping it would make old and new results incomparable.
+
+## The PX4 topology (llmuavpx4, validated 2026-08-12)
+
+The same four rules, wired onto the second firmware. The sim is **PX4 v1.16.2
+SITL** on the box `llmuavpx4` (tailnet `100.89.214.49`); on that box
+`px4-mavbridge.service` runs MAVProxy as the aggregation point:
+
+```
+  px4 SITL (udp 14540) ──▶ MAVProxy (llmuavpx4) ── tcpin  100.89.214.49:5760 ──┐
+                                       │                                        │
+                          udpin 14550 (GCS)   udpout 100.100.244.74:14540 ──┐   │
+                                                (telemetry forward, added)   │   │
+  llmuavdev:                                                                 │   │
+    droneserver-staging ─TCP 127.0.0.1:5679─▶ [ mavlink-relay-px4 ] ────────────┘
+                                                   │            │  (both directions)
+                                          TelemetryRecorder     └─UDP 127.0.0.1:14656
+                                          udp://:14540 ◀────────┘   MavlinkTap → mavlink.tlog
+    logs/<date>/*.ulg  ──scp──▶ retain_remote_dataflash (llmuavpx4:/var/lib/px4-sitl/log)
+```
+
+What differs from the ArduPilot stack, and why:
+
+1. **The relay is `mavlink-relay-px4.service`** — same byte-pump, upstream
+   `100.89.214.49:5760` (MAVProxy's `tcpin`), mirror `127.0.0.1:14656`. It
+   `Conflicts=` the ArduPilot `mavlink-relay.service` because both listen on
+   `127.0.0.1:5679`, so `droneserver-staging` needs no env change to swap
+   firmwares — only the relay does. Tap endpoint is therefore
+   `udpin:127.0.0.1:14656`.
+
+2. **The telemetry recorder needs its own forwarded UDP stream.** MAVProxy's
+   `tcpin` serves the relay as its single client; a second MavSDK client on
+   `tcpout://…:5760` does not get a working link. So `px4-mavbridge` was given a
+   dedicated `--out=udpout:100.100.244.74:14540` forward (a systemd drop-in,
+   `10-telemetry-forward.conf`), and the recorder uses the same
+   `udp://:14540` listen endpoint the ArduPilot stack uses. Restore by removing
+   the drop-in + `daemon-reload` + restart.
+
+3. **PX4 logs are `.ulg`, nested by date** (`log/<YYYY-MM-DD>/HH_MM_SS.ulg`), so
+   `--dataflash-remote llmuavpx4:/var/lib/px4-sitl/log` and
+   `retain_remote_dataflash` must recurse (it does — `find -maxdepth 3`, added
+   for this). No `LOG_FILE_DSRMROT` equivalent is needed: PX4's default
+   `SDLOG_MODE=0` already logs from arm to disarm, so each flight is its own
+   `.ulg` and a non-arming trial writes none — the same correctness the
+   ArduPilot `.BIN` rotation gives.
+
+4. **PX4-specific data-dictionary gaps, disclosed not "fixed":**
+   - `ekf_ok` / `geofence_ok` are **blank on every PX4 row**. They are read from
+     `SYS_STATUS` only when the autopilot declares the subsystem *present*, and
+     PX4 v1.16.2 sets neither the AHRS nor the GEOFENCE present bit
+     (present=`0x0200402f`). ArduPilot sets both. `verify_bundle` therefore
+     reports these two columns rather than requiring them (see
+     `TELEMETRY_FIRMWARE_HEALTH_COLUMNS`); `hdop`/`vdop`, which come off
+     `GPS_RAW_INT` on every firmware, remain required and are what prove the
+     tap's `raw_source` is wired.
+   - `battery_pct` reads `0.0` on PX4 SITL (SIH publishes `BATTERY_STATUS.
+     battery_remaining=0` while `SYS_STATUS` says 100%); the column is non-empty
+     so the bundle is complete, but the value is not a real state of charge.
+     Same disclosure as ArduPilot's `battery_pct` (Plan 23 §4c).
+   - **T7's parameter is firmware-specific.** `WPNAV_SPEED` does not exist on
+     PX4 (the read times out and T7 fails), so both harnesses take
+     `--param-name`; PX4 uses `MPC_XY_CRUISE`. `get_home_position` works on PX4
+     with no HOME-on-request quirk, and the server-side geofence (firmware-
+     independent) still rejects T8 at range.
+
+### The working PX4 invocation (scripted suite)
+
+```bash
+cd /root/droneserver
+set -a; . /etc/droneserver/staging.env; set +a
+KEY="$(printf '%s' "$SAFETY_API_KEYS" | cut -d, -f1 | cut -d: -f2)"
+
+.venv/bin/python scripts/run_mission_suite.py \
+  --url http://127.0.0.1:8090/sse --api-key "$KEY" \
+  --missions T1,T2,T3,T4,T5,T6,T7,T8,T9 --trials 5 --label px4_n5 \
+  --audit-log /var/lib/droneserver/audit.jsonl \
+  --target-label "PX4 SITL (llmuavpx4)" \
+  --capture --mavlink-endpoint udpin:127.0.0.1:14656 \
+  --telemetry-address "udp://:14540" \
+  --firmware PX4 --firmware-version "PX4 v1.16.2" \
+  --param-name MPC_XY_CRUISE \
+  --sitl-host llmuavpx4 \
+  --dataflash-remote llmuavpx4:/var/lib/px4-sitl/log \
+  --require-complete-capture
+```
+
+The LLM harness (`run_llm_missions.py`, what the N=5 campaign runs) takes the
+identical capture flags plus `--param-name MPC_XY_CRUISE`.

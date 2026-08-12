@@ -44,6 +44,23 @@ def main() -> int:
     parser.add_argument("--audit-log", default="", help="server audit.jsonl to slice metrics from")
     parser.add_argument("--include-slow", action="store_true", help="include T10 (>10 min)")
     parser.add_argument("--target-label", default="", help="what the server is flying (for the report)")
+    parser.add_argument(
+        "--param-name",
+        default="",
+        help="autopilot parameter T7 reads/writes. Default (empty) uses the "
+        "suite default WPNAV_SPEED (ArduPilot); pass a firmware-appropriate "
+        "name for PX4, e.g. MPC_XY_CRUISE - WPNAV_SPEED does not exist on PX4 "
+        "and T7 would fail",
+    )
+    parser.add_argument(
+        "--param-write-value",
+        type=float,
+        default=None,
+        help="in-range value for T7 to write to --param-name. Default (unset) "
+        "writes original+10, which is valid for ArduPilot WPNAV_SPEED but "
+        "overshoots bounded PX4 params (MPC_XY_CRUISE maxes at 12 m/s); pass a "
+        "value inside the parameter's range, e.g. 8.0 for MPC_XY_CRUISE",
+    )
     parser.add_argument("--list", action="store_true", help="list the suite and exit")
 
     # -- Plan 19 capture layer (all optional; capture is OFF unless --capture) --
@@ -82,6 +99,10 @@ def main() -> int:
         "target_label": args.target_label or args.url,
         "client_label": "authenticated" if args.api_key else "unauthenticated",
     }
+    if args.param_name:
+        context["param_name"] = args.param_name
+    if args.param_write_value is not None:
+        context["param_write_value"] = args.param_write_value
     results = run_suite(
         client=client,
         mission_ids=ids,

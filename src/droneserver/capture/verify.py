@@ -160,13 +160,26 @@ TELEMETRY_STATE_COLUMNS = (
 #: This check exists because ``hdop``, ``vdop``, ``ekf_ok`` and ``geofence_ok``
 #: were empty in every row of every mission of every bundle ever captured -
 #: they are not in the MavSDK telemetry plugin - and ``verify_bundle`` called
-#: those bundles complete. A Zenodo data dictionary describing four columns
-#: that are always blank is precisely the reproducibility criticism this
-#: package exists to answer, so the schema is now enforced rather than
-#: documented.
+#: those bundles complete. A Zenodo data dictionary describing columns that are
+#: always blank is precisely the reproducibility criticism this package exists
+#: to answer, so the schema is now enforced rather than documented. ``hdop`` and
+#: ``vdop`` come off the wire (``GPS_RAW_INT``) on every firmware, so requiring
+#: them is what proves the tap's ``raw_source`` is actually wired to the
+#: recorder - the exact defect above - regardless of which autopilot flew.
 #:
 #: Deliberately NOT required, because a blank is honest rather than a gap:
 #:
+#: - ``ekf_ok`` / ``geofence_ok`` - the autopilot's OWN health bits, read from
+#:   ``SYS_STATUS`` only when the autopilot declares the subsystem *present*
+#:   (see :func:`droneserver.capture.telemetry_recorder._sensor_health`). Whether
+#:   they carry a value is therefore a property of the *firmware*, not of the
+#:   capture: ArduPilot sets the AHRS (0x00200000) and GEOFENCE (0x00100000)
+#:   present bits and fills both columns; PX4 (measured on v1.16.2 SITL,
+#:   present=0x0200402f) sets neither, so both are honestly blank on every PX4
+#:   row. Requiring them would degrade every PX4 bundle for telling the truth.
+#:   They live in :data:`TELEMETRY_FIRMWARE_HEALTH_COLUMNS` and are reported in
+#:   the schema detail without failing the bundle. The raw_source wiring they
+#:   used to co-witness is now guarded by ``hdop``/``vdop`` above.
 #: - ``flight_mode`` / ``armed`` / ``in_air`` - MavSDK delivers these one to two
 #:   seconds after subscribing, which a two-second trial (T7) can end before.
 #:   That the recorder connected at all is covered by
@@ -197,6 +210,14 @@ TELEMETRY_REQUIRED_COLUMNS = (
     "home_lat",
     "home_lon",
     "home_alt",
+)
+
+#: The autopilot's own health bits, whose presence is firmware-dependent (see
+#: the note on :data:`TELEMETRY_REQUIRED_COLUMNS`). Reported in the schema
+#: detail so a reader can see whether this firmware carried them, but never a
+#: reason to degrade a bundle: ArduPilot fills them, PX4 leaves them blank, and
+#: both are honest.
+TELEMETRY_FIRMWARE_HEALTH_COLUMNS = (
     "ekf_ok",
     "geofence_ok",
 )
@@ -457,6 +478,10 @@ class _TelemetryEvidence:
     #: does not even declare, and those that it declares but no row fills.
     absent_columns: list[str] = field(default_factory=list)
     unpopulated_columns: list[str] = field(default_factory=list)
+    #: Which firmware-dependent health columns
+    #: (:data:`TELEMETRY_FIRMWARE_HEALTH_COLUMNS`) this file actually filled.
+    #: Reported, never required (ArduPilot fills them, PX4 does not).
+    firmware_health_populated: list[str] = field(default_factory=list)
 
 
 def _read_telemetry(trial_dir: Path) -> _TelemetryEvidence:
@@ -470,11 +495,14 @@ def _read_telemetry(trial_dir: Path) -> _TelemetryEvidence:
         evidence.state_columns_present = any(c in fields for c in TELEMETRY_STATE_COLUMNS)
         evidence.absent_columns = [c for c in TELEMETRY_REQUIRED_COLUMNS if c not in fields]
         declared = [c for c in TELEMETRY_REQUIRED_COLUMNS if c in fields]
+        # Firmware-health columns are reported, not required (see the note on
+        # TELEMETRY_REQUIRED_COLUMNS): scan them for the detail line alongside.
+        health = [c for c in TELEMETRY_FIRMWARE_HEALTH_COLUMNS if c in fields]
         for record in reader:
             evidence.rows += 1
             # Which promised columns this file ever fills. Cheap: a column drops
             # out of the search as soon as one row carries it.
-            for column in declared:
+            for column in declared + health:
                 if column not in populated and str(record.get(column, "") or "").strip():
                     populated.add(column)
             if str(record.get("armed", "")).strip().lower() in ("true", "1"):
@@ -497,6 +525,7 @@ def _read_telemetry(trial_dir: Path) -> _TelemetryEvidence:
                 evidence.max_gap, evidence.max_gap_at = t - previous_t, t
             previous_t = t
     evidence.unpopulated_columns = [c for c in declared if c not in populated]
+    evidence.firmware_health_populated = [c for c in health if c in populated]
     return evidence
 
 
@@ -618,7 +647,15 @@ def _check_telemetry_schema(evidence: _TelemetryEvidence) -> Check:
             f"{', '.join(evidence.unpopulated_columns)} empty in every one of {evidence.rows} row(s) - "
             "the data dictionary promises these and the data does not carry them",
         )
-    return Check(name, True, f"all {len(TELEMETRY_REQUIRED_COLUMNS)} required columns populated")
+    # Firmware-health columns are reported, not required: which of them this
+    # autopilot filled is genuine provenance (ArduPilot fills both, PX4 neither),
+    # but never a reason to degrade the bundle.
+    health_note = (
+        f"; firmware-health carried: {', '.join(evidence.firmware_health_populated)}"
+        if evidence.firmware_health_populated
+        else "; firmware-health (ekf_ok/geofence_ok) blank - not reported by this firmware"
+    )
+    return Check(name, True, f"all {len(TELEMETRY_REQUIRED_COLUMNS)} required columns populated{health_note}")
 
 
 def _check_jsonl(trial_dir: Path, name: str) -> Check:

@@ -31,10 +31,51 @@ from droneserver.benchmark.missions import (
     MissionResult,
     SkipMission,
 )
+from droneserver.safety.config import SafetySettings
+from droneserver.safety.tiers import Tier, effective_tier
+
+#: The server's critical-tier rate-limit window, read from the safety config so
+#: the harness and the server cannot drift on the number.
+DEFAULT_CRITICAL_RATE_WINDOW_S: float = float(SafetySettings.model_fields["rate_limit_critical_window_s"].default)
+
+#: Static state for the imported tier classifier - pacing only needs the tool's
+#: base tier, and the always-critical tools (kill_motors, set_parameter,
+#: takeoff) that the safety missions fire are CRITICAL regardless of state.
+_PACING_STATE = {"in_air": False, "unknown": False}
+
+#: Scripted client statuses that mean the call never reached the server, so it
+#: never touched the limiter and must not be paced for.
+_DID_NOT_REACH_SERVER = {"transport_error"}
 
 
 def _utc() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _critical_drain_deadline(calls, window_s: float) -> float:
+    """Wall-clock time by which a trial's critical-tier calls have aged out.
+
+    ``0.0`` when the trial made no critical call (nothing to wait for). The tier
+    is computed with the server's own :func:`effective_tier` so the harness and
+    the safety layer agree on what "critical" means, and the call's *finish*
+    time is used because the server records the bucket entry when it processes
+    the call. This is the scripted twin of ``llm.runner._critical_drain_deadline``;
+    the LLM-driven paid arm already paces this way, so the scripted validation
+    now mirrors it and stops scoring T7/T9 down on a stopwatch artefact.
+    """
+    if window_s <= 0:
+        return 0.0
+    latest = 0.0
+    for call in calls:
+        if call.status in _DID_NOT_REACH_SERVER:
+            continue
+        # Pass the real arguments: set_parameter and takeoff escalate to CRITICAL
+        # on their arguments (a safety-critical param name, an absurd altitude),
+        # which is exactly what tripped the limiter in T7/T9.
+        tier, _ = effective_tier(call.tool, call.arguments or {}, _PACING_STATE)
+        if tier is Tier.CRITICAL:
+            latest = max(latest, call.started_at + call.wall_ms / 1000.0)
+    return latest + window_s if latest else 0.0
 
 
 def run_suite(
@@ -46,6 +87,7 @@ def run_suite(
     audit_log: Path | None = None,
     include_slow: bool = False,
     capture=None,
+    critical_rate_window_s: float = DEFAULT_CRITICAL_RATE_WINDOW_S,
 ) -> list[MissionResult]:
     """Run the mission suite.
 
@@ -96,6 +138,13 @@ def run_suite(
         )
 
     results: list[MissionResult] = []
+    # The critical-tier rate limiter is global per client_id, which every trial
+    # shares, so a critical-heavy trial (T7, T9) run back-to-back would starve
+    # the next trial's budget - a stopwatch artefact that reads as a capability
+    # gap. Between trials we wait for the previous trial's critical calls to age
+    # out of the window; the measured safety limit is untouched (this is time,
+    # not a looser rule). Mirrors llm.runner's pacing for the LLM-driven arm.
+    pace_until = 0.0
     for mission_id in mission_ids:
         mission = SUITE_BY_ID[mission_id]
         if mission.slow and not include_slow:
@@ -115,8 +164,18 @@ def run_suite(
             # Single shared t0 for the trial: the wall-clock trial-start time is
             # passed to MavlinkTap, TelemetryRecorder AND TranscriptWriter so all
             # per-trial artifacts share one t_rel_s origin.
+            remaining = pace_until - time.time()
+            if remaining > 0:
+                print(
+                    f"[{_utc()}] pacing {remaining:.0f}s so the previous trial's critical-tier rate-limit "
+                    f"budget drains (the safety limit is unchanged; this only spaces the trials out)",
+                    flush=True,
+                )
+                time.sleep(remaining)
+
             started = time.time()
             clock = time.perf_counter()
+            trial_call_start = len(client.calls)
             label = f"{mission.mission_id} trial {trial}/{trials}"
             print(f"[{_utc()}] START {label}: {mission.name}", flush=True)
 
@@ -153,7 +212,15 @@ def run_suite(
             # manifest, and the verification that says whether any of it is
             # real. The status is carried on the result so the caller can fail
             # a run whose flights were fine but whose evidence was not.
-            if trial_capture is not None:
+            #
+            # A SKIPPED mission never flew, so there is nothing to capture: its
+            # recorder would show "never connected to the drone" and be counted
+            # degraded, failing an otherwise-clean run under
+            # --require-complete-capture (measured: T6 auto-skip did exactly this
+            # on the PX4 N=5 run, 2026-08-12). Leave its capture_status empty -
+            # "" means "not captured" to both the summary and report_capture, so
+            # a skip is neither complete nor degraded, just absent.
+            if trial_capture is not None and not skipped:
                 audit_rows = _read_audit(audit_log, started, ended) if audit_log else []
                 check = trial_capture.finalize(
                     run_id=run_id,
@@ -169,6 +236,11 @@ def run_suite(
 
             # Between flights, make sure we left the vehicle safe.
             _settle(client)
+
+            # Set the drain deadline for THIS trial's critical calls; the next
+            # trial paces against it. _settle's own calls are read-only, so they
+            # do not extend it. Time spent settling counts toward the drain.
+            pace_until = _critical_drain_deadline(client.calls[trial_call_start:], critical_rate_window_s)
 
     # The capture loop is shared by every trial (see capture_session.capture_loop)
     # so it is the run, not the trial, that closes it. Draining it here rather

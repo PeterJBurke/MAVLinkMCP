@@ -30,6 +30,9 @@ class CallRecord:
     rule: str | None = None
     error: str | None = None
     confirmation_required: bool = False
+    #: The call's arguments, needed to reproduce the server's tier decision
+    #: (set_parameter/takeoff escalate to CRITICAL based on their arguments).
+    arguments: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -56,6 +59,7 @@ class BenchmarkClient:
                     (time.perf_counter() - clock) * 1000,
                     "transport_error",
                     error=f"{type(e).__name__}: {e}",
+                    arguments=dict(arguments),
                 )
             )
             raise
@@ -70,6 +74,7 @@ class BenchmarkClient:
                 rule=result.get("rule") if isinstance(result, dict) else None,
                 error=result.get("error") if isinstance(result, dict) else None,
                 confirmation_required=status == "confirmation_required",
+                arguments=dict(arguments),
             )
         )
         return result

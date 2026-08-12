@@ -255,6 +255,27 @@ def test_retain_remote_keeps_the_px4_suffix(tmp_path, monkeypatch):
     assert dest is not None and dest.name == "T2_t1.ulg"
 
 
+def test_retain_remote_searches_below_the_top_level_for_px4_dated_dirs(tmp_path, monkeypatch):
+    """PX4 nests logs one level down by date (``log/<date>/HH_MM_SS.ulg``).
+
+    A depth-1 listing finds nothing on a PX4 box, so every PX4 trial would
+    silently retain no dataflash log. The listing must therefore recurse, and a
+    nested path must still be copied and canonicalised to ``.ulg``.
+    """
+    calls = []
+    _fake_subprocess(
+        monkeypatch,
+        "1786000000.0 1786000000.5 4096 /var/lib/px4-sitl/log/2026-08-12/16_10_54.ulg\n",
+        calls=calls,
+    )
+    dest = retain_remote_dataflash("px4:/var/lib/px4-sitl/log", tmp_path, "T1_t1", min_mtime=1785999999.0)
+    assert dest is not None and dest.name == "T1_t1.ulg"
+    listing = next(c for c in calls if c[0] != "scp")
+    listing_cmd = listing[-1]
+    assert "-maxdepth 1 " not in listing_cmd, "a depth-1 search misses PX4's dated sub-directories"
+    assert "-maxdepth 3" in listing_cmd
+
+
 def test_retain_remote_refuses_a_log_that_only_grew_during_the_trial(tmp_path, monkeypatch):
     """The autopilot keeps its log open past disarm, so a still-growing file
     from an earlier flight has a fresh mtime. Birth time is what settles it."""
