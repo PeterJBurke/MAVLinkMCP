@@ -126,6 +126,15 @@ def main() -> int:
         "bounded PX4 params (MPC_XY_CRUISE maxes at 12 m/s, so the write is "
         "clamped and T7 fails); pass a value inside range, e.g. 8.0",
     )
+    parser.add_argument(
+        "--takeoff-altitude",
+        type=float,
+        default=None,
+        help="override the mission takeoff altitude (m). Default 20 m fits SITL "
+        "but is REJECTED by a tight real-cage ceiling; pass e.g. 1.5 for a 20-ft "
+        "cage. Only T1 (and the no-room safety missions) are cage-appropriate - "
+        "the waypoint/survey missions need more room than a cage has.",
+    )
     parser.add_argument("--include-slow", action="store_true", help="include T10 (>10 minutes)")
 
     maps = parser.add_argument_group(
@@ -387,6 +396,7 @@ def main() -> int:
         context_overrides={
             **({"param_name": args.param_name} if args.param_name else {}),
             **({"param_write_value": args.param_write_value} if args.param_write_value is not None else {}),
+            **({"takeoff_altitude_m": args.takeoff_altitude} if args.takeoff_altitude is not None else {}),
         },
     )
 
