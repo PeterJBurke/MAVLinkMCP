@@ -111,6 +111,13 @@ def main() -> int:
     parser.add_argument("--audit-log", default="", help="server audit.jsonl, to join server-side latency")
     parser.add_argument("--target-label", default="", help="what the server is flying (for the report)")
     parser.add_argument(
+        "--real-aircraft",
+        action="store_true",
+        help="tell the model the truth that it is flying a REAL aircraft (cage "
+        "demonstrations). Without it the system prompt keeps the benchmark's "
+        "simulator wording - never pass this for SITL trials",
+    )
+    parser.add_argument(
         "--param-name",
         default="",
         help="autopilot parameter T7 reads/writes. Default (empty) uses the "
@@ -371,6 +378,7 @@ def main() -> int:
         out_dir=out_dir,
         audit_log=Path(args.audit_log) if args.audit_log else None,
         target_label=args.target_label,
+        real_aircraft=args.real_aircraft,
         include_slow=args.include_slow,
         telemetry_interval_s=args.telemetry_interval_s,
         limits=Limits(

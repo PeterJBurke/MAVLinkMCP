@@ -87,7 +87,7 @@ from droneserver.llm.mcp_session import (
     MultiServerSession,
     ToolSession,
 )
-from droneserver.llm.prompts import SYSTEM_PROMPT, mission_prompts
+from droneserver.llm.prompts import SYSTEM_PROMPT, mission_prompts, system_prompt
 from droneserver.llm.providers import ToolSpec, open_session, resolve_model
 from droneserver.llm.spend import BudgetExceeded, Price, SpendLedger, project_trial_cost_usd
 from droneserver.llm.verdicts import TRACK_HEADER, Track, Verdict, distance_m, judge
@@ -431,6 +431,11 @@ class SuiteConfig:
     #: surface the other missions are measured against, which is a confound.
     maps_url: str = ""
     maps_api_key: str = ""
+    #: Tell the model the truth when it is flying a REAL aircraft (the cage
+    #: demonstrations). Default False keeps the benchmark's simulator wording,
+    #: which every N=5 SITL trial was flown with; the two prompts differ by
+    #: that one paragraph of fact and nothing else (see prompts.py).
+    real_aircraft: bool = False
     #: Plan 19 per-trial capture. ``None`` (the default) leaves this harness
     #: exactly as it was: no per-trial directories, no recorders, and no
     #: pymavlink/mavsdk import. A
@@ -1090,7 +1095,7 @@ async def _run_trial(
                 model=model,
                 mcp=session,
                 tools=tools,
-                system_prompt=SYSTEM_PROMPT,
+                system_prompt=system_prompt(config.real_aircraft),
                 user_prompt=prompt,
                 limits=config.limits,
                 on_event=lambda kind, item: _log_event(log, kind, item),
@@ -1233,7 +1238,9 @@ async def _start_capture(config: SuiteConfig, ctx: dict, mission_id: str, trial:
 
         trial_dir = config.out_dir / mission_id / f"trial_{trial}"
         capture = TrialCapture(config.capture, trial_dir, t0=t0)
-        await asyncio.to_thread(capture.start, None, ctx, system_prompt=SYSTEM_PROMPT, user_prompt=prompt)
+        await asyncio.to_thread(
+            capture.start, None, ctx, system_prompt=system_prompt(config.real_aircraft), user_prompt=prompt
+        )
         return capture
     except Exception as e:  # noqa: BLE001 - capture must never break a flight
         log(f"[{_utc()}] [capture] could not start for {mission_id} trial {trial}: {type(e).__name__}: {e}")
