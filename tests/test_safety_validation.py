@@ -128,13 +128,19 @@ class TestPreconditions:
         r = check_preconditions("initiate_mission", {}, state, s)
         assert r is not None and r.rule == "precondition.mission_required"
 
-    def test_unknown_state_fails_open_by_default(self, s):
-        assert check_preconditions("go_to_location", {}, {"unknown": True}, s) is None
+    def test_unknown_state_fails_open_for_recovery_commands(self, s):
+        """Since the 2026-08-16 energy-direction split, unknown state is not one
+        policy but two: recovery commands stay allowed..."""
+        assert check_preconditions("land", {}, {"unknown": True}, s) is None
+        assert check_preconditions("return_to_launch", {}, {"unknown": True}, s) is None
 
-    def test_unknown_state_fails_closed_when_configured(self):
-        s = SafetySettings(_env_file=None, preconditions_fail_closed=True)
-        r = check_preconditions("go_to_location", {}, {"unknown": True}, s)
-        assert r is not None and r.rule == "precondition.state_unknown"
+    def test_unknown_state_fails_closed_for_energy_adding_commands(self, s):
+        """...and commands that add energy are refused, in either policy
+        setting. (This used to fail OPEN by default.)"""
+        for fail_closed in (False, True):
+            settings = SafetySettings(_env_file=None, preconditions_fail_closed=fail_closed)
+            r = check_preconditions("go_to_location", {}, {"unknown": True}, settings)
+            assert r is not None and r.rule == "failsafe.energy_direction"
 
 
 class TestGeofenceRule:

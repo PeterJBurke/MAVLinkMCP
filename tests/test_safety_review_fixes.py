@@ -195,11 +195,18 @@ class TestS8RadiusFenceInertUntilHomeKnown:
 
 class TestS9FailClosedCoversAllStateRules:
     def test_fail_closed_covers_takeoff_and_mission_start(self):
-        s = SafetySettings(_env_file=None, preconditions_fail_closed=True)
-        for tool in ("go_to_location", "takeoff", "initiate_mission"):
-            r = check_preconditions(tool, {}, {"unknown": True}, s)
-            assert r is not None, f"{tool} must fail closed when state is unknown"
-            assert r.rule == "precondition.state_unknown"
+        """S9 asked that fail-closed cover every state-dependent rule, not just
+        navigation. The 2026-08-16 energy-direction split went further: these
+        three all ADD energy, so they are now refused on unknown state in EITHER
+        policy setting, under the more specific ``failsafe.energy_direction``
+        rule. (``precondition.state_unknown`` still decides tools the energy
+        table leaves NEUTRAL.) See test_safety_failsafe_policy.py."""
+        for fail_closed in (False, True):
+            s = SafetySettings(_env_file=None, preconditions_fail_closed=fail_closed)
+            for tool in ("go_to_location", "takeoff", "initiate_mission"):
+                r = check_preconditions(tool, {}, {"unknown": True}, s)
+                assert r is not None, f"{tool} must fail closed when state is unknown"
+                assert r.rule == "failsafe.energy_direction"
 
     def test_calibrate_blocked_regardless_of_policy(self):
         """Calibration gets the more specific ground-only rule, and is blocked
@@ -209,8 +216,11 @@ class TestS9FailClosedCoversAllStateRules:
             r = check_preconditions("calibrate", {}, {"unknown": True}, s)
             assert r is not None and r.rule == "precondition.ground_only"
 
-    def test_fail_open_default_unchanged(self, s):
-        assert check_preconditions("go_to_location", {}, {"unknown": True}, s) is None
+    def test_fail_open_still_applies_to_recovery_commands(self, s):
+        """The fail-OPEN half of the split: a telemetry hiccup must never
+        strand an airborne vehicle or block the abort path."""
+        for tool in ("land", "return_to_launch", "hold_position", "emergency_stop"):
+            assert check_preconditions(tool, {}, {"unknown": True}, s) is None
 
 
 class TestResolveTarget:

@@ -9,7 +9,9 @@ instead, rather than just "denied".
 
 import time
 from collections import defaultdict, deque
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from enum import Enum
 
 from droneserver.safety.config import SafetySettings
 from droneserver.safety.geofence import Geofence, check_mission, check_position
@@ -247,6 +249,192 @@ GROUND_ONLY_TOOLS = frozenset({"calibrate", "cancel_calibration"})
 STATE_DEPENDENT_RULES = NAVIGATION_TOOLS | MISSION_START_TOOLS | GROUND_ONLY_TOOLS | {"takeoff"}
 
 
+# ------------------------------------------------- energy direction (unknown state)
+#
+# THE ONE TABLE that decides what happens when the safety layer cannot read the
+# vehicle's state. The independent review's recommendation, adopted by the
+# project owner on 2026-08-16: the right question is not "how timid are we
+# feeling" (a single global fail-open/fail-closed switch) but **which direction
+# does this command move energy**.
+#
+# - A command that REDUCES energy or recovers the vehicle (land, RTL, hold,
+#   emergency stop) must stay available: a telemetry hiccup must never strand
+#   an airborne vehicle or block the abort path. FAIL OPEN.
+# - A command that ADDS energy or commits the vehicle to NEW motion (arm,
+#   takeoff, navigation, mission start, actuator/speed increases) is refused
+#   until telemetry returns. FAIL CLOSED. Refusing a new command costs nothing -
+#   the vehicle keeps doing whatever was already validated when it was
+#   commanded; accepting it commits an aircraft we cannot see to a trajectory
+#   we cannot check.
+# - Everything else is NEUTRAL: unchanged behaviour (the
+#   ``preconditions_fail_closed`` switch still decides those).
+#
+# This split is deliberately a TABLE, not a scatter of ifs: the classification
+# of every affected tool has to be readable, and reviewable, in one place.
+# Rejections carry the rule id ``failsafe.energy_direction`` in the audit log.
+
+
+class EnergyDirection(str, Enum):
+    """Which way a command moves the vehicle's energy."""
+
+    REDUCES = "reduces"  # fail OPEN when state is unknown
+    ADDS = "adds"  # fail CLOSED when state is unknown
+    NEUTRAL = "neutral"  # neither; existing policy decides
+
+
+_REDUCES, _ADDS = EnergyDirection.REDUCES, EnergyDirection.ADDS
+
+#: Tools whose energy direction is fixed regardless of arguments.
+ENERGY_DIRECTION: dict[str, EnergyDirection] = {
+    # ------------- reduce energy / recover the vehicle -> FAIL OPEN -------------
+    "land": _REDUCES,
+    "return_to_launch": _REDUCES,
+    "hold_position": _REDUCES,
+    "hold_mission_position": _REDUCES,
+    "pause_mission": _REDUCES,
+    "monitor_flight": _REDUCES,  # watches, and its only action is landing in place
+    "emergency_stop": _REDUCES,  # ALL modes (land/rtl/kill) - this is the abort path
+    "kill_motors": _REDUCES,  # ends the flight; its friction is the token, not this rule
+    "disarm_drone": _REDUCES,  # ditto - and unknown state already escalates it to CRITICAL
+    # ------------- add energy / commit to new motion -> FAIL CLOSED -------------
+    "arm_drone": _ADDS,
+    "takeoff": _ADDS,
+    "go_to_location": _ADDS,
+    "move_to_relative": _ADDS,
+    "reposition": _ADDS,
+    "set_yaw": _ADDS,
+    "do_orbit": _ADDS,
+    "offboard_set_position_ned": _ADDS,
+    "offboard_set_position_global": _ADDS,
+    "offboard_set_velocity_ned": _ADDS,
+    "offboard_set_velocity_body": _ADDS,
+    "offboard_set_attitude": _ADDS,
+    "offboard_set_acceleration_ned": _ADDS,
+    "offboard_set_actuator_control": _ADDS,
+    "initiate_mission": _ADDS,  # uploads AND flies
+    "resume_mission": _ADDS,
+    "start_managed_mission": _ADDS,
+    "set_max_speed": _ADDS,  # raises the speed envelope
+    "set_actuator": _ADDS,  # drives an output directly, bypassing the mixer
+    "manual_control": _ADDS,  # stick inputs command motion
+    "vtol_transition": _ADDS,  # commits the airframe to a new flight regime
+    # Deliberately NOT listed (NEUTRAL, with the reason):
+    #   upload_mission / import_qgc_mission - uploading adds no energy; STARTING
+    #     the mission does, and that is initiate_mission / resume_mission. An
+    #     in-air (or unknown-state) plan import already escalates to CRITICAL.
+    #   clear_geofence / upload_geofence / raw_geofence_transfer - containment
+    #     changes, covered by the tier escalation, which fails closed on unknown.
+    #   set_parameter, camera/gimbal/payload, telemetry rates, logs - no motion.
+}
+
+#: Flight modes that recover or park the vehicle. Any OTHER mode is treated as
+#: energy-adding: "auto" starts a mission, "guided"/"offboard" hand control to
+#: something that will command motion.
+_RECOVERY_FLIGHT_MODES = frozenset(
+    {
+        "land",
+        "rtl",
+        "smart_rtl",
+        "smartrtl",
+        "return",
+        "return_to_launch",
+        "hold",
+        "loiter",
+        "brake",
+        "poshold",
+        "position_hold",
+        "althold",
+        "alt_hold",
+        "qland",
+        "qrtl",
+    }
+)
+
+
+def _direction_offboard_control(args: dict) -> EnergyDirection:
+    """Only "start" commands motion; "stop" parks and "status" reads."""
+    return _ADDS if str(args.get("action", "")).lower() == "start" else _REDUCES
+
+
+def _direction_flight_mode(args: dict) -> EnergyDirection:
+    mode = str(args.get("mode", "")).strip().lower()
+    return _REDUCES if mode in _RECOVERY_FLIGHT_MODES else _ADDS
+
+
+def _direction_raw_mission_control(args: dict) -> EnergyDirection:
+    action = str(args.get("action", "")).lower()
+    if action == "start":
+        return _ADDS
+    if action == "pause":
+        return _REDUCES
+    return EnergyDirection.NEUTRAL
+
+
+def _direction_managed_mission(args: dict) -> EnergyDirection:
+    action = str(args.get("action", "")).lower()
+    if action == "resume":
+        return _ADDS
+    if action in ("pause", "abort"):
+        return _REDUCES
+    return EnergyDirection.NEUTRAL
+
+
+def _direction_follow_me(args: dict) -> EnergyDirection:
+    action = str(args.get("action", "")).lower()
+    if action in ("start", "target", "config"):
+        return _ADDS
+    if action == "stop":
+        return _REDUCES
+    return EnergyDirection.NEUTRAL
+
+
+#: Tools whose direction depends on an argument. Same policy, one level down.
+ENERGY_DIRECTION_BY_ARGS: dict[str, Callable[[dict], EnergyDirection]] = {
+    "offboard_control": _direction_offboard_control,
+    "set_flight_mode": _direction_flight_mode,
+    "raw_mission_control": _direction_raw_mission_control,
+    "control_managed_mission": _direction_managed_mission,
+    "follow_me": _direction_follow_me,
+}
+
+#: Every tool that can be classified ADDS - i.e. every tool that can be refused
+#: by :func:`check_energy_direction`. The middleware must REFRESH vehicle state
+#: for these, never read a stale snapshot: an unrefreshed snapshot reads
+#: "unknown", which would refuse them permanently (the same trap the S3 fence
+#: escalation fell into).
+ENERGY_ADDING_TOOLS = frozenset(
+    {tool for tool, direction in ENERGY_DIRECTION.items() if direction is _ADDS} | set(ENERGY_DIRECTION_BY_ARGS)
+)
+
+
+def energy_direction(tool: str, args: dict) -> EnergyDirection:
+    """Classify a call by the direction it moves the vehicle's energy."""
+    by_args = ENERGY_DIRECTION_BY_ARGS.get(tool)
+    if by_args is not None:
+        return by_args(args or {})
+    return ENERGY_DIRECTION.get(tool, EnergyDirection.NEUTRAL)
+
+
+def check_energy_direction(tool: str, args: dict) -> Rejection | None:
+    """The unknown-state policy. Call ONLY when ``state["unknown"]`` is true.
+
+    Returns a rejection for energy-adding calls, and None for everything else -
+    including, deliberately, every energy-reducing call, which stays allowed
+    even when the operator has configured ``preconditions_fail_closed``.
+    """
+    if energy_direction(tool, args) is not EnergyDirection.ADDS:
+        return None
+    return Rejection(
+        "failsafe.energy_direction",
+        f"{tool} adds energy or commits the drone to new motion, and the safety layer "
+        "cannot currently read the vehicle's state (telemetry unknown or stale), so the "
+        "command was refused rather than flown blind",
+        "Wait for telemetry to recover (get_health, get_position) and retry. Commands that "
+        "reduce energy or recover the vehicle - land, return_to_launch, hold_position, "
+        "emergency_stop - stay available while telemetry is unreadable.",
+    )
+
+
 def check_preconditions(tool: str, args: dict, state: dict, s: SafetySettings) -> Rejection | None:
     """Vehicle-state preconditions, including the takeoff-then-crash fix."""
     # Evaluated before the unknown-state early return: calibrating in flight is
@@ -260,10 +448,19 @@ def check_preconditions(tool: str, args: dict, state: dict, s: SafetySettings) -
         )
 
     if state.get("unknown"):
-        # Telemetry unreadable. Default is fail-open (documented) so a
-        # telemetry hiccup cannot strand an airborne vehicle. When configured
-        # to fail closed this now covers EVERY state-dependent rule, not just
-        # navigation.
+        # Telemetry unreadable. The policy is no longer a single global switch:
+        # ENERGY_DIRECTION decides first (fail OPEN for anything that reduces
+        # energy or recovers the vehicle, fail CLOSED for anything that adds
+        # energy or commits to new motion), and only what it leaves NEUTRAL is
+        # decided by the ``preconditions_fail_closed`` setting.
+        direction = energy_direction(tool, args)
+        if direction is EnergyDirection.REDUCES:
+            return None  # always available - never let a hiccup block recovery
+        rejection = check_energy_direction(tool, args)
+        if rejection is not None:
+            return rejection
+        # NEUTRAL only. When configured to fail closed this covers EVERY
+        # state-dependent rule, not just navigation.
         if s.preconditions_fail_closed and tool in STATE_DEPENDENT_RULES:
             return Rejection(
                 "precondition.state_unknown",

@@ -149,11 +149,18 @@ class TestAuth:
         assert not telemetry.can(Tier.CRITICAL)
         assert control.can(Tier.CRITICAL) and control.can(Tier.EMERGENCY)
 
-    def test_no_keys_configured_grants_control_with_warning(self):
-        """A default install must be usable; auth binds once it is configured."""
+    def test_no_keys_configured_grants_telemetry_only(self):
+        """Peter's 2026-08-16 decision: the unconfigured fallback is read-only.
+
+        It used to grant ``control`` so a default install was flyable out of the
+        box. It now grants ``telemetry``: the server still starts and still
+        answers every telemetry question, but command and control requires
+        configured keys. Fuller coverage in test_safety_failsafe_policy.py.
+        """
         s = SafetySettings(_env_file=None, api_keys="")
         client = authenticate(None, s)
-        assert client.scope == "control" and client.can(Tier.CRITICAL)
+        assert client.scope == "telemetry" and client.can(Tier.READ_ONLY)
+        assert not client.can(Tier.NORMAL) and not client.can(Tier.CRITICAL)
         assert not client.authenticated  # still recorded as unauthenticated
         assert client.client_id == "unconfigured"
 

@@ -118,9 +118,10 @@ def _warn_unconfigured_once() -> None:
     _warned_unconfigured = True
     logger.warning(
         "SAFETY: no API keys configured (SAFETY_API_KEYS is empty) - every client is "
-        "granted 'control' scope. Authentication is NOT protecting this server. "
-        "Configure SAFETY_API_KEYS before any real-hardware use, or set "
-        "SAFETY_UNAUTHENTICATED_SCOPE explicitly to choose a policy."
+        "restricted to 'telemetry' (read-only) scope. COMMAND AND CONTROL REQUIRES "
+        "CONFIGURED KEYS: nothing can arm, take off, navigate or otherwise command "
+        "this drone until SAFETY_API_KEYS is set. Configure it before any flight, or "
+        "set SAFETY_UNAUTHENTICATED_SCOPE explicitly to choose a different policy."
     )
 
 
@@ -128,12 +129,15 @@ def authenticate(presented_key: str | None, s: SafetySettings) -> Client:
     """Resolve a presented key to a client.
 
     **When no API keys are configured at all**, no client can possibly
-    authenticate, so enforcing a scope would make the server inoperable out of
-    the box - a guardrail people would respond to by disabling the whole layer.
-    In that case every client gets ``control`` scope and a loud warning is
-    logged (once), and audit records still show ``authenticated: false``. Set
-    ``SAFETY_UNAUTHENTICATED_SCOPE`` explicitly to override this, including to
-    ``reject``.
+    authenticate. That fallback used to grant ``control`` scope so a default
+    install was flyable out of the box; the project owner tightened it on
+    2026-08-16 (independent-review recommendation) to ``telemetry`` -
+    read-only. The server still starts, still connects, and still answers every
+    telemetry question, so the guardrail is not one an operator has to disable
+    wholesale; but **command and control now requires configured keys**. A loud
+    warning is logged (once) saying exactly that, and audit records still show
+    ``authenticated: false``. Set ``SAFETY_UNAUTHENTICATED_SCOPE`` explicitly to
+    override this, including back to ``control`` or up to ``reject``.
 
     Once keys ARE configured, an unknown/absent key falls back to
     ``unauthenticated_scope``: ``telemetry`` (default, read-only),
@@ -145,7 +149,7 @@ def authenticate(presented_key: str | None, s: SafetySettings) -> Client:
     registry = parse_api_keys(s.api_keys)
     if not registry and "unauthenticated_scope" not in s.model_fields_set:
         _warn_unconfigured_once()
-        return Client("unconfigured", "control", authenticated=False)
+        return Client("unconfigured", "telemetry", authenticated=False)
 
     if presented_key:
         # constant-time compare against each configured key

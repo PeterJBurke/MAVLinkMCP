@@ -143,6 +143,66 @@ def test_every_exemption_has_a_reason():
     assert not empty, f"exemptions need a written reason: {empty}"
 
 
+#: Tools that can move the aircraft or commit it to motion. The 2026-08-16
+#: energy-direction policy must classify every one of them explicitly - a
+#: motion tool that falls through to NEUTRAL would be flown blind when
+#: telemetry is unreadable, which is the exact failure the policy exists to
+#: prevent. Arg-dependent tools are probed with their motion-commanding action.
+MOTION_TOOLS: dict[str, dict] = {
+    **{tool: {} for tool in V.NAVIGATION_TOOLS - set(V.ENERGY_DIRECTION_BY_ARGS)},
+    **{tool: {} for tool in V.MISSION_START_TOOLS},
+    "takeoff": {},
+    "arm_drone": {},
+    "start_managed_mission": {},
+    "set_max_speed": {},
+    "manual_control": {},
+    "vtol_transition": {},
+    "offboard_control": {"action": "start"},
+    "follow_me": {"action": "start"},
+    "raw_mission_control": {"action": "start"},
+    "control_managed_mission": {"action": "resume"},
+    "set_flight_mode": {"mode": "AUTO"},
+}
+
+#: Tools that reduce energy or recover the aircraft. Classifying one of these
+#: as anything but REDUCES would let unreadable telemetry block the abort path.
+RECOVERY_TOOLS: dict[str, dict] = {
+    "land": {},
+    "return_to_launch": {},
+    "hold_position": {},
+    "hold_mission_position": {},
+    "pause_mission": {},
+    "emergency_stop": {"mode": "kill"},
+    "kill_motors": {},
+    "disarm_drone": {},
+    "offboard_control": {"action": "stop"},
+    "set_flight_mode": {"mode": "LAND"},
+}
+
+
+@pytest.mark.parametrize("tool,args", sorted(MOTION_TOOLS.items()))
+def test_every_motion_tool_is_classified_energy_adding(tool, args):
+    assert V.energy_direction(tool, args) is V.EnergyDirection.ADDS, (
+        f"{tool} can commit the aircraft to motion but is not classified ADDS in "
+        "droneserver.safety.validation.ENERGY_DIRECTION - on unknown telemetry it would "
+        "be allowed through unchecked"
+    )
+
+
+@pytest.mark.parametrize("tool,args", sorted(RECOVERY_TOOLS.items()))
+def test_every_recovery_tool_is_classified_energy_reducing(tool, args):
+    assert V.energy_direction(tool, args) is V.EnergyDirection.REDUCES, (
+        f"{tool} recovers or de-energises the aircraft and must stay available when "
+        "telemetry is unreadable; classify it REDUCES"
+    )
+
+
+def test_energy_tables_only_reference_real_tools():
+    registered = _registered_tools()
+    stale = sorted((set(V.ENERGY_DIRECTION) | set(V.ENERGY_DIRECTION_BY_ARGS)) - registered)
+    assert not stale, f"the energy-direction tables list tools that no longer exist: {stale}"
+
+
 @pytest.mark.parametrize(
     "tool",
     [

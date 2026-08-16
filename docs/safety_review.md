@@ -77,17 +77,30 @@ Defined here once, then used freely.
 | S11 | A crashed guard was indistinguishable from an allow in the audit log. | Distinct verdict + `rule=guard.internal_error` + `guard_error` field. |
 | S10 | **Paper-critical.** `latency_ms` excluded the per-call `.env` re-read (the dominant fixed cost) and the fsync'd audit write. `SAFETY_ENABLED=0` wrote no audit records at all. | Timer starts at the guard's first statement; settings cached; the durable-write cost is measured and reported as `audit_write_ms`. Disabled mode still audits, with verdict `allowed_safety_disabled`. |
 
+### Decided by the owner and implemented (2026-08-16)
+
+Both adopt the reviewer's recommendations verbatim; both are unit-tested
+(`tests/test_safety_failsafe_policy.py`).
+
+1. **Fail-open vs fail-closed is now a split by energy direction, not a
+   switch.** When vehicle state cannot be read, commands that reduce energy or
+   recover the vehicle stay allowed, and commands that add energy or commit to
+   new motion are refused (`failsafe.energy_direction`), in every
+   configuration. The classification is one explicit table in
+   `safety/validation.py`. Full list and reasoning in §5. Tier escalation is
+   unchanged: unknown state still counts as airborne, still not configurable.
+2. **The unconfigured-auth fallback is now `telemetry`, not `control`.** With
+   no API keys configured a client can read the aircraft but cannot command it;
+   the loud warning says so, and the audit mark `authenticated: false` stays.
+   §6 has the detail.
+
 ### Left for you to rule on (deliberately unchanged)
 
 1. **B2 - `emergency_stop(mode="kill")` stays token-free and unthrottled.** Test
    coverage was added (it previously had none): reachability without a token,
    and rate-limit exemption, both exercised disarmed on the ground. The
    behaviour is unchanged pending your decision.
-2. **Fail-open vs fail-closed preconditions** when telemetry is unreadable
-   (your decision #1). The *shape* is unchanged - default fail-open. What was
-   fixed is its completeness (S9) and the cases where unknown state must block
-   regardless of the policy (calibration, escalations).
-3. The two questions already in §3 and §10a: which additional tools deserve a
+2. The two questions already in §3 and §10a: which additional tools deserve a
    token, and whether the mission runner's auto-actions should route through
    the validation pipeline.
 
@@ -298,12 +311,39 @@ are validated before upload and offboard setpoints per setpoint.
 | `precondition.takeoff_settling` | **the takeoff-then-crash timing fix**: navigation within `takeoff_settle_s` (default 3 s) of the takeoff *command* is refused |
 | `precondition.mission_required` | mission start with no mission uploaded this session |
 | `precondition.ground_only` | `calibrate` / `cancel_calibration` while airborne **or** state unknown - blocks regardless of the fail-open policy |
-| `precondition.state_unknown` | only when `preconditions_fail_closed=true`; covers every state-dependent rule |
+| `failsafe.energy_direction` | state unknown **and** the command adds energy / commits to new motion - refused in every configuration |
+| `precondition.state_unknown` | state unknown, `preconditions_fail_closed=true`, and the energy-direction table classifies the tool NEUTRAL |
 
-**Fail-open by default.** If telemetry cannot be read, preconditions do not
-block (a telemetry hiccup must not strand an airborne vehicle mid-command).
-Set `SAFETY_PRECONDITIONS_FAIL_CLOSED=1` to invert this. **Reviewer decision:
-which default do you want for real flights?**
+**When telemetry cannot be read: the energy-direction split** (owner decision,
+2026-08-16, adopting the independent reviewer's recommendation). The policy is
+no longer one global switch. The deciding question is *which direction the
+command moves energy*:
+
+- **Reduces energy / recovers the vehicle - always allowed (fail OPEN).**
+  `land`, `return_to_launch`, `hold_position`, `hold_mission_position`,
+  `pause_mission`, `emergency_stop` (all modes), `kill_motors`, `disarm_drone`,
+  `offboard_control("stop"/"status")`, a recovery `set_flight_mode`
+  (LAND/RTL/LOITER/HOLD/BRAKE/POSHOLD/…), `control_managed_mission("abort")`.
+  A telemetry hiccup must never strand an airborne vehicle or block the abort
+  path. These stay allowed *even when* `preconditions_fail_closed=1`.
+- **Adds energy / commits to new motion - refused (fail CLOSED).**
+  `arm_drone`, `takeoff`, every navigation and offboard setpoint tool,
+  `offboard_control("start")`, `initiate_mission`, `resume_mission`,
+  `start_managed_mission`, `raw_mission_control("start")`, `set_max_speed`,
+  `set_actuator`, `manual_control`, `vtol_transition`, `follow_me("start")`,
+  a non-recovery `set_flight_mode`. Refusing a *new* command costs nothing -
+  the vehicle keeps doing what was already validated when it was commanded;
+  accepting it commits an aircraft we cannot see to a trajectory we cannot
+  check.
+- **Everything else is NEUTRAL** and unchanged: `SAFETY_PRECONDITIONS_FAIL_CLOSED`
+  (default `0`) still decides those.
+
+The classification lives in one reviewable table -
+`ENERGY_DIRECTION` / `ENERGY_DIRECTION_BY_ARGS` in `safety/validation.py` - not
+scattered through the rules, and a structural test fails if a motion tool is
+missing from it. Every tool the failsafe can refuse is also in the middleware's
+state-**refresh** set, so "unknown" always means genuinely unreadable telemetry
+rather than an un-refreshed snapshot.
 
 Two rules exist to stop the fence being *silently* skipped rather than
 enforced: `geofence.home_unknown` (a radius fence is configured but home has
@@ -324,17 +364,17 @@ watch a mission it has no power to command.
 Keys come from `SAFETY_API_KEYS` as `client_id:key:scope,…` with scope in
 `telemetry` < `control` < `admin`. Keys are compared with `hmac.compare_digest`.
 
-> **⚠ Reviewer decision — the unconfigured default.** When `SAFETY_API_KEYS`
-> is **empty**, no client can possibly authenticate, so enforcing a scope
-> would make a default install refuse every command. We therefore grant
-> `control` to everyone in that case, log a prominent one-time warning, and
-> still record `authenticated: false` on every audit line. The reasoning: a
-> guardrail that bricks the server out of the box is one operators disable
-> wholesale, which is strictly worse. The deployment posture assumes the
-> tailnet is the network boundary (zero public ports) and keys are defence in
-> depth. **Set `SAFETY_API_KEYS` before any real-hardware flight.** To lock
-> the server down without keys, set `SAFETY_UNAUTHENTICATED_SCOPE=reject`
-> (an explicit setting always wins over this fallback).
+> **The unconfigured default — DECIDED 2026-08-16 (owner), now telemetry-only.**
+> When `SAFETY_API_KEYS` is **empty**, no client can possibly authenticate.
+> That fallback used to grant `control` to everyone so a default install was
+> flyable out of the box. It now grants **`telemetry` (read-only)**: the server
+> still starts, connects and answers every telemetry question — so it is not a
+> guardrail operators disable wholesale — but **command and control requires
+> configured keys**. The one-time warning still fires (reworded to say exactly
+> that), and audit lines still record `authenticated: false`. **Set
+> `SAFETY_API_KEYS` before any flight.** An explicit setting always wins over
+> this fallback: `SAFETY_UNAUTHENTICATED_SCOPE=reject` locks the server down
+> completely, `=control` restores the old behaviour deliberately.
 >
 > Once any key is configured, enforcement is strict again: an unknown or
 > absent key gets `SAFETY_UNAUTHENTICATED_SCOPE` (default `telemetry`,
@@ -396,7 +436,8 @@ Default path `<FLIGHT_LOG_DIR>/audit.jsonl`; override with `SAFETY_AUDIT_LOG_PAT
 
 Limits: `SAFETY_MAX_ALTITUDE_M`, `SAFETY_MIN_ALTITUDE_M`, `SAFETY_MAX_SPEED_M_S`,
 `SAFETY_MAX_DISTANCE_FROM_HOME_M`, `SAFETY_MAX_MISSION_ITEMS`,
-`SAFETY_TAKEOFF_SETTLE_S`, `SAFETY_PRECONDITIONS_FAIL_CLOSED`,
+`SAFETY_TAKEOFF_SETTLE_S`, `SAFETY_PRECONDITIONS_FAIL_CLOSED` (NEUTRAL tools
+only since the 2026-08-16 energy-direction split - see §5),
 `SAFETY_STATE_CACHE_TTL_S`.
 Fence: `SAFETY_GEOFENCE_POLYGON` (`lat,lon;lat,lon;…`),
 `SAFETY_GEOFENCE_MAX_ALTITUDE_M`, `SAFETY_GEOFENCE_MAX_RADIUS_M`.
@@ -413,7 +454,8 @@ guardrails-off benchmark run is self-documenting in the log.
 src/droneserver/safety/
   config.py             SafetySettings — every limit and switch
   tiers.py              TOOL_TIERS + ESCALATIONS + CONSEQUENCES   ← review first
-  validation.py         bounds, preconditions, rate limiter, altitude frames
+  validation.py         bounds, preconditions, energy-direction failsafe,
+                        rate limiter, altitude frames
   geofence.py           pure fence geometry (polygon/ceiling/radius)
   tokens.py             single-use confirmation tokens
   auth.py               API keys, scopes, authorization
@@ -433,7 +475,8 @@ docs/adversarial_results.md          generated adversarial results table
 # unit (no drone): every rule, tier, token, key, audit behaviour
 uv run pytest tests/test_safety_geofence.py tests/test_safety_validation.py \
               tests/test_safety_tiers_auth_tokens.py tests/test_offboard_watchdog.py \
-              tests/test_safety_review_fixes.py tests/test_safety_coverage_invariant.py
+              tests/test_safety_review_fixes.py tests/test_safety_coverage_invariant.py \
+              tests/test_safety_failsafe_policy.py
 
 # the coverage invariant on its own - run this after adding ANY tool
 uv run pytest tests/test_safety_coverage_invariant.py

@@ -10,7 +10,9 @@ Check order (fixed, and the order the audit ``rule`` fields will show):
 6. **confirmation** - critical tools need a valid single-use token
 7. **bounds**       - parameter bounds (altitude, speed, coordinates, size)
 8. **geofence**     - server-side fence: single targets and whole missions
-9. **preconditions**- vehicle-state rules incl. the takeoff settling window
+9. **preconditions**- vehicle-state rules incl. the takeoff settling window and,
+   when state cannot be read, the energy-direction failsafe (recovery commands
+   stay allowed, energy-adding ones are refused)
 
 Checks 7-8 test the arguments themselves and run before 9, which tests vehicle
 state: an out-of-fence waypoint is illegal however long you wait, so it is the
@@ -42,6 +44,7 @@ from droneserver.safety.tokens import (
     confirmation_required_result,
 )
 from droneserver.safety.validation import (
+    ENERGY_ADDING_TOOLS,
     MISSION_START_TOOLS,
     MISSION_UPLOAD_TOOLS,
     NAVIGATION_TOOLS,
@@ -56,6 +59,13 @@ _STATE_DEPENDENT = (
     NAVIGATION_TOOLS
     | MISSION_START_TOOLS
     | MISSION_UPLOAD_TOOLS
+    # Every tool the energy-direction failsafe can REFUSE must have its state
+    # refreshed for the same reason the escalating tools below do: a stale
+    # snapshot reads "unknown", which would refuse them permanently. Nothing is
+    # added here for the energy-REDUCING tools - they are allowed under unknown
+    # state by design, so a telemetry round-trip on the abort path would buy
+    # nothing. (``land`` was already in the explicit set below and stays.)
+    | ENERGY_ADDING_TOOLS
     | {
         "takeoff",
         "disarm_drone",
