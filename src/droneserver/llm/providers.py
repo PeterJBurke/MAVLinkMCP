@@ -340,6 +340,11 @@ PROVIDERS: dict[str, ProviderSpec] = {
         "GEMINI_API_KEY",
         "google",
     ),
+    # Local open-weight serving (LM Studio on the tailnet MacBook, Plan 04's
+    # local arm). OpenAI-shaped surface; LM Studio ignores the API key, but the
+    # plumbing requires an env var, so set LMSTUDIO_API_KEY to any value.
+    # Endpoint host = peters-macbook-air (tailnet). Local inference = $0/token.
+    "lmstudio": ProviderSpec("lmstudio", "openai", "http://100.78.107.27:1234/v1", "LMSTUDIO_API_KEY"),
     # Aggregator: last resort, per the Plan 04 routing policy.
     "openrouter": ProviderSpec("openrouter", "openai", "https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
 }
