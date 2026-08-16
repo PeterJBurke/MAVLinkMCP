@@ -5412,6 +5412,13 @@
       "input": 0.0,
       "output": 0.0,
       "supports_tools": true
+    },
+    "lmstudio/qwen/qwen3-4b-thinking-2507": {
+      "cache_write": 0.0,
+      "cached_input": 0.0,
+      "input": 0.0,
+      "output": 0.0,
+      "supports_tools": true
     }
   },
   "source": [
