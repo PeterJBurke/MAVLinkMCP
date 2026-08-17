@@ -5419,6 +5419,20 @@
       "input": 0.0,
       "output": 0.0,
       "supports_tools": true
+    },
+    "ollama/llama3.1:8b": {
+      "cache_write": 0.0,
+      "cached_input": 0.0,
+      "input": 0.0,
+      "output": 0.0,
+      "supports_tools": true
+    },
+    "ollama/llama3.1": {
+      "cache_write": 0.0,
+      "cached_input": 0.0,
+      "input": 0.0,
+      "output": 0.0,
+      "supports_tools": true
     }
   },
   "source": [

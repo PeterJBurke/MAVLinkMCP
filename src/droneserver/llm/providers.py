@@ -345,6 +345,13 @@ PROVIDERS: dict[str, ProviderSpec] = {
     # plumbing requires an env var, so set LMSTUDIO_API_KEY to any value.
     # Endpoint host = peters-macbook-air (tailnet). Local inference = $0/token.
     "lmstudio": ProviderSpec("lmstudio", "openai", "http://100.78.107.27:1234/v1", "LMSTUDIO_API_KEY"),
+    # Ollama on the same tailnet MacBook (the Llama-continuation fallback,
+    # Plan 14 Entry 29 / 09-NOW SS0): independent serving path with native
+    # Llama tool-calling, sidestepping both measured LM Studio defects. Same
+    # OpenAI-shaped surface; Ollama ignores the API key but the plumbing
+    # requires an env var, so set OLLAMA_API_KEY to any value. Port 11434 is
+    # Ollama's default; bound to the Mac's tailnet address only.
+    "ollama": ProviderSpec("ollama", "openai", "http://100.78.107.27:11434/v1", "OLLAMA_API_KEY"),
     # Aggregator: last resort, per the Plan 04 routing policy.
     "openrouter": ProviderSpec("openrouter", "openai", "https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
 }
@@ -382,6 +389,59 @@ class Route:
     @property
     def label(self) -> str:
         return f"{self.provider.name}:{self.requested_model}"
+
+
+#: Per-model overrides for ``parallel_tool_calls``, keyed by the bare model id
+#: (the part after "provider:", as it appears in :attr:`Route.requested_model`).
+#:
+#: The harness sends ``parallel_tool_calls`` explicitly on every call, never
+#: inherited from a provider default (Plan 04: "defaults differ by vendor - on
+#: for Grok, off for Qwen - so this is always sent"). That policy already
+#: anticipates per-model asymmetry; this registry is the same idea taken one
+#: level finer, to a specific model whose own chat template hard-*rejects* the
+#: harness's usual value rather than merely preferring the other one.
+#:
+#: Entry added 2026-08-16 (local-arm overnight run, LOCAL_ARM_RESULTS.md
+#: "Llama deep diagnosis"): ``meta-llama-3.1-8b-instruct`` on LM Studio's MLX
+#: engine errors out at the jinja-template level - not a soft preference, a
+#: hard failure - when asked for more than one simultaneous tool call:
+#: ``"This model only supports single tool-calls at once!"``. Forcing
+#: ``parallel_tool_calls=False`` for this model is a disclosed accommodation,
+#: not a silent protocol change: it is recorded here, in the run's own
+#: startup banner (see ``run_llm_missions.py``), and in the results file.
+#:
+#: Every model not listed here keeps the CLI's ``--parallel-tool-calls``
+#: value exactly as before - this registry changes nothing for any existing
+#: model.
+PARALLEL_TOOL_CALLS_MODEL_OVERRIDE: dict[str, bool] = {
+    "meta-llama-3.1-8b-instruct": False,
+    # Llama 3.2's chat template carries the same hard restriction as 3.1's:
+    # rendering a history containing an assistant turn with >1 tool_call raises
+    # "This model only supports single tool-calls at once!". Verified directly
+    # against the MLX build on 2026-08-16.
+    "llama-3.2-3b-instruct": False,
+}
+
+
+def parallel_tool_calls_for(model: str, cli_value: bool) -> tuple[bool, str]:
+    """The effective ``parallel_tool_calls`` setting for ``model``, and why.
+
+    Returns ``(effective_value, note)``. ``note`` is empty when the CLI value
+    was used unchanged (the common case); when an override applied, it names
+    the override so the run's banner and logs make the accommodation visible
+    rather than silent.
+    """
+    bare = model.split("/")[-1]
+    for candidate in (model, bare):
+        if candidate in PARALLEL_TOOL_CALLS_MODEL_OVERRIDE:
+            forced = PARALLEL_TOOL_CALLS_MODEL_OVERRIDE[candidate]
+            if forced != cli_value:
+                return forced, (
+                    f"overridden to {forced} for model '{candidate}' "
+                    f"(PARALLEL_TOOL_CALLS_MODEL_OVERRIDE; CLI asked for {cli_value})"
+                )
+            return forced, ""
+    return cli_value, ""
 
 
 def _have_key(spec: ProviderSpec, env: dict | None = None) -> bool:
