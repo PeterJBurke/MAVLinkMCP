@@ -63,7 +63,12 @@ from droneserver.benchmark.capture_cli import (
 )
 from droneserver.llm.agent import Limits
 from droneserver.llm.prompts import mission_prompts
-from droneserver.llm.providers import ProviderError, list_openrouter_endpoints, resolve_model
+from droneserver.llm.providers import (
+    ProviderError,
+    list_openrouter_endpoints,
+    parallel_tool_calls_for,
+    resolve_model,
+)
 from droneserver.llm.runner import (
     DEFAULT_CRITICAL_RATE_WINDOW_S,
     DEFAULT_START_TOLERANCE_M,
@@ -148,6 +153,13 @@ def main() -> int:
         "T6 (Google Maps): a second, hosted MCP server the model can query for real-world "
         "coordinates, attached alongside the drone server for T6 only"
     )
+    parser.add_argument(
+        "--geofence-radius-m", type=float, default=None,
+        help="the radius the SERVER's geofence is configured with for this run, when it "
+             "differs from the 1000 m suite default (Plan 34: T6 wide-fence round). This "
+             "sets the VERDICT context only - the server's own fence is configured in its "
+             "env (SAFETY_GEOFENCE_MAX_RADIUS_M) and must be changed there to match, or "
+             "verdicts and enforcement will disagree.")
     maps.add_argument(
         "--maps-url",
         default="",
@@ -201,6 +213,17 @@ def main() -> int:
         f"setting (default {DEFAULT_CRITICAL_RATE_WINDOW_S:.0f}s); 0 disables the pacing",
     )
     parser.add_argument("--trial-timeout-s", type=float, default=1800.0, help="wall-clock limit per trial")
+    parser.add_argument(
+        "--model-timeout-s",
+        type=float,
+        default=None,
+        help="per-turn HTTP deadline for the model call (ModelSession default is 240s). Local/JIT-loaded "
+        "models on LM Studio can need far longer per turn than a hosted API - a 'thinking' model spending "
+        "hundreds of tokens on reasoning at a few tokens/sec, plus JIT load latency on the first call of a "
+        "run, can blow past 240s on an otherwise-healthy model and get misread as 3 consecutive VOID trials "
+        "(no reply within Ns) -> PROVIDER STOP, abandoning a model that never actually failed. Raise this "
+        "for slow local endpoints instead.",
+    )
     parser.add_argument("--temperature", type=float, default=None, help="sampling temperature, if the model takes one")
     parser.add_argument("--reasoning-effort", default=None, help="reasoning effort, for models that expose it")
     parser.add_argument("--telemetry-interval-s", type=float, default=3.0, help="flight-recorder sampling period")
@@ -349,8 +372,15 @@ def main() -> int:
     label = args.label or f"{route.provider.name}-{route.requested_model}".replace("/", "_")
     out_dir = Path(args.out) / f"{stamp}_{label}"
 
+    # A per-model override table (providers.PARALLEL_TOOL_CALLS_MODEL_OVERRIDE)
+    # can force this away from the CLI value - never silently: parallel_tool_calls_note
+    # is empty unless an override actually fired, and when it does it is printed
+    # in the run's own banner below, so the accommodation is visible in every log.
+    effective_parallel_tool_calls, parallel_tool_calls_note = parallel_tool_calls_for(
+        route.requested_model, args.parallel_tool_calls == "on"
+    )
     model_options = {
-        "parallel_tool_calls": args.parallel_tool_calls == "on",
+        "parallel_tool_calls": effective_parallel_tool_calls,
         "tool_choice": args.tool_choice,
         "endpoint_only": [e.strip() for e in args.endpoint_only.split(",") if e.strip()],
         "pinned_quantization": args.quantization,
@@ -359,6 +389,8 @@ def main() -> int:
         model_options["temperature"] = args.temperature
     if args.reasoning_effort:
         model_options["reasoning_effort"] = args.reasoning_effort
+    if args.model_timeout_s is not None:
+        model_options["timeout_s"] = args.model_timeout_s
 
     capture_cfg = build_capture_config(
         args,
@@ -405,12 +437,19 @@ def main() -> int:
             **({"param_name": args.param_name} if args.param_name else {}),
             **({"param_write_value": args.param_write_value} if args.param_write_value is not None else {}),
             **({"takeoff_altitude_m": args.takeoff_altitude} if args.takeoff_altitude is not None else {}),
+            **({"geofence_radius_m": args.geofence_radius_m} if args.geofence_radius_m is not None else {}),
         },
     )
 
     print(f"model:    {route.requested_model} via {route.provider.name} ({route.routing})")
-    print(f"protocol: parallel_tool_calls={args.parallel_tool_calls}, tool_choice={args.tool_choice}", end="")
+    print(
+        f"protocol: parallel_tool_calls={effective_parallel_tool_calls} "
+        f"(CLI: {args.parallel_tool_calls}), tool_choice={args.tool_choice}",
+        end="",
+    )
     print(f", endpoint pinned to {args.endpoint_only}" if args.endpoint_only else "")
+    if parallel_tool_calls_note:
+        print(f"ACCOMMODATION: {parallel_tool_calls_note}")
     # Only the Anthropic wire format reports a cache-WRITE token count, so on
     # every other provider the write rate is inert and printing a number for it
     # would invite someone to reason about a charge that cannot occur - the

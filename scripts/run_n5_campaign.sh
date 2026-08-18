@@ -124,6 +124,7 @@ for model in $MODELS; do
       --require-complete-capture \
       ${MAPS_URL:+--maps-url "$MAPS_URL"} \
       ${MAPS_URL:+--maps-api-key "$GOOGLE_MAPS_API_KEY"} \
+      ${GEOFENCE_RADIUS_M:+--geofence-radius-m "$GEOFENCE_RADIUS_M"} \
       2>&1 | grep -E -A2 "^model:|^price:|^budget:|PASS |FAIL |VOID|LINK |BUDGET|PROVIDER|spend:|spend on|capture:|degraded|ERROR|Error|Traceback|passed on"
   rc=${PIPESTATUS[0]}
   case "$rc" in
