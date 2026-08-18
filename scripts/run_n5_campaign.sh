@@ -58,7 +58,7 @@ PER_MODEL_TIMEOUT="${PER_MODEL_TIMEOUT:-21600}"
 # others    100: unchanged, within the standing rule.
 budget_for() {
   case "$1" in
-    anthropic) echo 345 ;;  # 300->330 2026-08-18 under Peter's T6 \$100-cap authorization: the raised \$12 trial ceiling made the worst-case projection exceed the \$300 guard's \$10.93 headroom and budget-stopped all three Anthropic T6 round-4 rows before start
+    anthropic) echo 450 ;;  # 345->450 2026-08-18 late, under Peter's T6-N5 \$150-campaign authorization (Plan 34 SS8): the ledger stood at \$315.53 mid-campaign with sonnet+opus N=5 still to fly (worst case ~\$120 at the \$12 trial ceiling), so \$345 would have budget-stopped both rows. History: 300->345 2026-08-18 under the T6 \$100-cap authorization
     google)    echo 200 ;;  # raised from 75 on Peter's explicit instruction, 2026-08-18
                             # ("raise the guard"), to run the four T6 Gemini rows the
                             # $75 guard blocked at $164 cumulative. The old value's
