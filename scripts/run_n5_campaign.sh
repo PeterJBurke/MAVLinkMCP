@@ -58,7 +58,7 @@ PER_MODEL_TIMEOUT="${PER_MODEL_TIMEOUT:-21600}"
 # others    100: unchanged, within the standing rule.
 budget_for() {
   case "$1" in
-    anthropic) echo 300 ;;
+    anthropic) echo 330 ;;  # 300->330 2026-08-18 under Peter's T6 \$100-cap authorization: the raised \$12 trial ceiling made the worst-case projection exceed the \$300 guard's \$10.93 headroom and budget-stopped all three Anthropic T6 round-4 rows before start
     google)    echo 200 ;;  # raised from 75 on Peter's explicit instruction, 2026-08-18
                             # ("raise the guard"), to run the four T6 Gemini rows the
                             # $75 guard blocked at $164 cumulative. The old value's
@@ -128,6 +128,7 @@ for model in $MODELS; do
       ${MAX_TRIAL_COST_USD:+--max-trial-cost-usd "$MAX_TRIAL_COST_USD"} \
       ${MAX_TURNS:+--max-turns "$MAX_TURNS"} \
       ${TRIAL_TIMEOUT_S:+--trial-timeout-s "$TRIAL_TIMEOUT_S"} \
+      ${MAX_TOTAL_TOKENS:+--max-total-tokens "$MAX_TOTAL_TOKENS"} \
       2>&1 | grep -E -A2 "^model:|^price:|^budget:|PASS |FAIL |VOID|LINK |BUDGET|PROVIDER|spend:|spend on|capture:|degraded|ERROR|Error|Traceback|passed on"
   rc=${PIPESTATUS[0]}
   case "$rc" in
