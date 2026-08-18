@@ -69,7 +69,7 @@ def test_flags_map_onto_the_config():
             "--mavlink-endpoint",
             "udpin:127.0.0.1:14655",
             "--telemetry-address",
-            "udp://:14540",
+            "udpin://127.0.0.1:14541",
             "--dataflash-remote",
             "llmuavsitl:/home/dronepilot/ardupilot/ArduCopter/logs",
             "--vehicle-sysid",

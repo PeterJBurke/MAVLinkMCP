@@ -57,6 +57,19 @@ mode would betray.
                              minutes used to pass), and one that connected and
                              then died mid-flight. T7-T9 last seconds and
                              legitimately produce single-figure row counts.
+``telemetry.csv``            **is every row the same aircraft?** Any foreign
+*single-vehicle*             system ID in a ``sysid`` column, or any two
+                             consecutive rows more than 200 m apart, means the
+                             recorder was fed by two vehicles at once. This is
+                             the check whose absence let the 2026-08 shared-port
+                             contamination pass 472 trials green: the recorder
+                             was bound to ``udp://:14540`` with no host and no
+                             system-ID filter, a second SITL was publishing to
+                             it, and being sample-and-hold it assembled single
+                             rows out of two aircraft's fields. Nothing else in
+                             this module could see it - the schema has no column
+                             in which the file could even say which vehicle a
+                             row describes.
 ``audit_slice.csv``          present and non-empty (it is absent entirely when
                              the harness was run without ``--audit-log``, which
                              is worth being told about rather than discovering
@@ -92,6 +105,7 @@ mavsdk, so it can be used (and tested) anywhere.
 import csv
 import hashlib
 import json
+import math
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -138,6 +152,24 @@ COVERAGE_MIN_TRIAL_S = 30.0
 #: (which is capped at :data:`DEFAULT_MIN_TELEMETRY_ROWS`) and the coverage
 #: check, and the bundle was reported complete.
 MAX_TELEMETRY_GAP_S = 5.0
+
+#: Furthest two consecutive ``telemetry.csv`` rows may be apart before the file
+#: is describing more than one aircraft.
+#:
+#: This is the check whose absence let a capture defect run for 472 trials. The
+#: MavSDK recorder was bound to ``udp://:14540`` - no host, no system-ID filter
+#: - so a second SITL left running from the previous campaign fed the same
+#: subscriptions, and because the recorder is sample-and-hold the two aircraft's
+#: fields landed in single rows. 351,312 of 526,059 PX4 rows belonged to the
+#: wrong vehicle and every one of those trials passed verification with a green
+#: ``telemetry.csv`` check, because nothing here asked whether the rows were all
+#: the same aircraft. (Research/PX4-TELEMETRY-CONTAMINATION-VERIFICATION_
+#: 2026-08-18.md; the fix is in telemetry_recorder.is_shared_bind.)
+#:
+#: 200 m has no false-positive mechanism at this row rate: one vehicle at 10 Hz
+#: would need 2 km/s, and the fastest leg this project flies moves about 2 m
+#: between rows. The measured separation when it fires is 780-820 m.
+MAX_TELEMETRY_POSITION_JUMP_M = 200.0
 
 #: Columns whose emptiness in *every* row means the recorder produced a shape
 #: without a recording. A MavSDK recorder that never connects still runs its
@@ -482,12 +514,42 @@ class _TelemetryEvidence:
     #: (:data:`TELEMETRY_FIRMWARE_HEALTH_COLUMNS`) this file actually filled.
     #: Reported, never required (ArduPilot fills them, PX4 does not).
     firmware_health_populated: list[str] = field(default_factory=list)
+    #: Consecutive-row position jumps beyond
+    #: :data:`MAX_TELEMETRY_POSITION_JUMP_M`, and the worst one seen. Every
+    #: count above zero is a second aircraft in the file.
+    position_flips: int = 0
+    worst_position_jump_m: float = 0.0
+    worst_position_jump_at: float = 0.0
+    #: System IDs found in a ``sysid`` column, when the file has one. The
+    #: recorder's own schema does not, but the system-ID-filtered companions
+    #: (``telemetry_sysid<N>.csv``) do, and so should any future recorder: a
+    #: file that can name its vehicle should be checked on the name, not only
+    #: on the geometry.
+    sysids: set = field(default_factory=set)
 
 
-def _read_telemetry(trial_dir: Path) -> _TelemetryEvidence:
-    path = trial_dir / "telemetry.csv"
+def _haversine_m(first: tuple[float, float], second: tuple[float, float]) -> float:
+    """Great-circle metres between two (lat, lon) degree pairs."""
+    radius = 6371000.0
+    lat1, lat2 = math.radians(first[0]), math.radians(second[0])
+    dlat = math.radians(second[0] - first[0])
+    dlon = math.radians(second[1] - first[1])
+    h = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+    return 2 * radius * math.asin(min(1.0, math.sqrt(h)))
+
+
+def _fix_of(record: dict) -> tuple[float, float] | None:
+    try:
+        return float(record["lat_deg"]), float(record["lon_deg"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _read_telemetry(trial_dir: Path, name: str = "telemetry.csv") -> _TelemetryEvidence:
+    path = trial_dir / name
     evidence = _TelemetryEvidence()
     previous_t: float | None = None
+    previous_fix: tuple[float, float] | None = None
     populated: set[str] = set()
     with path.open(newline="", encoding="utf-8") as fh:
         reader = csv.DictReader(fh)
@@ -516,6 +578,9 @@ def _read_telemetry(trial_dir: Path) -> _TelemetryEvidence:
                 except ValueError:
                     age = 0.0
                 evidence.max_sample_age = max(evidence.max_sample_age or 0.0, age)
+            sysid_cell = str(record.get("sysid", "") or "").strip()
+            if sysid_cell:
+                evidence.sysids.add(sysid_cell)
             try:
                 t = float(record.get("t_rel_s") or 0.0)
             except (TypeError, ValueError):
@@ -524,6 +589,17 @@ def _read_telemetry(trial_dir: Path) -> _TelemetryEvidence:
             if previous_t is not None and t - previous_t > evidence.max_gap:
                 evidence.max_gap, evidence.max_gap_at = t - previous_t, t
             previous_t = t
+            # Interleave detector: consecutive rows too far apart to be one
+            # aircraft (see MAX_TELEMETRY_POSITION_JUMP_M).
+            fix = _fix_of(record)
+            if fix is not None:
+                if previous_fix is not None:
+                    metres = _haversine_m(previous_fix, fix)
+                    if metres > evidence.worst_position_jump_m:
+                        evidence.worst_position_jump_m, evidence.worst_position_jump_at = metres, t
+                    if metres > MAX_TELEMETRY_POSITION_JUMP_M:
+                        evidence.position_flips += 1
+                previous_fix = fix
     evidence.unpopulated_columns = [c for c in declared if c not in populated]
     evidence.firmware_health_populated = [c for c in health if c in populated]
     return evidence
@@ -613,6 +689,55 @@ def _check_telemetry(trial_dir: Path, min_rows: int) -> tuple[Check, _TelemetryE
             f"({detail}) - the recorder died mid-trial",
         ), evidence
     return Check("telemetry.csv", True, detail), evidence
+
+
+def _check_telemetry_single_vehicle(evidence: _TelemetryEvidence, vehicle_sysid: int) -> Check:
+    """Is every row of ``telemetry.csv`` the SAME aircraft?
+
+    The one check that would have caught the 2026-08 contamination on its first
+    trial instead of its 472nd. Two ways of asking, both cheap:
+
+    1. **By name.** If the file carries a ``sysid`` column, any value other than
+       the trial's own vehicle is a foreign aircraft, stated outright. The
+       recorder's historical schema has no such column - which is precisely why
+       the defect was inexpressible in the artifact - but the system-ID-filtered
+       companions do, and so should any future recorder.
+    2. **By geometry.** Otherwise, count consecutive rows more than
+       :data:`MAX_TELEMETRY_POSITION_JUMP_M` apart. A single vehicle at this row
+       rate cannot produce one; two vehicles taking turns in one sample-and-hold
+       recorder produce thousands (measured: 6 to 4,384 per trial).
+
+    A file with no positions to compare (a T7 parameter read, a recorder that
+    never connected) passes here and fails, if it should, in
+    :func:`_check_telemetry` for the real reason.
+    """
+    name = "telemetry.csv single-vehicle"
+    foreign = {s for s in evidence.sysids if s not in ("", str(vehicle_sysid))}
+    if foreign:
+        return Check(
+            name,
+            False,
+            f"rows carry system ID(s) {', '.join(sorted(foreign))} as well as this trial's vehicle "
+            f"({vehicle_sysid}) - the file describes more than one aircraft. The recorder's telemetry "
+            "address is accepting every source on its port (see "
+            "telemetry_recorder.is_shared_bind)",
+        )
+    if evidence.position_flips:
+        return Check(
+            name,
+            False,
+            f"{evidence.position_flips} consecutive row pair(s) more than {MAX_TELEMETRY_POSITION_JUMP_M:.0f} m "
+            f"apart (worst {evidence.worst_position_jump_m:.0f} m at t={evidence.worst_position_jump_at:.0f}s) - "
+            "no single aircraft moves that far between rows, so this file interleaves two vehicles. The "
+            "recorder's telemetry address is accepting every source on its port (see "
+            "telemetry_recorder.is_shared_bind); the sysid-tagged mavlink.jsonl is the authoritative stream",
+        )
+    detail = f"worst consecutive-row move {evidence.worst_position_jump_m:.1f} m"
+    if evidence.sysids:
+        detail += f"; sysid column carries only {', '.join(sorted(evidence.sysids))}"
+    if evidence.worst_position_jump_m == 0.0 and not evidence.sysids:
+        detail = "no position pairs to compare"
+    return Check(name, True, detail)
 
 
 def _check_telemetry_schema(evidence: _TelemetryEvidence) -> Check:
@@ -785,6 +910,7 @@ def verify_bundle(
     checks.append(_check_tlog(trial_dir))
     checks.append(_check_mavlink_directions(mavlink, vehicle_sysid, flew=flew))
     checks.append(telemetry_check)
+    checks.append(_check_telemetry_single_vehicle(telemetry, vehicle_sysid))
     checks.append(_check_telemetry_schema(telemetry))
     checks.append(_check_audit_slice(trial_dir))
     checks.append(_check_jsonl(trial_dir, "events.jsonl"))

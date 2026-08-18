@@ -24,6 +24,10 @@ failure it prevents.
                                                        logs/*.BIN  ──scp──▶ retain_remote_dataflash
 ```
 
+**The telemetry leg in that diagram is the one that was wrong until 2026-08-18**
+— see rule 5. Port 14540 is shared, not per-firmware, and the recorder bound it
+with no host and no system-ID filter.
+
 ## The four rules
 
 ### 1. The tap must sit where it can hear both halves of the link
@@ -80,6 +84,56 @@ log into this trial's window; that is blocker B-3 reached by another route, and
 it is silent. The harness prints a warning when the offset exceeds two seconds
 or cannot be measured at all.
 
+### 5. The telemetry recorder needs its own port, for the same reason the tap does
+
+Rule 1 says to bind the tap to loopback on a dedicated port rather than to a
+wildcard on a shared one. **The telemetry recorder was never given the same
+treatment**, and that is the whole of the 2026-08 contamination.
+
+`--telemetry-address udp://:14540` binds every source on port 14540. With one
+autopilot on the network that is harmless. With two — an idle SITL from the
+previous campaign, still publishing — both feed the same MavSDK subscriptions,
+and because `TelemetryRecorder` is a *sample-and-hold* writer (ten independent
+subscriber tasks, one 10 Hz snapshot timer) the two aircraft do not merely
+interleave rows: **the columns of a single row can come from different
+aircraft**. That is how `alt=19.9m, armed=False, in_air=False` got written. The
+row schema has no `sysid` column, so the file could not even say which vehicle
+it was describing, and nothing in `verify.py` asked. Result: 440 PX4 trials and
+32 ArduPilot T6 trials with contaminated `telemetry.csv` — 351,312 of 526,059
+PX4 rows belonging to the wrong aircraft — all reported `capture_status:
+complete`. (Full analysis:
+`/root/LLMUAV/Research/PX4-TELEMETRY-CONTAMINATION-VERIFICATION_2026-08-18.md`;
+remediation: `llm_runs/CHANGELOG-TELEMETRY-CLEAN.md`.)
+
+MAVSDK offers no system-ID filter on the receiving side, so the fix is the
+address:
+
+- **`scripts/mavlink_relay.py --mirror` is repeatable.** Give the tap one port
+  and the recorder another, both fed by *this* firmware's relay:
+
+  ```bash
+  python scripts/mavlink_relay.py --listen 127.0.0.1:5679 --upstream <sitl>:6789 \
+      --mirror 127.0.0.1:14655 \
+      --mirror 127.0.0.1:14541
+  # then: --mavlink-endpoint udpin:127.0.0.1:14655 --telemetry-address udpin://127.0.0.1:14541
+  ```
+
+- **`TelemetryRecorder` and `CaptureConfig` refuse a bind-to-any address**
+  (`udp://:14540`, `udpin://:PORT`, `0.0.0.0`, a bare `:PORT`). `CaptureConfig`
+  validates at harness-startup time, so a bad topology stops the run before the
+  first flight instead of per trial.
+- **`--allow-shared-telemetry-bind`** is the escape hatch, for a port only one
+  autopilot can reach. It is a claim about the network, not a preference, and
+  rule 4's new check tests it.
+- **`verify.py` now fails a bundle whose `telemetry.csv` holds two aircraft** —
+  any foreign value in a `sysid` column, or any two consecutive rows more than
+  200 m apart (a single vehicle at 10 Hz cannot move 200 m between rows; the
+  measured separation when it fires is 780–820 m). The recorder counts the same
+  jumps live, in `position_flips`.
+
+Note what this rule does **not** rely on: remembering to stop the other
+simulator. That is good practice and it is not a control.
+
 ### 4. Check the files, not the exit code
 
 `capture_session.py` deliberately swallows recorder start failures so a capture
@@ -103,6 +157,9 @@ the ones whose absence let a demonstrably incomplete bundle pass anyway:
   no gap over 5 s between consecutive rows (ten rows spread over a twelve-minute
   trial used to pass), keep `sample_age_s` fresh (sample-and-hold turns a dead
   link into a stationary aircraft), and reach the end of the trial.
+- `telemetry.csv` must describe **one aircraft**: no foreign system ID in a
+  `sysid` column, and no consecutive-row position jump over 200 m. See rule 5
+  for the 472 bundles whose absence of this check cost.
 - the manifest must list every file at its true size, list **nothing that is
   not there**, and every `sha256` must re-verify against the bytes on disk.
 - `events.jsonl` must parse.

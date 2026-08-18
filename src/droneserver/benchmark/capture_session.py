@@ -88,6 +88,7 @@ from droneserver.capture import (
     remote_clock_offset_s,
     retain_dataflash,
     retain_remote_dataflash,
+    is_shared_bind,
     verify_bundle,
     write_manifest,
 )
@@ -165,7 +166,8 @@ class CaptureConfig:
         self,
         *,
         mavlink_endpoint: str = "udpin:127.0.0.1:14650",
-        telemetry_address: str = "udp://:14540",
+        telemetry_address: str = "udpin://127.0.0.1:14541",
+        allow_shared_telemetry_bind: bool = False,
         dataflash_dir: Path | None = None,
         dataflash_remote: str = "",
         vehicle_sysid: int = 1,
@@ -182,6 +184,21 @@ class CaptureConfig:
     ):
         self.mavlink_endpoint = mavlink_endpoint
         self.telemetry_address = telemetry_address
+        #: The operator's explicit claim that exactly one autopilot can reach
+        #: ``telemetry_address``. Validated HERE, at config time, so a topology
+        #: that would silently interleave two aircraft into one telemetry.csv
+        #: stops the harness before the first flight rather than per trial.
+        self.allow_shared_telemetry_bind = bool(allow_shared_telemetry_bind)
+        if is_shared_bind(telemetry_address) and not self.allow_shared_telemetry_bind:
+            raise ValueError(
+                f"--telemetry-address {telemetry_address!r} binds every source on that port. With two "
+                "SITLs up, both feed the recorder's subscriptions and - because it is sample-and-hold - "
+                "single telemetry.csv rows end up describing two aircraft, with no sysid column to say "
+                "so (this happened: 472 bundles, 2026-08-12..18). Give this firmware's recorder its own "
+                "address (e.g. --telemetry-address udpin://127.0.0.1:14541, fed by an extra "
+                "'mavlink_relay.py --mirror 127.0.0.1:14541'), or pass --allow-shared-telemetry-bind if "
+                "exactly one autopilot can reach that port."
+            )
         self.dataflash_dir = Path(dataflash_dir) if dataflash_dir else None
         #: ``host:/path`` of the log directory when the simulator runs on
         #: another machine (the usual SITL case - see finalize()).
@@ -413,6 +430,7 @@ class TrialCapture:
                 rate_hz=self.config.rate_hz,
                 t0=self.t0,
                 raw_source=self._tap,
+                allow_shared_bind=self.config.allow_shared_telemetry_bind,
             )
             self._loop.run(self._recorder.start(), timeout=90)
         except Exception as e:  # noqa: BLE001

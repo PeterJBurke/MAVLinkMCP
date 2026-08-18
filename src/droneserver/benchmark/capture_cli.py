@@ -77,12 +77,24 @@ def add_capture_arguments(parser, *, model_provenance: bool = True) -> None:
     )
     cap.add_argument(
         "--telemetry-address",
-        default="udp://:14540",
-        help="MavSDK system address for the telemetry recorder. Defaults to "
-        "the same MAVLink address/port the server uses (MAVLINK_PORT "
-        "14540); in practice point it at its OWN forwarded endpoint "
-        "(mavlink-router --out) so it does not contend with the server "
-        "for the socket (default: %(default)s)",
+        default="udpin://127.0.0.1:14541",
+        help="MavSDK system address for the telemetry recorder. It must be "
+        "DEDICATED to this firmware: point it at its own relay mirror "
+        "('mavlink_relay.py --mirror' is repeatable - give the tap one port "
+        "and the recorder another). A bind-to-any address such as the former "
+        "default 'udp://:14540' is REFUSED unless --allow-shared-telemetry-bind "
+        "is passed, because with two SITLs up both feed the recorder and its "
+        "sample-and-hold rows end up describing two aircraft at once "
+        "(default: %(default)s)",
+    )
+    cap.add_argument(
+        "--allow-shared-telemetry-bind",
+        action="store_true",
+        help="accept a bind-to-any --telemetry-address. Only correct when "
+        "exactly ONE autopilot can reach that port; it is a claim about the "
+        "network, not a preference. See Research/PX4-TELEMETRY-CONTAMINATION-"
+        "VERIFICATION_2026-08-18.md for what it cost the last time it was "
+        "assumed",
     )
     cap.add_argument(
         "--dataflash-dir",
@@ -188,6 +200,7 @@ def build_capture_config(args, *, error, model=None, provider=None, decoding=Non
     return CaptureConfig(
         mavlink_endpoint=args.mavlink_endpoint,
         telemetry_address=args.telemetry_address,
+        allow_shared_telemetry_bind=getattr(args, "allow_shared_telemetry_bind", False),
         dataflash_dir=Path(args.dataflash_dir) if args.dataflash_dir else None,
         dataflash_remote=args.dataflash_remote,
         vehicle_sysid=args.vehicle_sysid,

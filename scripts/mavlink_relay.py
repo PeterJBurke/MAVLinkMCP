@@ -40,10 +40,18 @@ Usage::
     python scripts/mavlink_relay.py \\
         --listen 127.0.0.1:5679 \\
         --upstream 100.80.7.20:6789 \\
-        --mirror 127.0.0.1:14650
+        --mirror 127.0.0.1:14650 \\
+        --mirror 127.0.0.1:14541
 
 then point the server at the relay (``MAVLINK_ADDRESS=127.0.0.1``,
-``MAVLINK_PORT=5679``) and the tap at ``udpin:127.0.0.1:14650``.
+``MAVLINK_PORT=5679``), the tap at ``udpin:127.0.0.1:14650``, and the MavSDK
+telemetry recorder at ``udpin://127.0.0.1:14541``.
+
+``--mirror`` is repeatable, and giving the telemetry recorder its own mirror is
+the fix for the 2026-08 capture defect: pointed instead at a shared, bind-to-any
+``udp://:14540``, it accepted telemetry from *every* autopilot on the network,
+and with two SITLs up its sample-and-hold rows described two aircraft at once.
+One mirror per consumer means one vehicle per consumer.
 
 One client at a time, by design: MAVSDK opens exactly one TCP connection, and
 the upstream (MAVProxy ``tcpin``) accepts one client too. When the client goes
@@ -74,23 +82,45 @@ def _split_host_port(spec: str, default_host: str = "127.0.0.1") -> tuple[str, i
 
 
 class Mirror:
-    """Sends a copy of every byte to a UDP address. Never raises at the caller."""
+    """Sends a copy of every byte to one or more UDP addresses.
 
-    def __init__(self, address: tuple[str, int] | None):
-        self.address = address
+    More than one because each *consumer* of the wire needs its own port. The
+    MAVLink tap has always had one; the MavSDK telemetry recorder did not, and
+    was pointed at a shared bind-to-any ``udp://:14540`` instead - so when two
+    SITLs were up, both fed it and its sample-and-hold rows ended up describing
+    two aircraft (see ``droneserver.capture.telemetry_recorder.is_shared_bind``
+    and Research/PX4-TELEMETRY-CONTAMINATION-VERIFICATION_2026-08-18.md). Pass
+    ``--mirror`` twice - once for the tap, once for the recorder - and each
+    firmware's recorder has an address only that firmware reaches.
+
+    Never raises at the caller: a mirror that fails must not take the flight
+    link down with it.
+    """
+
+    def __init__(self, addresses):
+        if addresses is None:
+            addresses = []
+        elif isinstance(addresses, tuple):  # a single (host, port)
+            addresses = [addresses]
+        self.addresses = list(addresses)
         self.bytes_sent = 0
         self.errors = 0
-        self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM) if address else None
+        self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM) if self.addresses else None
+
+    @property
+    def address(self):
+        """The first mirror address, for callers/logs that expect just one."""
+        return self.addresses[0] if self.addresses else None
 
     def send(self, data: bytes) -> None:
-        if self._sock is None or self.address is None:
+        if self._sock is None:
             return
-        try:
-            self._sock.sendto(data, self.address)
-            self.bytes_sent += len(data)
-        except OSError:
-            # A mirror that fails must never take the flight link down with it.
-            self.errors += 1
+        for address in self.addresses:
+            try:
+                self._sock.sendto(data, address)
+                self.bytes_sent += len(data)
+            except OSError:
+                self.errors += 1
 
     def close(self) -> None:
         if self._sock is not None:
@@ -124,7 +154,8 @@ class Relay:
         server.settimeout(1.0)
         self._log(
             f"listening on {self.listen[0]}:{self.listen[1]} -> "
-            f"{self.upstream[0]}:{self.upstream[1]}, mirroring to {self.mirror.address}"
+            f"{self.upstream[0]}:{self.upstream[1]}, mirroring to "
+            + ", ".join(f"{h}:{p}" for h, p in self.mirror.addresses)
         )
         try:
             while not self._stop.is_set():
@@ -206,14 +237,19 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--upstream", required=True, help="host:port of the autopilot/MAVProxy TCP endpoint")
     parser.add_argument(
-        "--mirror", default="127.0.0.1:14650", help="UDP host:port to copy both directions to (default 127.0.0.1:14650)"
+        "--mirror", action="append", default=None,
+        help="UDP host:port to copy both directions to. REPEATABLE: give each consumer of "
+              "the wire its own port - one for the MAVLink tap, one for the MavSDK telemetry "
+              "recorder - so no consumer has to bind a shared any-source port (default: "
+              "127.0.0.1:14650)",
     )
     args = parser.parse_args(argv)
 
+    mirrors = args.mirror if args.mirror else ["127.0.0.1:14650"]
     relay = Relay(
         listen=_split_host_port(args.listen),
         upstream=_split_host_port(args.upstream),
-        mirror=Mirror(_split_host_port(args.mirror)),
+        mirror=Mirror([_split_host_port(m) for m in mirrors]),
     )
     relay.serve_forever()
     return 0

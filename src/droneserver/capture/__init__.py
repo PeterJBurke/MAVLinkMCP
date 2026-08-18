@@ -22,13 +22,14 @@ from droneserver.capture.manifest import (
     write_manifest,
 )
 from droneserver.capture.mavlink_tap import MavlinkTap
-from droneserver.capture.telemetry_recorder import TelemetryRecorder
+from droneserver.capture.telemetry_recorder import TelemetryRecorder, is_shared_bind
 from droneserver.capture.transcript import TranscriptWriter
 from droneserver.capture.verify import DEFAULT_MIN_TELEMETRY_ROWS, BundleCheck, verify_bundle
 
 __all__ = [
     "MavlinkTap",
     "TelemetryRecorder",
+    "is_shared_bind",
     "TranscriptWriter",
     "retain_dataflash",
     "retain_remote_dataflash",

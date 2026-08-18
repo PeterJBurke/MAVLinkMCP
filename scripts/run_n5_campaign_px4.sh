@@ -72,6 +72,22 @@ for model in $MODELS; do
   provider=$(provider_of "$model")
   budget=$(budget_for "$provider")
   echo "############ $model  ($(date -u +%FT%TZ))  [$provider, cap \$$budget] ############"
+  # TELEMETRY-ADDRESS TOPOLOGY NOTE (2026-08-18) -- READ BEFORE THE NEXT RUN.
+  # The --telemetry-address below ("udp://:14540") binds EVERY source on that
+  # port, and the harness now REFUSES it at startup. That address is what let a
+  # second, idle SITL feed the MavSDK telemetry recorder and put two aircraft
+  # into single telemetry.csv rows across 472 trials -- see
+  # /root/LLMUAV/Research/PX4-TELEMETRY-CONTAMINATION-VERIFICATION_2026-08-18.md
+  # and llm_runs/CHANGELOG-TELEMETRY-CLEAN.md. Resolve it ONE of two ways; the
+  # choice is a statement about the network, not a preference:
+  #   (a) PREFERRED -- give this firmware's recorder its OWN mirror port
+  #       ('mavlink_relay.py --mirror' is now repeatable, so one port feeds the
+  #       MAVLink tap and another feeds the recorder) and point
+  #       --telemetry-address at it. scripts/run_local_arm.sh already does this
+  #       with :14650, "fed only by llmuavsitl".
+  #   (b) add --allow-shared-telemetry-bind, which asserts that exactly ONE
+  #       autopilot can reach this port. capture/verify.py's "telemetry.csv
+  #       single-vehicle" check fails the bundle if that turns out to be false.
   timeout "$PER_MODEL_TIMEOUT" /root/.local/bin/uv run python scripts/run_llm_missions.py \
       --missions "$MISSIONS" --trials "$TRIALS" --model "$model" \
       --budget-usd "$budget" \

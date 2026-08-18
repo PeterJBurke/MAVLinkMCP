@@ -692,3 +692,69 @@ def test_every_required_column_is_one_the_recorder_actually_writes(tmp_path):
     """The required list and the recorder's schema cannot drift apart: a column
     required here but absent from COLUMNS would degrade every future bundle."""
     assert set(TELEMETRY_REQUIRED_COLUMNS) <= set(COLUMNS)
+
+
+# --- two aircraft in one telemetry.csv (the 2026-08 shared-port defect) ------
+
+
+def _interleave_a_second_vehicle(trial_dir, every=2, lat=33.6474901, lon=-117.8426921):
+    """Rewrite telemetry.csv so every Nth row is a second, distant aircraft.
+
+    Exactly the shape the real defect produced: the MavSDK recorder bound to a
+    shared ``udp://:14540`` accepted a parked ArduPilot SITL ~790 m from the PX4
+    launch point, and its sample-and-hold rows alternate between the two.
+    """
+    path = trial_dir / "telemetry.csv"
+    lines = path.read_text(encoding="utf-8").splitlines()
+    header = lines[0].split(",")
+    ilat, ilon = header.index("lat_deg"), header.index("lon_deg")
+    out = [lines[0]]
+    for i, line in enumerate(lines[1:]):
+        cells = line.split(",")
+        if i % every == 0:
+            cells[ilat], cells[ilon] = str(lat), str(lon)
+        out.append(",".join(cells))
+    path.write_text("\n".join(out) + "\n", encoding="utf-8")
+
+
+def test_a_telemetry_file_holding_two_aircraft_is_not_complete(tmp_path):
+    """The flip test. 351,312 of 526,059 PX4 rows belonged to a second vehicle
+    and every one of those trials verified green, because nothing asked whether
+    the rows were all the same aircraft."""
+    trial_dir = complete_bundle(tmp_path)
+    _interleave_a_second_vehicle(trial_dir)
+    write_manifest(trial_dir, {"run_id": "test", "mission_id": "T1", "trial_idx": 1})
+
+    check = verify_bundle(trial_dir, require_transcript=True)
+    assert not check.complete
+    problem = next(p for p in check.problems if "single-vehicle" in p)
+    assert "200 m apart" in problem
+    assert "interleaves two vehicles" in problem
+
+
+def test_one_aircraft_passes_the_flip_test(tmp_path):
+    """No false positive on a normal flight: the fixture's rows never move."""
+    check = verify_bundle(complete_bundle(tmp_path), require_transcript=True)
+    assert check.complete, check.problems
+    assert any("single-vehicle" in c.name and c.ok for c in check.checks)
+
+
+def test_a_foreign_sysid_column_value_fails_by_name(tmp_path):
+    """When the file CAN name its vehicle, it is checked on the name. The
+    recorder's historical schema could not - which is why the defect was
+    inexpressible in the artifact - but the sysid-filtered companions can."""
+    from droneserver.capture.verify import _check_telemetry_single_vehicle, _read_telemetry
+
+    trial_dir = tmp_path / "T1" / "trial_1"
+    trial_dir.mkdir(parents=True)
+    _write_telemetry(trial_dir, rows=4)
+    path = trial_dir / "telemetry.csv"
+    lines = path.read_text(encoding="utf-8").splitlines()
+    lines[0] += ",sysid"
+    for i in range(1, len(lines)):
+        lines[i] += ",2" if i == 2 else ",1"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    check = _check_telemetry_single_vehicle(_read_telemetry(trial_dir), vehicle_sysid=1)
+    assert not check.ok
+    assert "system ID(s) 2" in check.detail

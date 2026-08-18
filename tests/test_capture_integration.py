@@ -78,7 +78,7 @@ class _FakeTap:
 class _FakeRecorder:
     """No-op async TelemetryRecorder: writes a tiny telemetry.csv."""
 
-    def __init__(self, system_address, out_dir, rate_hz=10.0, t0=None, raw_source=None):
+    def __init__(self, system_address, out_dir, rate_hz=10.0, t0=None, raw_source=None, allow_shared_bind=False):
         from pathlib import Path
 
         self.out_dir = Path(out_dir)

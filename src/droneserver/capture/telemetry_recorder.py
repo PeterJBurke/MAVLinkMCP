@@ -161,6 +161,67 @@ _DOP_UNKNOWN = 65535
 _SYS_STATUS_GEOFENCE = 0x00100000  # MAV_SYS_STATUS_GEOFENCE
 _SYS_STATUS_AHRS = 0x00200000  # MAV_SYS_STATUS_AHRS (the EKF / attitude estimator)
 
+#: Two consecutive rows this far apart cannot be one aircraft. At 10 Hz a
+#: vehicle would have to travel at 2 km/s to cover it; the fastest thing this
+#: project flies moves ~2 m between rows. A jump this size means the row clock
+#: advanced while the *vehicle* changed - i.e. two aircraft are feeding one
+#: recorder. See :attr:`TelemetryRecorder.position_flips` and
+#: ``capture.verify.MAX_TELEMETRY_POSITION_JUMP_M``, which enforces the same
+#: threshold on the finished file.
+MAX_POSITION_JUMP_M = 200.0
+
+#: Address forms that bind to *every* source: no host, or the any-address. A
+#: recorder given one of these accepts telemetry from every autopilot sending
+#: to that port, and its rows carry no system ID in which to say which one they
+#: describe. See :func:`is_shared_bind`.
+_ANY_HOSTS = ("", "0.0.0.0", "[::]", "::")
+
+
+def _haversine_m(a: tuple[float, float], b: tuple[float, float]) -> float:
+    """Great-circle metres between two (lat, lon) degree pairs."""
+    radius = 6371000.0
+    lat1, lat2 = math.radians(a[0]), math.radians(b[0])
+    dlat = math.radians(b[0] - a[0])
+    dlon = math.radians(b[1] - a[1])
+    h = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+    return 2 * radius * math.asin(min(1.0, math.sqrt(h)))
+
+
+def is_shared_bind(system_address: str) -> bool:
+    """Does this MavSDK address accept telemetry from *any* autopilot?
+
+    ``udp://:14540`` - the historical default - binds the port with no host and
+    no system-ID filter. That is fine with one autopilot on the network and
+    silently catastrophic with two: for the whole PX4 SITL campaign
+    (2026-08-12/13) and the 2026-08-18 ArduPilot T6 campaign, a second SITL left
+    running from the previous campaign was also publishing to :14540, and
+    because this recorder is sample-and-hold the two aircraft's fields landed in
+    single rows - 351,312 of 526,059 PX4 rows belonged to the wrong vehicle, and
+    nothing in the bundle could tell. (Research/PX4-TELEMETRY-CONTAMINATION-
+    VERIFICATION_2026-08-18.md has the proof and the corpus-wide numbers.)
+
+    MavSDK offers no system-ID filter on the receiving side, so the only fix
+    available *here* is a dedicated address: give each firmware's recorder its
+    own port, fed by that firmware's own relay mirror exactly as the MAVLink tap
+    already is (``scripts/mavlink_relay.py --mirror`` accepts more than one).
+    A connect-out form (``udpout://``/``tcp://<host>:<port>``) or a bind pinned
+    to a specific interface is likewise one-vehicle-per-recorder.
+    """
+    address = (system_address or "").strip()
+    scheme, sep, rest = address.partition("://")
+    if not sep:
+        # Also accept the single-colon pymavlink shape (``udpin:host:port``)
+        # and a bare ``:port`` / ``host:port``.
+        head, _, tail = address.partition(":")
+        if head.lower() in ("udp", "udpin", "udpout", "tcp", "tcpin", "tcpout", "serial"):
+            scheme, rest = head, tail
+        else:
+            scheme, rest = "udp", address
+    if scheme.lower() not in ("udp", "udpin"):
+        return False  # connect-out / TCP: one peer by construction
+    host, _, _port = rest.rpartition(":")
+    return host.strip() in _ANY_HOSTS
+
 #: Grace given to the gRPC channel to finish in-flight calls on close.
 CHANNEL_CLOSE_GRACE_S = 2.0
 
@@ -365,7 +426,30 @@ class TelemetryRecorder:
         rate_hz: float = 10.0,
         t0: float | None = None,
         raw_source: Any = None,
+        allow_shared_bind: bool = False,
     ):
+        # One recorder, one aircraft. A bind-to-any address cannot promise that
+        # and there is no system-ID filter on the MavSDK side to add, so the
+        # address itself has to be per-firmware; refusing here is what turns the
+        # 2026-08 contamination from a silent defect into a startup error the
+        # operator fixes in one flag. ``allow_shared_bind=True`` is the escape
+        # hatch for a topology known to have exactly one autopilot on the port -
+        # it is a claim about the network, not a preference, and the finished
+        # file is still checked (verify._check_telemetry_single_vehicle).
+        if is_shared_bind(system_address) and not allow_shared_bind:
+            raise ValueError(
+                f"telemetry address {system_address!r} binds every source on that port: any autopilot "
+                "sending to it enters these subscriptions, and telemetry.csv has no sysid column in "
+                "which to say which aircraft a row describes. Give this firmware's recorder its own "
+                "address (e.g. 'udpin://127.0.0.1:14541' fed by an extra 'mavlink_relay.py --mirror', "
+                "as the MAVLink tap already is), or pass allow_shared_bind=True if exactly one "
+                "autopilot can reach that port. See Research/PX4-TELEMETRY-CONTAMINATION-"
+                "VERIFICATION_2026-08-18.md."
+            )
+        #: True when the operator explicitly accepted a bind-to-any address.
+        #: Recorded so the manifest/verify can say the bundle was captured under
+        #: the topology that produced the 2026-08 contamination.
+        self.shared_bind_allowed = bool(is_shared_bind(system_address))
         self.system_address = system_address
         #: Anything with a ``snapshot() -> {msg_type: fields}`` method - in
         #: practice the trial's :class:`~droneserver.capture.mavlink_tap.MavlinkTap`.
@@ -394,6 +478,14 @@ class TelemetryRecorder:
         self._writer: Any = None  # csv.writer's return type is not public
         self._started = False
         self._stopped = False
+        #: Live interleave detector. Consecutive rows more than
+        #: :data:`MAX_POSITION_JUMP_M` apart cannot describe one aircraft at
+        #: this rate, so every count above zero is a second vehicle on the
+        #: subscriptions. Counted while recording rather than discovered later,
+        #: because the 2026-08 contamination ran for 472 trials undetected.
+        self.position_flips = 0
+        self.worst_position_jump_m = 0.0
+        self._previous_fix: tuple[float, float] | None = None
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -655,4 +747,28 @@ class TelemetryRecorder:
                 "" if self._last_sample_mono is None else round(time.monotonic() - self._last_sample_mono, 3)
             ),
         }
+        self._note_position(values["lat_deg"], values["lon_deg"])
         return [values[col] for col in COLUMNS]
+
+    def _note_position(self, lat, lon) -> None:
+        """Count impossible jumps between consecutive rows. Never raises.
+
+        This is the interleave detector, run while the file is being written.
+        A single vehicle sampled at 10 Hz cannot move
+        :data:`MAX_POSITION_JUMP_M`; a row pair that does means two aircraft are
+        taking turns in one recorder's subscriptions, which is exactly the
+        defect that produced 472 contaminated bundles before anything looked.
+        """
+        try:
+            fix = (float(lat), float(lon))
+        except (TypeError, ValueError):
+            return
+        previous = self._previous_fix
+        self._previous_fix = fix
+        if previous is None:
+            return
+        metres = _haversine_m(previous, fix)
+        if metres > self.worst_position_jump_m:
+            self.worst_position_jump_m = metres
+        if metres > MAX_POSITION_JUMP_M:
+            self.position_flips += 1

@@ -14,6 +14,8 @@ awaited directly - no decorator needed, matching tests/test_offboard_watchdog.py
 import asyncio
 import csv
 
+import pytest
+
 from droneserver.capture import telemetry_recorder as tr
 from droneserver.capture.telemetry_recorder import COLUMNS, WIRE_SOURCED_COLUMNS, TelemetryRecorder
 
@@ -154,7 +156,7 @@ def _read_csv(path):
 async def test_header_and_mocked_values(tmp_path, monkeypatch):
     monkeypatch.setattr(tr, "System", _FakeSystem)
 
-    rec = TelemetryRecorder("udp://:14540", tmp_path, rate_hz=50.0, t0=1000.0)
+    rec = TelemetryRecorder("udpin://127.0.0.1:14541", tmp_path, rate_hz=50.0, t0=1000.0)
     # t0 is honoured for clock alignment with the MAVLink tap and audit log.
     assert rec.t0 == 1000.0
 
@@ -222,7 +224,7 @@ async def test_connect_failure_never_crashes_and_still_writes_header(tmp_path, m
     """A failed connect must not raise; the CSV still gets its header + rows."""
     monkeypatch.setattr(tr, "System", _ExplodingSystem)
 
-    rec = TelemetryRecorder("udp://:14540", tmp_path, rate_hz=50.0)
+    rec = TelemetryRecorder("udpin://127.0.0.1:14541", tmp_path, rate_hz=50.0)
     await rec.start()
     await asyncio.sleep(0.05)
     await rec.stop()
@@ -235,7 +237,7 @@ async def test_connect_failure_never_crashes_and_still_writes_header(tmp_path, m
 
 async def test_stop_is_idempotent(tmp_path, monkeypatch):
     monkeypatch.setattr(tr, "System", _FakeSystem)
-    rec = TelemetryRecorder("udp://:14540", tmp_path)
+    rec = TelemetryRecorder("udpin://127.0.0.1:14541", tmp_path)
     await rec.start()
     await rec.stop()
     await rec.stop()  # second stop must be a harmless no-op
@@ -281,7 +283,7 @@ async def test_the_wire_sourced_columns_are_populated_from_the_tap(tmp_path, mon
     """
     monkeypatch.setattr(tr, "System", _FakeSystem)
 
-    rec = TelemetryRecorder("udp://:14540", tmp_path, rate_hz=50.0, raw_source=_FakeTap())
+    rec = TelemetryRecorder("udpin://127.0.0.1:14541", tmp_path, rate_hz=50.0, raw_source=_FakeTap())
     await rec.start()
     await asyncio.sleep(0.1)
     await rec.stop()
@@ -360,7 +362,7 @@ async def test_a_dead_raw_source_never_breaks_a_row(tmp_path, monkeypatch):
         def snapshot(self):
             raise RuntimeError("tap died")
 
-    rec = TelemetryRecorder("udp://:14540", tmp_path, rate_hz=50.0, raw_source=_BrokenTap())
+    rec = TelemetryRecorder("udpin://127.0.0.1:14541", tmp_path, rate_hz=50.0, raw_source=_BrokenTap())
     await rec.start()
     await asyncio.sleep(0.05)
     await rec.stop()
@@ -434,7 +436,7 @@ async def test_stop_closes_the_grpc_channel_and_reaps_the_server(tmp_path, monke
 
     monkeypatch.setattr(tr, "System", _factory)
 
-    rec = TelemetryRecorder("udp://:14540", tmp_path, rate_hz=50.0)
+    rec = TelemetryRecorder("udpin://127.0.0.1:14541", tmp_path, rate_hz=50.0)
     await rec.start()
     await asyncio.sleep(0.05)
     await rec.stop()
@@ -464,7 +466,7 @@ async def test_teardown_survives_a_channel_that_will_not_close(tmp_path, monkeyp
 
     monkeypatch.setattr(tr, "System", _StuckSystem)
 
-    rec = TelemetryRecorder("udp://:14540", tmp_path, rate_hz=50.0)
+    rec = TelemetryRecorder("udpin://127.0.0.1:14541", tmp_path, rate_hz=50.0)
     await rec.start()
     await rec.stop()  # must not raise
     assert (tmp_path / "telemetry.csv").exists()
@@ -481,3 +483,60 @@ def test_the_channel_is_found_where_mavsdk_hides_it():
     assert tr._grpc_channel(type("S", (), {})()) is None
     assert tr._grpc_channel(type("S", (), {"_plugins": {}})()) is None
     assert tr._grpc_channel(type("S", (), {"_plugins": {"x": object()}})()) is None
+
+
+# --- one recorder, one aircraft ---------------------------------------------
+
+
+def test_a_bind_to_any_telemetry_address_is_refused(tmp_path):
+    """``udp://:14540`` accepts telemetry from EVERY autopilot on that port,
+    and telemetry.csv has no sysid column in which to say which aircraft a row
+    describes. That combination cost 472 contaminated bundles in 2026-08."""
+    with pytest.raises(ValueError) as excinfo:
+        TelemetryRecorder("udp://:14540", tmp_path)
+    assert "binds every source" in str(excinfo.value)
+    assert "allow_shared_bind" in str(excinfo.value)
+
+
+def test_the_shared_bind_escape_hatch_is_explicit(tmp_path):
+    """A network known to carry exactly one autopilot can still say so - but it
+    has to say so, and the recorder records that it was said."""
+    rec = TelemetryRecorder("udp://:14540", tmp_path, allow_shared_bind=True)
+    assert rec.shared_bind_allowed is True
+
+    dedicated = TelemetryRecorder("udpin://127.0.0.1:14541", tmp_path)
+    assert dedicated.shared_bind_allowed is False
+
+
+@pytest.mark.parametrize(
+    "address, shared",
+    [
+        ("udp://:14540", True),
+        ("udpin://:14540", True),
+        ("udp://0.0.0.0:14540", True),
+        ("udp://[::]:14540", True),
+        ("udpin:14540", True),
+        (":14540", True),
+        ("udpin://127.0.0.1:14541", False),
+        ("udpin:127.0.0.1:14650", False),
+        ("udpout://10.0.0.5:14550", False),
+        ("tcp://127.0.0.1:5760", False),
+    ],
+)
+def test_which_addresses_can_carry_two_vehicles(address, shared):
+    assert tr.is_shared_bind(address) is shared
+
+
+async def test_the_recorder_counts_impossible_position_jumps(tmp_path):
+    """The live interleave detector. A single vehicle at 10 Hz cannot move
+    200 m between rows; two vehicles sharing one recorder do it constantly."""
+    rec = TelemetryRecorder("udpin://127.0.0.1:14541", tmp_path)
+    for fix in [(33.6405, -117.8443), (33.6405, -117.8443), (33.6474901, -117.8426921), (33.6405, -117.8443)]:
+        rec._note_position(*fix)
+    assert rec.position_flips == 2
+    assert rec.worst_position_jump_m > 700
+
+    calm = TelemetryRecorder("udpin://127.0.0.1:14541", tmp_path)
+    for fix in [(33.6405, -117.8443), (33.64051, -117.84431), (33.64052, -117.84432)]:
+        calm._note_position(*fix)
+    assert calm.position_flips == 0
