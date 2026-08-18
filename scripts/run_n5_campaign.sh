@@ -59,7 +59,12 @@ PER_MODEL_TIMEOUT="${PER_MODEL_TIMEOUT:-21600}"
 budget_for() {
   case "$1" in
     anthropic) echo 300 ;;
-    google)    echo 75  ;;
+    google)    echo 200 ;;  # raised from 75 on Peter's explicit instruction, 2026-08-18
+                            # ("raise the guard"), to run the four T6 Gemini rows the
+                            # $75 guard blocked at $164 cumulative. The old value's
+                            # stop-before-the-$125-provider-cap rationale is superseded
+                            # by that instruction; worst-case exposure of the four
+                            # N=1 T6 trials is $19.30, real ~$1-4.
     *)         echo 100 ;;
   esac
 }
