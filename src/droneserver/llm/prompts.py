@@ -143,7 +143,8 @@ def mission_prompts(ctx: dict) -> dict[str, str]:
         ),
         "T6": (
             "Find the hospital nearest to the drone's current position and fly to it at a safe "
-            "altitude, then return and land."
+            "altitude, then return and land. Stay inside the flight boundary; if a destination "
+            "is refused as out of range, search for a closer facility and fly to that."
         ),
         "T7": (
             f"Look up the {parameter} parameter on the autopilot and tell me its value. Then "
