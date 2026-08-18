@@ -12,6 +12,8 @@
 #
 #   MODELS="..." bash scripts/run_n5_campaign.sh     # override the list
 #   MISSIONS=T1,T2 TRIALS=1 bash scripts/run_n5_campaign.sh   # short rehearsal
+#   MISSIONS=T6 TRIALS=1 MAPS_URL=https://mapstools.googleapis.com/mcp \
+#     bash scripts/run_n5_campaign.sh   # the T6 Maps-composition arm (Plan 34): key read from llmuav.env
 #
 # One model at a time, always: they share a single simulated aircraft.
 set -u
@@ -115,6 +117,8 @@ for model in $MODELS; do
       --sitl-host llmuavsitl \
       --dataflash-remote llmuavsitl:/home/dronepilot/ardupilot/ArduCopter/logs \
       --require-complete-capture \
+      ${MAPS_URL:+--maps-url "$MAPS_URL"} \
+      ${MAPS_URL:+--maps-api-key "$GOOGLE_MAPS_API_KEY"} \
       2>&1 | grep -E -A2 "^model:|^price:|^budget:|PASS |FAIL |VOID|LINK |BUDGET|PROVIDER|spend:|spend on|capture:|degraded|ERROR|Error|Traceback|passed on"
   rc=${PIPESTATUS[0]}
   case "$rc" in
