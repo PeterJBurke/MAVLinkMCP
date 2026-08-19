@@ -14,15 +14,23 @@
 set -u
 cd /root/droneserver || exit 2
 MODELS="${MODELS:-claude-haiku-4-5-20251001 claude-sonnet-5 claude-opus-5 gpt-5.2 gemini-3.1-pro-preview gemini-3.6-flash gemini-3.5-flash-lite gemini-robotics-er-2-preview grok-4.5 grok-4.20-0309-reasoning grok-4.20-0309-non-reasoning}"
+# T10 turn ceiling (Peter's ruling 2026-08-19: 150, extending the standing refly
+# ruling). A >10-min mission needs more turns than the 90 default: 3.1-pro paced
+# responsibly (~7-12 s/turn) and was cut mid-landing at 90 after a correct 627 s
+# flight. At 150, responsible pacing passes; frantic 1.3 s/turn polling still
+# fails on the merits. Cost stays bounded by the per-trial money ceiling.
+MAX_TURNS="${MAX_TURNS:-150}"
 set -a; . /root/llmuav.env; set +a
 export DRONESERVER_API_KEY=$(grep "^SAFETY_API_KEYS=" /etc/droneserver/staging.env | cut -d= -f2- | cut -d, -f1 | cut -d: -f2)
 export DRONESERVER_RECORDER_API_KEY=$(cat /root/llmuav-recorder.key)
+# NOTE: --budget-usd is cumulative-per-key; raised 100->260 on 2026-08-19 because the google key was already at $181 from the T6 N=5 campaign and $100 hard-blocked every gemini T10 row. 260 clears google/xai/openai cumulative + T10 spread; matched to Peter's topped-up credit.
 for model in $MODELS; do
   label="t10n1-$(echo "$model" | tr '/.' '__')"
   echo "############ T10 $model ($(date -u +%FT%TZ)) ############"
   timeout 5400 /root/.local/bin/uv run python scripts/run_llm_missions.py \
       --missions T10 --trials 1 --model "$model" --include-slow \
-      --budget-usd 100 \
+      --max-turns "$MAX_TURNS" \
+      --budget-usd 260 \
       --url http://127.0.0.1:8090/sse \
       --audit-log /var/lib/droneserver/audit.jsonl \
       --target-label "ArduPilot SITL (llmuavsitl)" \
