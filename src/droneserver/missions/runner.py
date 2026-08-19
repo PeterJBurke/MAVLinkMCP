@@ -33,6 +33,13 @@ from droneserver.missions.state import (
 from droneserver.safety.audit import AuditRecord, new_call_id
 from droneserver.safety.config import get_safety_settings
 from droneserver.safety.geofence import Geofence, check_mission, check_position, parse_polygon
+from droneserver.telemetry.ground import SETTLED_RATE_M_S, ground_evidence, height_above_launch_m
+
+#: A height at or below which the aircraft counts as down, used ONLY when the
+#: autopilot itself will not say (see :func:`MissionRunner._ground_state`). It is
+#: measured against the mission's own launch elevation, never against the
+#: autopilot's relative datum, which moves to wherever the aircraft last armed.
+GROUND_HEIGHT_M = 2.0
 
 
 def _battery_fraction(reported: float) -> float | None:
@@ -247,6 +254,15 @@ class MissionRunner:
             self.set_phase(Phase.FAILED, s, reason="geofence")
             return
 
+        # ---- the datum this mission measures heights against ----
+        # Read while the aircraft is still parked, so it is the elevation of the
+        # ground it is standing on. The autopilot's own relative-altitude datum
+        # cannot serve: it is re-zeroed at every arm, so a mission flown after
+        # one that armed somewhere else inherits that offset in every reading.
+        # Best effort - a mission with no launch elevation falls back to the
+        # relative reading exactly as before.
+        await self._record_launch_datum(drone)
+
         # ---- upload ----
         self.set_phase(Phase.UPLOADING, s)
         items = _mission_items(build_raw_items, waypoints, record.takeoff_altitude_m, record.return_to_launch)
@@ -290,6 +306,12 @@ class MissionRunner:
             self.set_phase(Phase.FAILED, s, reason="takeoff")
             return
         self.emit("info", f"climbing to {record.takeoff_altitude_m:.0f} m before starting the mission", s)
+        # relative_altitude_m is the RIGHT datum for this wait, and the only
+        # right one: set_takeoff_altitude/takeoff express the target relative to
+        # the point the aircraft just armed at, which is exactly the datum the
+        # autopilot re-zeroed on that arm. Command and measurement share a datum
+        # here; measuring the climb against the mission's launch elevation would
+        # compare it against ground the aircraft is not standing on. Deliberate.
         climb_deadline = time.monotonic() + 90
         reached = 0.0
         while time.monotonic() < climb_deadline and not self._abort_requested:
@@ -359,6 +381,61 @@ class MissionRunner:
 
         await self.monitor(drone, s)
 
+    # ------------------------------------------------------------- ground truth
+
+    async def _record_launch_datum(self, drone) -> None:
+        """Stamp the elevation of the point this mission starts from. Once.
+
+        Never raises and never blocks the mission: a launch elevation is what
+        makes the height fallback datum-free, and its absence only returns that
+        fallback to the autopilot's relative reading.
+        """
+        if self.record is None or self.record.launch_amsl_m is not None:
+            return
+        with contextlib.suppress(Exception):
+            position = await _first(drone.telemetry.position(), 5.0)
+            self.record.launch_amsl_m = round(float(position.absolute_altitude_m), 2)
+
+    def _height_above_launch(self, record: MissionRecord) -> float | None:
+        """How high the aircraft is above where THIS mission started."""
+        position = record.last_position or {}
+        return height_above_launch_m(
+            record.launch_amsl_m,
+            position.get("absolute_altitude_m"),
+            position.get("relative_altitude_m"),
+        )
+
+    def _ground_state(self, record: MissionRecord) -> bool | None:
+        """``True`` on the ground, ``False`` in the air, ``None`` when nothing says.
+
+        The autopilot's own landed evidence first, because no arming anywhere
+        moves it. A height - measured against this mission's launch elevation,
+        not the autopilot's movable datum - is consulted only when the firmware
+        did not answer at all.
+
+        The third answer is the point of this function. "Unknown" must not mean
+        landed to the completion check (which would report a flight that is
+        still in the air as finished) and must not mean safe to
+        :meth:`_descend_and_fail` (which would walk away from an aircraft
+        loitering armed).
+
+        :func:`droneserver.telemetry.ground.settled_on_ground` is not called
+        directly here because it requires a ``landed_state``, and this runner
+        must keep working on a firmware that only publishes ``in_air``. Its
+        vertical-rate veto is applied all the same: an autopilot claiming the
+        ground while still falling is describing a landing in progress.
+        """
+        grounded = ground_evidence(record.last_landed_state, record.last_in_air)
+        rate = record.last_vertical_speed_m_s
+        if grounded is True and rate is not None and abs(rate) > SETTLED_RATE_M_S:
+            return False
+        if grounded is not None:
+            return grounded
+        height = self._height_above_launch(record)
+        if height is None:
+            return None
+        return height <= GROUND_HEIGHT_M
+
     # ------------------------------------------------------------- start/upload
 
     async def _upload(self, drone, items: list, s: MissionSettings) -> bool:
@@ -407,7 +484,13 @@ class MissionRunner:
             record.start_position = {
                 "latitude_deg": round(position.latitude_deg, 7),
                 "longitude_deg": round(position.longitude_deg, 7),
+                # Descriptive only: "how far has it flown" is computed from the
+                # two coordinates above, and nothing compares this altitude to
+                # anything. Recorded as the autopilot reported it, with the
+                # absolute reading beside it so a reader can re-derive a height
+                # against launch_amsl_m if the datum turns out to have moved.
                 "relative_altitude_m": round(position.relative_altitude_m, 1),
+                "absolute_altitude_m": round(position.absolute_altitude_m, 1),
             }
 
     async def _confirm_running(self, drone, s: MissionSettings) -> bool:
@@ -436,11 +519,20 @@ class MissionRunner:
         The failure paths that reach here all happen after the GUIDED takeoff,
         so the vehicle is at altitude. A stale or missing position must not be
         read as "on the ground and therefore fine" - re-read it first.
+
+        The test is deliberately inverted: descend UNLESS there is positive
+        evidence the aircraft is already down. It used to be
+        ``relative_altitude_m > 2.0``, which fails open in the direction that
+        matters - a mission flown after one that armed on higher ground reads a
+        negative offset, an aircraft genuinely 4 m up reads under 2, and the
+        descent that should have brought it home is skipped. (The same offset
+        with the other sign spends a descent command on a parked aircraft.)
+        Unknown is now "not on the ground", so the aircraft comes down.
         """
         assert self.record is not None
         if self.record.last_position is None:
             await self._sample(drone, self.record, s)
-        if (self.record.last_position or {}).get("relative_altitude_m", 0.0) > 2.0:
+        if self._ground_state(self.record) is not True:
             await self._do_action(s.mission_complete_action, drone, s, reason=reason)
         self.set_phase(Phase.FAILED, s, reason=reason)
 
@@ -536,11 +628,18 @@ class MissionRunner:
             # ---- geofence breach ----
             if s.auto_actions_enabled and s.geofence_breach_action != "none" and record.last_position:
                 fence = self._fence()
+                # A ceiling is a height above the ground the aircraft started
+                # from, which is what _height_above_launch measures. Handing the
+                # fence the autopilot's relative reading instead let a moved
+                # datum both hide a real breach and invent one: the same +4.1 m
+                # offset is 4 m of ceiling silently spent, or 4 m of margin that
+                # was never there. Falls back to the relative reading when this
+                # mission has no launch elevation.
                 violation = check_position(
                     fence,
                     record.last_position.get("latitude_deg"),
                     record.last_position.get("longitude_deg"),
-                    record.last_position.get("relative_altitude_m"),
+                    self._height_above_launch(record),
                 )
                 if violation is not None:
                     await self._auto_action(
@@ -556,12 +655,21 @@ class MissionRunner:
             # airborne and the vehicle is now disarmed on the ground. It says
             # the FLIGHT is over; it does not say the MISSION was flown, so it
             # only reads as COMPLETED with the progress evidence behind it.
-            altitude = (record.last_position or {}).get("relative_altitude_m") or 0.0
-            if record.last_armed and altitude > 2.0:
+            #
+            # Both halves used to read ``relative_altitude_m`` against 2 m. That
+            # datum is re-zeroed wherever the aircraft last ARMED, so a mission
+            # flown after one that armed elsewhere carries a constant offset in
+            # it (+4.1 m measured across 8 SITL lanes, 2026-08-19): the airborne
+            # latch fires on a parked aircraft, and the completion never fires
+            # at all because the height never comes back under the threshold.
+            # Both now ask the autopilot, and fall back to a height above THIS
+            # mission's launch elevation only when it will not answer.
+            grounded = self._ground_state(record)
+            if record.last_armed and grounded is False:
                 was_airborne = True
                 airborne_since = airborne_since or time.monotonic()
 
-            if was_airborne and not record.last_armed and altitude <= 2.0:
+            if was_airborne and not record.last_armed and grounded is True:
                 if stalled or not record.mission_mode_confirmed or not record.progressed(s.progress_distance_m):
                     record.error = record.error or (
                         "the aircraft landed without flying the mission: no mission item "
@@ -628,12 +736,40 @@ class MissionRunner:
             record.last_position = {
                 "latitude_deg": round(position.latitude_deg, 7),
                 "longitude_deg": round(position.longitude_deg, 7),
+                # The autopilot's own reading, kept for continuity: measured
+                # from wherever it last armed, so it can be metres off.
                 "relative_altitude_m": round(position.relative_altitude_m, 1),
                 "absolute_altitude_m": round(position.absolute_altitude_m, 1),
             }
+            # The same height against a datum that cannot move under the
+            # aircraft. Reported so a reader can see the two disagree.
+            height = height_above_launch_m(
+                record.launch_amsl_m,
+                record.last_position["absolute_altitude_m"],
+                record.last_position["relative_altitude_m"],
+            )
+            record.last_position["height_above_launch_m"] = None if height is None else round(height, 1)
             ok = True
         except Exception:
             pass
+        # The autopilot's own landed evidence. Cleared first, so a poll the
+        # firmware did not answer reports "unknown" instead of leaving the
+        # previous poll's word standing - a stale "ON_GROUND" would be exactly
+        # the wrong thing to complete a mission on. Bounded tighter than the
+        # readings above because these are extras on some firmwares: a topic
+        # that is never published costs a short wait, not the poll.
+        record.last_landed_state = None
+        record.last_in_air = None
+        record.last_vertical_speed_m_s = None
+        with contextlib.suppress(Exception):
+            landed = await _first(drone.telemetry.landed_state(), 2.0)
+            record.last_landed_state = str(landed).rsplit(".", 1)[-1].upper()
+        with contextlib.suppress(Exception):
+            record.last_in_air = bool(await _first(drone.telemetry.in_air(), 2.0))
+        with contextlib.suppress(Exception):
+            velocity = await _first(drone.telemetry.velocity_ned(), 2.0)
+            # NED: down is positive, so a climb is a negative down rate.
+            record.last_vertical_speed_m_s = round(-float(velocity.down_m_s), 2)
         with contextlib.suppress(Exception):
             battery = await _first(drone.telemetry.battery(), 5.0)
             record.last_battery = {
@@ -864,6 +1000,10 @@ def _mission_items(
     for wp in waypoints:
         lat = float(wp.get("latitude_deg", wp.get("lat", 0.0)))
         lon = float(wp.get("longitude_deg", wp.get("lon", 0.0)))
+        # Not a telemetry reading and not a datum question: this is the caller's
+        # requested waypoint altitude, and it is flown in FRAME_GLOBAL_REL_ALT,
+        # so the autopilot's own relative datum is the frame it is expressed in
+        # by construction. Nothing to correct here.
         alt = float(wp.get("altitude_m", wp.get("relative_altitude_m", wp.get("alt", takeoff_altitude_m))))
         hold = float(wp.get("hold_s", 0.0))
         dicts.append(

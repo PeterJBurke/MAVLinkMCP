@@ -16,6 +16,7 @@ from droneserver.telemetry.flight_log import (
     log_tool_output,
     logger,
 )
+from droneserver.telemetry.ground import ground_evidence, height_above_launch_m, settled_on_ground
 from droneserver.telemetry.home import read_home
 
 #: How far from a commanded target the aircraft may touch down and still be
@@ -148,73 +149,32 @@ async def _telemetry_now(drone) -> dict:
 def _height_above_launch_m(connector, reading: dict) -> float | None:
     """Height above THIS SESSION's launch point, or ``None`` if unmeasurable.
 
-    ``relative_altitude_m`` is measured from a datum the autopilot MOVES:
-    ArduPilot re-zeroes it wherever the aircraft last ARMED. After a mission
-    that lands away from the launch field, re-arms there and flies home, the
-    parked aircraft on the launch field reports a persistent offset (+4.1 m
-    observed, 8 independent SITL lanes, 2026-08-19) - the terrain difference
-    between the two arming points, frozen into every subsequent reading.
-
-    Absolute altitude does not move. Where the session recorded the elevation
-    it started from (:attr:`MAVLinkConnector.session_launch`, FIX 8a) this
-    measures against that instead; where it did not, it falls back to the
-    relative reading and the old behaviour is unchanged. Same correction the
-    scorer got in FIX 8b (``verdicts.height_above_launch_m``) - this is the
-    operational half.
-
-    NOTE what this is NOT: it is not height above the ground under the
-    aircraft. Over terrain that differs from the launch field it reads the
-    terrain difference even when parked, so it must never be the sole evidence
-    that an aircraft has touched down - see :func:`_settled_on_ground`.
+    Thin adapter over :func:`droneserver.telemetry.ground.height_above_launch_m`
+    that supplies this server's launch elevation: the one recorded when the link
+    came up (:attr:`MAVLinkConnector.session_launch`, FIX 8a), which does not
+    follow the aircraft to wherever it last armed.
     """
     launch = getattr(connector, "session_launch", None) or {}
-    launch_amsl = launch.get("absolute_altitude_m")
-    absolute = reading.get("absolute_altitude_m")
-    if launch_amsl is not None and absolute is not None:
-        return absolute - launch_amsl
-    return reading.get("relative_altitude_m")
+    return height_above_launch_m(
+        launch.get("absolute_altitude_m"),
+        reading.get("absolute_altitude_m"),
+        reading.get("relative_altitude_m"),
+    )
 
 
 def _ground_evidence(reading: dict) -> bool | None:
     """Is the aircraft on the ground, per the AUTOPILOT? ``None`` if it won't say.
 
-    This is the datum-free half of the landing question. ``landed_state`` and
-    ``in_air`` are the autopilot's own assessment - weight-on-skids, descent
-    rate, throttle - and no re-arming anywhere moves them. Altitude is only
-    consulted by callers when this returns ``None``.
+    Adapter over :func:`droneserver.telemetry.ground.ground_evidence` for the
+    reading dict :func:`_telemetry_now` produces.
     """
-    landed_state = reading.get("landed_state")
-    if landed_state == "ON_GROUND":
-        return True
-    if landed_state in ("IN_AIR", "TAKING_OFF", "LANDING"):
-        return False
-    in_air = reading.get("in_air")
-    if in_air is not None:
-        return not in_air
-    return None
+    return ground_evidence(reading.get("landed_state"), reading.get("in_air"))
 
 
-def _settled_on_ground(landed_state_str: str | None, is_in_air, vertical_speed_m_s: float | None) -> bool:
-    """Touchdown, from evidence that no moving altitude datum can spoil.
-
-    The autopilot says ON_GROUND and not in the air, and - where the rate is
-    readable at all - the aircraft is not still moving vertically. There is
-    deliberately NO altitude term: requiring ``relative_altitude_m < 2.0`` is
-    what made every T6-shape landing (land away, re-arm, fly home) run to the
-    120 s ``landing_timeout``, because the re-armed datum left the parked
-    aircraft reading +4.1 m and the threshold was unreachable.
-
-    The rate tolerance is generous on purpose: it is here to veto an autopilot
-    that claims ON_GROUND in the middle of a 3 m/s descent, not to second-guess
-    a settled aircraft's noise floor. An unreadable rate vetoes nothing.
-    """
-    if landed_state_str != "ON_GROUND":
-        return False
-    if is_in_air:
-        return False
-    if vertical_speed_m_s is not None and abs(vertical_speed_m_s) > 1.0:
-        return False
-    return True
+#: Touchdown, from evidence no moving altitude datum can spoil. See
+#: :func:`droneserver.telemetry.ground.settled_on_ground` for why there is no
+#: altitude term in it.
+_settled_on_ground = settled_on_ground
 
 
 def _observables(connector, reading: dict) -> dict:

@@ -103,6 +103,24 @@ class MissionRecord:
     last_flight_mode: str | None = None
     last_armed: bool = True
 
+    # ---- ground evidence ---------------------------------------------------
+    # The autopilot's own answer to "am I on the ground?", which no arming
+    # anywhere can move, and the one elevation this mission may measure heights
+    # against. Both exist because ``last_position["relative_altitude_m"]`` is
+    # measured from a datum ArduPilot re-zeroes at every arm, so a mission that
+    # follows a flight which armed elsewhere sees a constant offset in it (+4.1 m
+    # measured, 2026-08-19). See :mod:`droneserver.telemetry.ground`.
+    #: ``ON_GROUND`` / ``IN_AIR`` / ``TAKING_OFF`` / ``LANDING``, or None when
+    #: the firmware did not answer on the last poll. Never stale: a failed read
+    #: clears it rather than leaving the previous poll's word standing.
+    last_landed_state: str | None = None
+    last_in_air: bool | None = None
+    last_vertical_speed_m_s: float | None = None
+    #: Elevation above sea level of the point this mission started from, read
+    #: while the aircraft was still parked. Absolute altitude does not move, so
+    #: this is the datum every height in this mission is measured against.
+    launch_amsl_m: float | None = None
+
     # ---- progress evidence -------------------------------------------------
     # Completion is never inferred from a signal that is already true at item 0.
     # These four fields are the positive evidence that the mission ACTUALLY ran,
