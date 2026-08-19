@@ -29,6 +29,23 @@ class MAVLinkConnector:
     # Without evidence of a flight there is nothing to report complete.
     was_airborne: bool = field(default=False)
 
+    def reset_flight_latches(self) -> None:
+        """Clear per-flight tracking state so no trial inherits the last one's.
+
+        These three fields are latches on the process-wide connector. They are
+        cleared on landing, but a trial that ends mid-landing (or that never
+        completes the landing handshake) leaves ``landing_in_progress`` set, and
+        the NEXT trial then inherits it: monitor_flight keeps answering
+        "LANDING... call monitor_flight again" on a motionless aircraft and the
+        model loops (an 88-call loop was seen this way). ``was_airborne`` and
+        ``pending_destination`` leak the same way, so all three are reset at the
+        start of a fresh flight (a fresh connection, and every arm_drone, which
+        the between-trial ferry runs once per trial).
+        """
+        self.landing_in_progress = False
+        self.was_airborne = False
+        self.pending_destination = None
+
 
 # Global connector instance - persists across all HTTP requests
 _global_connector: MAVLinkConnector | None = None
@@ -57,7 +74,12 @@ async def ensure_connection(connector: MAVLinkConnector, timeout: float = 30.0) 
 
 
 async def connect_drone_background(
-    drone: System, address: str, port: str, protocol: str, connection_ready: asyncio.Event
+    drone: System,
+    address: str,
+    port: str,
+    protocol: str,
+    connection_ready: asyncio.Event,
+    connector: "MAVLinkConnector | None" = None,
 ):
     """Connect to drone in the background without blocking server startup"""
     connection_string = f"{protocol}://{address}:{port}"
@@ -85,6 +107,11 @@ async def connect_drone_background(
             logger.info("=" * 60)
             logger.info("Drone is READY for commands")
             logger.info("=" * 60)
+            # A fresh link is a fresh start: drop any per-flight latches that a
+            # previous session may have left set, so the first trial on this
+            # connection is not judged against stale landing/airborne state.
+            if connector is not None:
+                connector.reset_flight_latches()
             # Signal that connection is ready!
             connection_ready.set()
             # Phase 4: if a managed mission was in flight when this server was
@@ -154,7 +181,7 @@ async def get_or_create_global_connector() -> MAVLinkConnector:
         logger.info("-" * 60)
 
         _connection_task = asyncio.create_task(
-            connect_drone_background(drone, address, port, protocol, connection_ready)
+            connect_drone_background(drone, address, port, protocol, connection_ready, _global_connector)
         )
 
         return _global_connector

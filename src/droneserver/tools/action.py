@@ -36,6 +36,11 @@ async def arm_drone(ctx: Context, force: bool = False) -> dict:
         return {"status": "failed", "error": "Drone connection timeout. Please wait and try again."}
 
     drone = connector.drone
+    # Arming begins a fresh flight. Clear any per-flight latches that a previous
+    # trial may have left set (landing_in_progress in particular), so this
+    # flight's monitor_flight is not driven by the last flight's landing state.
+    # The between-trial ferry arms once per trial, so this fires every trial.
+    connector.reset_flight_latches()
     try:
         if force:
             log_mavlink_cmd("drone.action.arm_force")
