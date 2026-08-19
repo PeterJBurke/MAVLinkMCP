@@ -128,7 +128,7 @@ for model in $MODELS; do
       --link-recovery-command "systemctl restart droneserver-staging" \
       --capture --mavlink-endpoint udpin:127.0.0.1:14655 \
       --telemetry-address "udpin://127.0.0.1:14541" \
-      --firmware ArduCopter --firmware-version "ArduCopter 4.5.7 (SITL)" \
+      --firmware ArduCopter --firmware-version "ArduCopter V4.7.0-dev (c683d8c1) (SITL)" \
       --sitl-host llmuavsitl \
       --dataflash-remote llmuavsitl:/home/dronepilot/ardupilot/ArduCopter/logs \
       --require-complete-capture \
