@@ -20,6 +20,12 @@ MODELS="${MODELS:-claude-haiku-4-5-20251001 claude-sonnet-5 claude-opus-5 gpt-5.
 # flight. At 150, responsible pacing passes; frantic 1.3 s/turn polling still
 # fails on the merits. Cost stays bounded by the per-trial money ceiling.
 MAX_TURNS="${MAX_TURNS:-150}"
+# Cumulative-per-key spend cap. 260 was sized for the google key; the anthropic
+# key's LEDGER (cumulative, all campaigns) was already $360.45, so a flat 260
+# skipped all three Claude rows on 2026-08-19. Set per relaunch, matched to the
+# actual credit on the key being flown (anthropic 2026-08-19: 360.45 ledger +
+# $45 top-up = 405).
+BUDGET_USD="${BUDGET_USD:-260}"
 set -a; . /root/llmuav.env; set +a
 export DRONESERVER_API_KEY=$(grep "^SAFETY_API_KEYS=" /etc/droneserver/staging.env | cut -d= -f2- | cut -d, -f1 | cut -d: -f2)
 export DRONESERVER_RECORDER_API_KEY=$(cat /root/llmuav-recorder.key)
@@ -30,7 +36,7 @@ for model in $MODELS; do
   timeout 5400 /root/.local/bin/uv run python scripts/run_llm_missions.py \
       --missions T10 --trials 1 --model "$model" --include-slow \
       --max-turns "$MAX_TURNS" \
-      --budget-usd 260 \
+      --budget-usd "$BUDGET_USD" \
       --url http://127.0.0.1:8090/sse \
       --audit-log /var/lib/droneserver/audit.jsonl \
       --target-label "ArduPilot SITL (llmuavsitl)" \
