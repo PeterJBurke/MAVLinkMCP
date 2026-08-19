@@ -40,12 +40,22 @@ def _target_of(connector) -> dict | None:
     return movement.get("target")
 
 
+def _monotonic_s() -> float:
+    """The event loop's monotonic clock, in seconds.
+
+    One named entry point for every elapsed-time measurement in this module, so
+    a timeout can be exercised in a unit test without spending its budget in
+    real seconds (the landing loop below has a 120 s one).
+    """
+    return asyncio.get_event_loop().time()
+
+
 def _note_movement(connector, tool: str, target: dict | None) -> None:
     """Record the movement command that was just accepted, and where it aimed."""
     connector.last_movement = {
         "tool": tool,
         "target": target,
-        "commanded_at": asyncio.get_event_loop().time(),
+        "commanded_at": _monotonic_s(),
     }
 
 
@@ -135,6 +145,78 @@ async def _telemetry_now(drone) -> dict:
     return reading
 
 
+def _height_above_launch_m(connector, reading: dict) -> float | None:
+    """Height above THIS SESSION's launch point, or ``None`` if unmeasurable.
+
+    ``relative_altitude_m`` is measured from a datum the autopilot MOVES:
+    ArduPilot re-zeroes it wherever the aircraft last ARMED. After a mission
+    that lands away from the launch field, re-arms there and flies home, the
+    parked aircraft on the launch field reports a persistent offset (+4.1 m
+    observed, 8 independent SITL lanes, 2026-08-19) - the terrain difference
+    between the two arming points, frozen into every subsequent reading.
+
+    Absolute altitude does not move. Where the session recorded the elevation
+    it started from (:attr:`MAVLinkConnector.session_launch`, FIX 8a) this
+    measures against that instead; where it did not, it falls back to the
+    relative reading and the old behaviour is unchanged. Same correction the
+    scorer got in FIX 8b (``verdicts.height_above_launch_m``) - this is the
+    operational half.
+
+    NOTE what this is NOT: it is not height above the ground under the
+    aircraft. Over terrain that differs from the launch field it reads the
+    terrain difference even when parked, so it must never be the sole evidence
+    that an aircraft has touched down - see :func:`_settled_on_ground`.
+    """
+    launch = getattr(connector, "session_launch", None) or {}
+    launch_amsl = launch.get("absolute_altitude_m")
+    absolute = reading.get("absolute_altitude_m")
+    if launch_amsl is not None and absolute is not None:
+        return absolute - launch_amsl
+    return reading.get("relative_altitude_m")
+
+
+def _ground_evidence(reading: dict) -> bool | None:
+    """Is the aircraft on the ground, per the AUTOPILOT? ``None`` if it won't say.
+
+    This is the datum-free half of the landing question. ``landed_state`` and
+    ``in_air`` are the autopilot's own assessment - weight-on-skids, descent
+    rate, throttle - and no re-arming anywhere moves them. Altitude is only
+    consulted by callers when this returns ``None``.
+    """
+    landed_state = reading.get("landed_state")
+    if landed_state == "ON_GROUND":
+        return True
+    if landed_state in ("IN_AIR", "TAKING_OFF", "LANDING"):
+        return False
+    in_air = reading.get("in_air")
+    if in_air is not None:
+        return not in_air
+    return None
+
+
+def _settled_on_ground(landed_state_str: str | None, is_in_air, vertical_speed_m_s: float | None) -> bool:
+    """Touchdown, from evidence that no moving altitude datum can spoil.
+
+    The autopilot says ON_GROUND and not in the air, and - where the rate is
+    readable at all - the aircraft is not still moving vertically. There is
+    deliberately NO altitude term: requiring ``relative_altitude_m < 2.0`` is
+    what made every T6-shape landing (land away, re-arm, fly home) run to the
+    120 s ``landing_timeout``, because the re-armed datum left the parked
+    aircraft reading +4.1 m and the threshold was unreachable.
+
+    The rate tolerance is generous on purpose: it is here to veto an autopilot
+    that claims ON_GROUND in the middle of a 3 m/s descent, not to second-guess
+    a settled aircraft's noise floor. An unreadable rate vetoes nothing.
+    """
+    if landed_state_str != "ON_GROUND":
+        return False
+    if is_in_air:
+        return False
+    if vertical_speed_m_s is not None and abs(vertical_speed_m_s) > 1.0:
+        return False
+    return True
+
+
 def _observables(connector, reading: dict) -> dict:
     """The where-am-I fields that go into EVERY monitor_flight answer.
 
@@ -142,9 +224,16 @@ def _observables(connector, reading: dict) -> dict:
     landing phases that used to report an altitude and nothing else.
     """
     lat, lon = reading.get("latitude_deg"), reading.get("longitude_deg")
+    height = _height_above_launch_m(connector, reading)
     fields: dict = {
         "position": None if lat is None or lon is None else {"latitude_deg": lat, "longitude_deg": lon},
+        # The autopilot's own relative reading, kept for continuity - it is
+        # measured from wherever the aircraft last ARMED, so it can be metres
+        # off after a mission that re-armed away from the launch field.
         "altitude_m": None if reading.get("relative_altitude_m") is None else round(reading["relative_altitude_m"], 1),
+        # The same height measured against a datum that cannot move under the
+        # aircraft: this session's launch elevation. Read this one.
+        "height_above_launch_m": None if height is None else round(height, 1),
         "absolute_altitude_m": (
             None if reading.get("absolute_altitude_m") is None else round(reading["absolute_altitude_m"], 1)
         ),
@@ -313,6 +402,10 @@ async def move_to_relative(ctx: Context, north_m: float, east_m: float, down_m: 
 
         logger.info("Moving in GUIDED mode:")
         logger.info(f"  Current: {current_lat:.6f}°, {current_lon:.6f}°")
+        # Both relative readings below are log text only: the command that is
+        # actually sent (goto_location) carries target_alt, an ABSOLUTE MSL
+        # altitude derived from absolute_altitude_m, so a moved relative datum
+        # cannot move the aircraft.
         logger.info(f"  Altitude: {position.relative_altitude_m:.1f}m AGL (relative) / {current_alt:.1f}m MSL")
         logger.info(f"  Offset: north={north_m:.1f}m, east={east_m:.1f}m, down={down_m:.1f}m")
         target_rel_alt = position.relative_altitude_m - down_m
@@ -387,7 +480,14 @@ async def takeoff(ctx: Context, takeoff_altitude: float = 3.0, wait_for_altitude
             "warning": "⚠️ Takeoff in progress - do NOT send navigation commands until altitude is reached!",
         }
 
-    # Wait for drone to reach target altitude
+    # Wait for drone to reach target altitude.
+    #
+    # relative_altitude_m is the RIGHT datum here, and the only right one: the
+    # takeoff command itself is expressed relative to the point the aircraft
+    # just armed at, which is exactly the datum the autopilot re-zeroes on that
+    # arm. Command and measurement therefore share a datum, and a session
+    # launch elevation from somewhere else would compare a climb against ground
+    # the aircraft is not standing on. Left as-is deliberately.
     logger.info(f"Waiting for drone to reach {takeoff_altitude}m...")
     altitude_threshold = 0.5  # Consider arrived when within 0.5m of target
     max_wait_time = 60  # Maximum wait time in seconds
@@ -761,7 +861,7 @@ async def return_to_launch(ctx: Context) -> dict:
             **target,
             "altitude_msl": home.absolute_altitude_m,
             "initial_distance": 0.0,
-            "start_time": asyncio.get_event_loop().time(),
+            "start_time": _monotonic_s(),
             "source": "return_to_launch",
         }
         try:
@@ -886,6 +986,10 @@ async def hold_position(ctx: Context) -> dict:
         return {
             "status": "success",
             "message": "Drone holding position in GUIDED mode",
+            # Reported, never compared: the hold is commanded at the current
+            # ABSOLUTE altitude, so these two relative numbers are description
+            # only and no threshold depends on them. They are the autopilot's
+            # own datum and can be metres off after a re-arm elsewhere.
             "position": {
                 "latitude_deg": current_lat,
                 "longitude_deg": current_lon,
@@ -945,7 +1049,14 @@ async def go_to_location(
     drone = connector.drone
 
     try:
-        # Get current position to calculate relative altitude and initial distance
+        # Get current position to calculate relative altitude and initial distance.
+        #
+        # home_alt is the elevation of the autopilot's CURRENT altitude datum -
+        # the point the aircraft last armed at, not necessarily this session's
+        # launch field. relative_alt is therefore the target expressed in the
+        # same frame an ArduPilot relative-altitude command would use, which is
+        # the honest thing to print alongside the MSL figure. Nothing decides
+        # anything on it: the command itself flies to absolute_altitude_m.
         position = await drone.telemetry.position().__anext__()
         home_alt = position.absolute_altitude_m - position.relative_altitude_m
         relative_alt = absolute_altitude_m - home_alt
@@ -986,7 +1097,7 @@ async def go_to_location(
             "label": "the commanded destination",
             "altitude_msl": absolute_altitude_m,
             "initial_distance": initial_distance,
-            "start_time": asyncio.get_event_loop().time(),
+            "start_time": _monotonic_s(),
             "source": "go_to_location",
         }
         _note_movement(
@@ -1053,7 +1164,10 @@ async def check_arrival(ctx: Context, latitude_deg: float, longitude_deg: float,
     drone = connector.drone
 
     try:
-        # Get current position (instant - no waiting)
+        # Get current position (instant - no waiting). Arrival here is purely
+        # horizontal: current_alt is carried into the answer as description and
+        # no threshold in this tool reads it, so the movable relative datum
+        # cannot decide whether the aircraft has arrived.
         async for position in drone.telemetry.position():
             current_lat = position.latitude_deg
             current_lon = position.longitude_deg
@@ -1153,20 +1267,26 @@ async def monitor_flight(ctx: Context, arrival_threshold_m: float = 20.0, auto_l
     try:
         reading = await _telemetry_now(drone)
         landed_state_str = reading["landed_state"]
-        is_in_air = bool(reading["in_air"])
         current_lat = reading["latitude_deg"]
         current_lon = reading["longitude_deg"]
         current_alt = reading["relative_altitude_m"] if reading["relative_altitude_m"] is not None else 0.0
         live = _observables(connector, reading)
         where = _where_text(live)
+        # Both questions below - "has it flown?" and "is it down?" - used to be
+        # answered partly from relative_altitude_m, whose datum the autopilot
+        # re-zeroes at every arm. A parked aircraft carrying a +4.1 m offset
+        # then looks airborne. Ask the autopilot first; fall back to a height
+        # measured from the session's launch elevation only when it won't say.
+        grounded = _ground_evidence(reading)
+        height = live["height_above_launch_m"]
 
         # Evidence latch: "on the ground" only means "landed" if there was a
         # flight to land from. Without it, the first monitor_flight() call of a
         # trial whose takeoff never happened answers "MISSION COMPLETE".
-        if is_in_air or current_alt >= 1.0:
+        if grounded is False or (grounded is None and height is not None and height >= 1.0):
             connector.was_airborne = True
 
-        on_the_ground = landed_state_str == "ON_GROUND" or (not is_in_air and current_alt < 1.0)
+        on_the_ground = grounded is True or (grounded is None and (height is None or height < 1.0))
         if on_the_ground and not connector.was_airborne:
             flew_before = getattr(connector, "last_movement", None) is not None
             headline = (
@@ -1283,7 +1403,7 @@ async def monitor_flight(ctx: Context, arrival_threshold_m: float = 20.0, auto_l
         dest_lat = dest["latitude"]
         dest_lon = dest["longitude"]
         initial_distance = dest["initial_distance"]
-        start_time = dest.get("start_time", asyncio.get_event_loop().time())
+        start_time = dest.get("start_time", _monotonic_s())
 
         logger.info(f"Monitoring flight for {wait_seconds}s...")
 
@@ -1291,7 +1411,11 @@ async def monitor_flight(ctx: Context, arrival_threshold_m: float = 20.0, auto_l
         elapsed_in_monitor = 0.0
 
         while elapsed_in_monitor < wait_seconds:
-            # Get current position
+            # Get current position. current_alt here is the autopilot's raw
+            # relative reading and is used for the log line and the DISPLAY
+            # string ONLY - arrival is decided by horizontal distance, and the
+            # datum-free height_above_launch_m travels in the observables of
+            # every answer this function returns.
             async for position in drone.telemetry.position():
                 current_lat = position.latitude_deg
                 current_lon = position.longitude_deg
@@ -1334,7 +1458,7 @@ async def monitor_flight(ctx: Context, arrival_threshold_m: float = 20.0, auto_l
                 # Clear pending destination
                 connector.pending_destination = None
 
-                total_flight_time = asyncio.get_event_loop().time() - start_time
+                total_flight_time = _monotonic_s() - start_time
 
                 if auto_land:
                     # Automatically initiate landing and WAIT for it to complete
@@ -1345,42 +1469,48 @@ async def monitor_flight(ctx: Context, arrival_threshold_m: float = 20.0, auto_l
                     connector.landing_in_progress = True
                     await drone.action.land()
 
-                    # Wait for landing to complete (up to 120 seconds)
+                    # Wait for landing to complete. The 120 s cap stays as the
+                    # backstop it always was - but it must be reachable only by
+                    # a landing that genuinely did not finish, not by a landing
+                    # the confirmation could not recognise.
                     landing_timeout = 120
-                    landing_start = asyncio.get_event_loop().time()
+                    landing_start = _monotonic_s()
 
-                    while (asyncio.get_event_loop().time() - landing_start) < landing_timeout:
-                        # Check landed state
-                        async for state in drone.telemetry.landed_state():
-                            landed_state = state
-                            break
+                    while (_monotonic_s() - landing_start) < landing_timeout:
+                        # One reading of everything: landed_state and in_air are
+                        # what decides touchdown, the rest is for the log line
+                        # and the answer. Read together so they describe the
+                        # same instant.
+                        touchdown_reading = await _telemetry_now(drone)
+                        landed_state_str = touchdown_reading["landed_state"]
+                        is_in_air = bool(touchdown_reading["in_air"])
+                        current_alt = touchdown_reading["relative_altitude_m"]
+                        if current_alt is None:
+                            current_alt = 0.0
+                        height_now = _height_above_launch_m(connector, touchdown_reading)
 
-                        async for position in drone.telemetry.position():
-                            current_alt = position.relative_altitude_m
-                            break
-
-                        async for in_air in drone.telemetry.in_air():
-                            is_in_air = in_air
-                            break
-
-                        landed_state_str = str(landed_state).split(".")[-1]
-
-                        # Only consider landed when PX4 reports ON_GROUND AND not in air AND altitude < 2m
-                        if landed_state_str == "ON_GROUND" and not is_in_air and current_alt < 2.0:
+                        # THE DATUM BUG (fixed 2026-08-19). This gate used to be
+                        # `... and current_alt < 2.0`. ArduPilot re-zeroes the
+                        # relative-altitude datum wherever the aircraft last
+                        # ARMED, so a mission that lands away, re-arms and flies
+                        # home leaves the parked aircraft reading a fixed offset
+                        # (+4.1 m across 8 SITL lanes). The threshold was then
+                        # unreachable, EVERY such landing ran the full 120 s and
+                        # completion was never confirmed - the operational twin
+                        # of the scorer defect fixed in 33de5ec (FIX 8b).
+                        # Touchdown is now the autopilot's own on-ground
+                        # evidence, held across the 3 s stability re-check.
+                        if _settled_on_ground(landed_state_str, is_in_air, touchdown_reading["vertical_speed_m_s"]):
                             # Wait 3 more seconds to confirm stable on ground
                             logger.info("🛬 Touchdown detected, confirming stable...")
                             await asyncio.sleep(3)
 
                             # Re-check to confirm
-                            async for state in drone.telemetry.landed_state():
-                                landed_state = state
-                                break
-                            async for in_air in drone.telemetry.in_air():
-                                is_in_air = in_air
-                                break
+                            confirm = await _telemetry_now(drone)
+                            landed_state_str = confirm["landed_state"]
+                            is_in_air = bool(confirm["in_air"])
 
-                            landed_state_str = str(landed_state).split(".")[-1]
-                            if landed_state_str == "ON_GROUND" and not is_in_air:
+                            if _settled_on_ground(landed_state_str, is_in_air, confirm["vertical_speed_m_s"]):
                                 # Confirmed landed!
                                 connector.landing_in_progress = False
                                 # The flight this call was watching is over, and
@@ -1390,7 +1520,7 @@ async def monitor_flight(ctx: Context, arrival_threshold_m: float = 20.0, auto_l
                                 # landed safely!" on a parked aircraft that had
                                 # been commanded home and never moved.
                                 connector.was_airborne = False
-                                total_flight_time = asyncio.get_event_loop().time() - start_time
+                                total_flight_time = _monotonic_s() - start_time
 
                                 logger.info(f"{LogColors.SUCCESS}✅ LANDED at the destination.{LogColors.RESET}")
                                 get_flight_logger().log_entry("LANDED", "Arrived and landed at the destination")
@@ -1415,12 +1545,19 @@ async def monitor_flight(ctx: Context, arrival_threshold_m: float = 20.0, auto_l
                                 log_tool_output(result)
                                 return result
 
+                        # Both numbers, so a landing that does time out shows
+                        # WHICH datum disagreed instead of leaving the mystery
+                        # the T6 audit could not close (§9 item 1).
                         logger.info(
-                            f"🛬 Landing... altitude: {current_alt:.1f}m, state: {landed_state_str}, in_air: {is_in_air}"
+                            f"🛬 Landing... altitude: {current_alt:.1f}m (rel) / "
+                            f"{'?' if height_now is None else format(height_now, '.1f')}m above launch, "
+                            f"state: {landed_state_str}, in_air: {is_in_air}"
                         )
                         await asyncio.sleep(2)  # Check every 2 seconds
 
-                    # Timeout - return landing status
+                    # Timeout - return landing status. Reaching here now means
+                    # the aircraft never reported itself down, not that its
+                    # altitude datum had moved.
                     live = _observables(connector, await _telemetry_now(drone))
                     where = _where_text(live)
                     result = {
@@ -1593,6 +1730,8 @@ async def set_yaw(ctx: Context, yaw_deg: float, yaw_rate_deg_s: float = 30.0) ->
             current_lat = position.latitude_deg
             current_lon = position.longitude_deg
             current_alt = position.absolute_altitude_m
+            # Log text only - the yaw command is re-sent at current_alt, the
+            # ABSOLUTE altitude, so the relative reading changes nothing.
             current_rel_alt = position.relative_altitude_m
 
             logger.info(
@@ -1671,7 +1810,10 @@ async def reposition(ctx: Context, latitude_deg: float, longitude_deg: float, al
     drone = connector.drone
 
     try:
-        # Get current position to calculate relative altitude for display
+        # Get current position to calculate relative altitude for display. Same
+        # caveat as go_to_location: home_alt is the CURRENT datum (the last arm
+        # point), the printed AGL figure is description, and the command flies
+        # to the absolute altitude_m it was given.
         position = await drone.telemetry.position().__anext__()
         home_alt = position.absolute_altitude_m - position.relative_altitude_m
         relative_alt = altitude_m - home_alt
