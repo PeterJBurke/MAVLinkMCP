@@ -244,6 +244,44 @@ def check_parameter_bounds(tool: str, args: dict, s: SafetySettings, state: dict
 #: Tools that must not run while the vehicle is airborne.
 GROUND_ONLY_TOOLS = frozenset({"calibrate", "cancel_calibration"})
 
+#: Tools that command a flight home. On an aircraft that is standing on the
+#: ground with its motors DISARMED they fly nothing whatsoever, and the
+#: autopilot accepts them anyway - so the server answered "Return to Launch
+#: initiated - drone returning home" to a parked, powered-down aircraft.
+#:
+#: That is not a near miss, it is the largest single failure mechanism in the
+#: T6 hospital campaign (audit 2026-08-19, mechanism M1, 8 of 27 failures):
+#: eight trials whose aircraft had auto-landed at the hospital commanded RTL,
+#: were told the drone was returning home, polled monitor_flight, were told the
+#: mission was complete, and reported a completed return from 1.2-1.5 km away.
+#: Every one of those models was obeying its instruction to treat tool results
+#: as the only source of truth. The tool result was false.
+#:
+#: An ARMED aircraft on the ground is a different case and is deliberately left
+#: alone: ArduPilot's RTL from an armed ground state genuinely climbs to the
+#: return altitude and flies home, which is exactly what the T6 models that
+#: re-armed at the hospital were doing. The rule keys on DISARMED, which is the
+#: honest condition, and it never fires while the vehicle state is unknown -
+#: see :func:`check_preconditions` - so the abort path is never blocked by a
+#: telemetry hiccup.
+RETURN_HOME_TOOLS = frozenset({"return_to_launch"})
+
+
+def commands_return_home(tool: str, args: dict) -> bool:
+    """Would this call put the vehicle into a return-to-home flight?
+
+    ``emergency_stop`` is deliberately excluded. It is EMERGENCY tier and
+    ungated by design: an abort path that can be refused is not an abort path,
+    and its answer already names the mode it commanded rather than narrating a
+    flight.
+    """
+    if tool in RETURN_HOME_TOOLS:
+        return True
+    if tool == "set_flight_mode":
+        return str((args or {}).get("mode", "")).strip().upper() in {"RTL", "RETURN_TO_LAUNCH"}
+    return False
+
+
 #: Every tool whose safety depends on vehicle state - the full set the
 #: fail-closed policy applies to (S9: it previously covered navigation only).
 STATE_DEPENDENT_RULES = NAVIGATION_TOOLS | MISSION_START_TOOLS | GROUND_ONLY_TOOLS | {"takeoff"}
@@ -477,6 +515,21 @@ def check_preconditions(tool: str, args: dict, state: dict, s: SafetySettings) -
             "precondition.takeoff_requires_armed",
             "takeoff was commanded while the drone is disarmed",
             "Call arm_drone first, then takeoff.",
+        )
+
+    # The honesty rule. Reached only with the vehicle state actually READ (the
+    # unknown-state branch above returns first, and return_to_launch is
+    # energy-REDUCING, so an unreadable link leaves it available).
+    if commands_return_home(tool, args) and not armed and not in_air:
+        return Rejection(
+            "precondition.rtl_requires_airborne",
+            f"{tool} would command a return-to-home flight, but the aircraft is on the ground "
+            f"with its motors disarmed, so nothing would fly and no return would happen",
+            "The aircraft is parked and disarmed where it stands. If it is not where you want it, "
+            "arm_drone then takeoff, and then command the return (or fly it with go_to_location to "
+            "a coordinate you read yourself - the autopilot's home moves to wherever the aircraft "
+            "last armed). If you believe it is already home, prove it with get_position rather than "
+            "by commanding a return that cannot happen.",
         )
 
     # offboard_control("stop"/"status") must work on the ground: stopping and

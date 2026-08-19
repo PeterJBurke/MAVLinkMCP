@@ -74,6 +74,14 @@ _STATE_DEPENDENT = (
         "reposition",
         "do_orbit",
         "flight_altitudes",
+        # The RTL honesty rule (precondition.rtl_requires_airborne) can only
+        # fire on state that was actually read: a stale snapshot reads
+        # "unknown", and unknown state leaves these energy-REDUCING tools
+        # available, which would put the T6 phantom-return defect straight
+        # back. Refreshing them costs one cached telemetry round-trip and
+        # cannot block the abort path - an unreadable link still allows both.
+        "return_to_launch",
+        "set_flight_mode",
         # Tools whose TIER depends on whether we are flying must have their
         # state REFRESHED, not read from a stale snapshot. An unrefreshed
         # snapshot reads "unknown", which the fail-safe escalation (B4) treats

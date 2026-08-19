@@ -16,6 +16,196 @@ from droneserver.telemetry.flight_log import (
     log_tool_output,
     logger,
 )
+from droneserver.telemetry.home import read_home
+
+#: How far from a commanded target the aircraft may touch down and still be
+#: reported as having completed that flight. Wide enough for the drift of an
+#: ordinary auto-landing, far too small to swallow a return that never
+#: happened: the T6 phantom completions were 1.2-1.5 km out.
+COMPLETION_RADIUS_M = 20.0
+
+
+def _target_of(connector) -> dict | None:
+    """The destination the aircraft was last told to fly to, if any.
+
+    ``pending_destination`` is cleared the moment the aircraft arrives, so a
+    poll made after a landing has nothing to compare against; ``last_movement``
+    keeps the destination for the whole flight. Both carry the same keys
+    (``latitude``, ``longitude``, ``label``).
+    """
+    pending = getattr(connector, "pending_destination", None)
+    if pending:
+        return pending
+    movement = getattr(connector, "last_movement", None) or {}
+    return movement.get("target")
+
+
+def _note_movement(connector, tool: str, target: dict | None) -> None:
+    """Record the movement command that was just accepted, and where it aimed."""
+    connector.last_movement = {
+        "tool": tool,
+        "target": target,
+        "commanded_at": asyncio.get_event_loop().time(),
+    }
+
+
+#: Bound on any single telemetry read added by the honesty checks. ArduPilot
+#: does not publish every topic unless asked, and an unbounded ``async for`` on
+#: a silent topic waits forever - which would turn a safety check into a hang.
+#: A read that times out reports "unknown", and unknown never blocks a command.
+_READ_TIMEOUT_S = 5.0
+
+
+async def _first(stream, timeout_s: float = _READ_TIMEOUT_S):
+    """The first item of a MAVSDK subscription, or ``TimeoutError``."""
+
+    async def read():
+        async for item in stream:
+            return item
+        raise TimeoutError("stream ended without an item")
+
+    return await asyncio.wait_for(read(), timeout=timeout_s)
+
+
+async def _read_ground_state(drone) -> tuple[bool | None, bool | None]:
+    """``(armed, in_air)`` as the autopilot reports them now; ``None`` if unreadable.
+
+    Unreadable is not "on the ground": every honesty check below acts only on a
+    state it actually read, so a telemetry hiccup can never turn a real command
+    into a refusal or a no-op.
+    """
+    armed = in_air = None
+    try:
+        armed = bool(await _first(drone.telemetry.armed()))
+    except Exception as e:
+        logger.warning(f"could not read armed state: {e}")
+    try:
+        in_air = bool(await _first(drone.telemetry.in_air()))
+    except Exception as e:
+        logger.warning(f"could not read in_air state: {e}")
+    return armed, in_air
+
+
+async def _telemetry_now(drone) -> dict:
+    """One live reading of everything monitor_flight reports.
+
+    Every field is read fresh on every call. The frozen
+    ``🛬 LANDING | Alt: 50.0m | Descending...`` that eleven to twenty-four
+    consecutive polls handed the T6 models (audit mechanism M2) carried no
+    position, no distance and no vertical speed, so three models could not see
+    that the aircraft was climbing away on a perfectly healthy return, decided
+    the return had stalled, and force-landed a kilometre short.
+    """
+    reading: dict = {
+        "landed_state": None,
+        "in_air": None,
+        "latitude_deg": None,
+        "longitude_deg": None,
+        "relative_altitude_m": None,
+        "absolute_altitude_m": None,
+        "ground_speed_m_s": None,
+        "vertical_speed_m_s": None,
+        "flight_mode": None,
+    }
+    async for landed_state in drone.telemetry.landed_state():
+        reading["landed_state"] = str(landed_state).split(".")[-1]
+        break
+    async for in_air in drone.telemetry.in_air():
+        reading["in_air"] = bool(in_air)
+        break
+    async for position in drone.telemetry.position():
+        reading["latitude_deg"] = position.latitude_deg
+        reading["longitude_deg"] = position.longitude_deg
+        reading["relative_altitude_m"] = position.relative_altitude_m
+        reading["absolute_altitude_m"] = getattr(position, "absolute_altitude_m", None)
+        break
+    # Both are extras: they sharpen the report but no phase depends on them, so
+    # a firmware that does not publish them costs a bounded wait, not an answer.
+    try:
+        velocity = await _first(drone.telemetry.velocity_ned(), 2.0)
+        reading["ground_speed_m_s"] = math.sqrt(velocity.north_m_s**2 + velocity.east_m_s**2)
+        # NED: down is positive, so a climb is a negative down rate.
+        reading["vertical_speed_m_s"] = -float(velocity.down_m_s)
+    except Exception:
+        pass
+    try:
+        reading["flight_mode"] = str(await _first(drone.telemetry.flight_mode(), 2.0)).split(".")[-1]
+    except Exception:
+        pass
+    return reading
+
+
+def _observables(connector, reading: dict) -> dict:
+    """The where-am-I fields that go into EVERY monitor_flight answer.
+
+    Position, altitude and distances travel with every phase, including the
+    landing phases that used to report an altitude and nothing else.
+    """
+    lat, lon = reading.get("latitude_deg"), reading.get("longitude_deg")
+    fields: dict = {
+        "position": None if lat is None or lon is None else {"latitude_deg": lat, "longitude_deg": lon},
+        "altitude_m": None if reading.get("relative_altitude_m") is None else round(reading["relative_altitude_m"], 1),
+        "absolute_altitude_m": (
+            None if reading.get("absolute_altitude_m") is None else round(reading["absolute_altitude_m"], 1)
+        ),
+        "vertical_speed_m_s": (
+            None if reading.get("vertical_speed_m_s") is None else round(reading["vertical_speed_m_s"], 1)
+        ),
+        "ground_speed_m_s": (
+            None if reading.get("ground_speed_m_s") is None else round(reading["ground_speed_m_s"], 1)
+        ),
+        "flight_mode": reading.get("flight_mode"),
+        "target": None,
+        "distance_to_target_m": None,
+        "distance_from_launch_point_m": None,
+    }
+    if lat is None or lon is None:
+        return fields
+    target = _target_of(connector)
+    if target:
+        fields["target"] = {
+            "latitude_deg": target["latitude"],
+            "longitude_deg": target["longitude"],
+            "label": target.get("label", "the commanded destination"),
+        }
+        fields["distance_to_target_m"] = round(haversine_distance(lat, lon, target["latitude"], target["longitude"]), 1)
+    launch = getattr(connector, "session_launch", None)
+    if launch:
+        fields["distance_from_launch_point_m"] = round(
+            haversine_distance(lat, lon, launch["latitude_deg"], launch["longitude_deg"]), 1
+        )
+    return fields
+
+
+def _where_text(fields: dict) -> str:
+    """The live half of a DISPLAY_TO_USER line: distance, position, rate."""
+    parts: list[str] = []
+    if fields["distance_to_target_m"] is not None:
+        label = (fields["target"] or {}).get("label", "target")
+        parts.append(f"{fields['distance_to_target_m']:.0f}m from {label}")
+    if fields["distance_from_launch_point_m"] is not None:
+        parts.append(f"{fields['distance_from_launch_point_m']:.0f}m from launch point")
+    if fields["vertical_speed_m_s"] is not None:
+        parts.append(f"{fields['vertical_speed_m_s']:+.1f}m/s vertical")
+    if fields["position"]:
+        parts.append(f"at {fields['position']['latitude_deg']:.6f},{fields['position']['longitude_deg']:.6f}")
+    return " | ".join(parts)
+
+
+def _vertical_verb(fields: dict) -> str:
+    """What the aircraft is ACTUALLY doing vertically, from telemetry.
+
+    The old landing text said "Descending" unconditionally. It said it sixteen
+    times while a returning aircraft climbed from 34.5 m to 50 m.
+    """
+    rate = fields.get("vertical_speed_m_s")
+    if rate is None:
+        return "Landing in progress"
+    if rate < -0.3:
+        return "Descending"
+    if rate > 0.3:
+        return "CLIMBING (not descending)"
+    return "Holding altitude"
 
 
 # ARM
@@ -141,6 +331,11 @@ async def move_to_relative(ctx: Context, north_m: float, east_m: float, down_m: 
         await drone.action.goto_location(target_lat, target_lon, target_alt, yaw_deg)
 
         logger.info("✓ Movement command sent successfully")
+        _note_movement(
+            connector,
+            "move_to_relative",
+            {"latitude": target_lat, "longitude": target_lon, "label": "the offset target"},
+        )
         return {
             "status": "success",
             "message": f"Moving: north={north_m}m, east={east_m}m, altitude_change={-down_m}m",
@@ -251,12 +446,18 @@ async def land(ctx: Context, force: bool = False) -> dict:
 
     Use force=True to override the landing gate (emergency use only).
 
+    On an aircraft that is already on the ground with its motors disarmed this
+    returns ``status: "no_action"`` rather than "Landing initiated": there is no
+    landing to initiate, and reporting one would be a false tool result. Unlike
+    return_to_launch this is never refused - land is the abort path, and an
+    abort path that can be rejected is not one.
+
     Args:
         ctx (Context): The context of the request.
         force (bool): If True, bypass landing gate safety check (default: False).
 
     Returns:
-        dict: Status message with success, blocked, or error.
+        dict: Status message with success, no_action, blocked, or error.
     """
     log_tool_call("land", force=force)
     connector = ctx.request_context.lifespan_context
@@ -266,6 +467,24 @@ async def land(ctx: Context, force: bool = False) -> dict:
         return {"status": "failed", "error": "Drone connection timeout. Please wait and try again."}
 
     drone = connector.drone
+
+    # Honesty gate: a landing command to a parked, disarmed aircraft lands
+    # nothing. Only acted on when both facts were actually read - an unreadable
+    # link falls through and the landing is commanded as before.
+    armed, in_air = await _read_ground_state(drone)
+    if armed is False and in_air is False:
+        result = {
+            "status": "no_action",
+            "message": "No landing was commanded: the aircraft is already on the ground with its motors disarmed.",
+            "armed": False,
+            "in_air": False,
+            "next_step": (
+                "Nothing is flying. If you expected the aircraft to be somewhere else, read get_position "
+                "and compare it with the coordinate you meant to reach - do not treat this call as a landing."
+            ),
+        }
+        log_tool_output(result)
+        return result
 
     # LANDING GATE: Check if there's a pending destination
     if connector.pending_destination and not force:
@@ -316,6 +535,10 @@ async def land(ctx: Context, force: bool = False) -> dict:
     connector.pending_destination = None
     # Set landing flag so monitor_flight knows we're descending
     connector.landing_in_progress = True
+    # A landing has no destination of its own: it puts the aircraft down where
+    # it is. Recorded so monitor_flight can still say where that turned out to
+    # be relative to the last place the aircraft was told to go.
+    _note_movement(connector, "land", _target_of(connector))
 
     log_mavlink_cmd("drone.action.land")
     await drone.action.land()
@@ -475,11 +698,23 @@ async def return_to_launch(ctx: Context) -> dict:
     The drone will fly back to home and land automatically.
     Waits for connection if not ready.
 
+    HOME IS NOT NECESSARILY YOUR LAUNCH POINT. The autopilot moves its home to
+    wherever the aircraft last armed, so an aircraft that armed at a destination
+    will "return" to that destination. The answer names the coordinate this RTL
+    will actually fly to, and warns when it differs from where this session
+    started.
+
+    A return commanded to an aircraft that is on the ground with its motors
+    disarmed is refused by the safety layer (``precondition.rtl_requires_airborne``):
+    it would fly nothing, and reporting a return that cannot happen is how eight
+    T6 trials came to claim a completed return from 1.2 km away.
+
     Args:
         ctx (Context): The context of the request.
 
     Returns:
-        dict: Status message with success or error.
+        dict: Status message with success or error, plus the destination this
+            return will fly to and any home/launch-point disagreement.
     """
     log_tool_call("return_to_launch")
     connector = ctx.request_context.lifespan_context
@@ -494,10 +729,72 @@ async def return_to_launch(ctx: Context) -> dict:
     try:
         log_mavlink_cmd("drone.action.return_to_launch")
         await drone.action.return_to_launch()
-        return {"status": "success", "message": "Return to Launch initiated - drone returning home"}
     except Exception as e:
         logger.error(f"{LogColors.ERROR}❌ TOOL ERROR - RTL failed: {e}{LogColors.RESET}")
         return {"status": "failed", "error": f"Return to Launch failed: {str(e)}"}
+
+    result = {
+        "status": "success",
+        "message": "Return to Launch initiated - the aircraft is flying to the autopilot's home position",
+    }
+    # Register the destination this return is actually flying to, so
+    # monitor_flight can report the distance closing (an RTL used to be
+    # invisible to it) and so a landing can be checked against it.
+    home = None
+    try:
+        home = await read_home(drone, 10.0)
+    except Exception as e:
+        logger.warning(f"RTL commanded but the autopilot's home could not be read: {e}")
+    if home is not None:
+        target = {
+            "latitude": home.latitude_deg,
+            "longitude": home.longitude_deg,
+            "label": "the autopilot's home",
+        }
+        result["destination"] = {
+            "latitude_deg": home.latitude_deg,
+            "longitude_deg": home.longitude_deg,
+            "absolute_altitude_m": home.absolute_altitude_m,
+            "note": "this is where RTL will fly - the autopilot's home, which moves to wherever it last armed",
+        }
+        connector.pending_destination = {
+            **target,
+            "altitude_msl": home.absolute_altitude_m,
+            "initial_distance": 0.0,
+            "start_time": asyncio.get_event_loop().time(),
+            "source": "return_to_launch",
+        }
+        try:
+            async for position in drone.telemetry.position():
+                connector.pending_destination["initial_distance"] = haversine_distance(
+                    position.latitude_deg, position.longitude_deg, home.latitude_deg, home.longitude_deg
+                )
+                break
+        except Exception:
+            pass
+        _note_movement(connector, "return_to_launch", target)
+        launch = getattr(connector, "session_launch", None)
+        if launch:
+            drift = haversine_distance(
+                home.latitude_deg, home.longitude_deg, launch["latitude_deg"], launch["longitude_deg"]
+            )
+            result["distance_from_session_launch_point_m"] = round(drift, 1)
+            if drift > COMPLETION_RADIUS_M:
+                result["warning"] = (
+                    f"the autopilot's home is {drift:.0f} m from where this session started "
+                    f"({launch['latitude_deg']:.6f},{launch['longitude_deg']:.6f}) - this return will fly to "
+                    f"the home coordinate above, NOT to the launch point. If you want the launch point, "
+                    f"fly there with go_to_location instead."
+                )
+    else:
+        _note_movement(connector, "return_to_launch", None)
+        result["destination"] = None
+        result["warning"] = (
+            "the autopilot's home could not be read, so the coordinate this return is flying to is unknown; "
+            "verify with get_position where the aircraft actually ends up"
+        )
+    log_tool_output(result)
+    return result
 
 
 @mcp.tool()
@@ -686,10 +983,17 @@ async def go_to_location(
         connector.pending_destination = {
             "latitude": latitude_deg,
             "longitude": longitude_deg,
+            "label": "the commanded destination",
             "altitude_msl": absolute_altitude_m,
             "initial_distance": initial_distance,
             "start_time": asyncio.get_event_loop().time(),
+            "source": "go_to_location",
         }
+        _note_movement(
+            connector,
+            "go_to_location",
+            {"latitude": latitude_deg, "longitude": longitude_deg, "label": "the commanded destination"},
+        )
 
         result = {
             "status": "success",
@@ -808,10 +1112,23 @@ async def monitor_flight(ctx: Context, arrival_threshold_m: float = 20.0, auto_l
 
     Landing is automatic when the drone arrives (auto_land=True by default).
 
-    One exception to the loop: `status: "not_started"` means the drone is on the
-    ground and has NOT been airborne, so there is no flight to monitor. Do not
-    keep polling - get it airborne first. (A drone that never took off is on the
-    ground, which is why "on the ground" alone is not "mission complete".)
+    WHAT mission_complete MEANS. It means the flight this tool was watching has
+    ended with the aircraft on the ground where it was sent. It is NOT a verdict
+    on your task: a task with two legs is not finished when the first leg is.
+
+    Two ways it stays false on a landed aircraft:
+
+    - `status: "not_started"` - the drone is on the ground and has NOT been
+      airborne, so there is no flight to monitor. Do not keep polling; get it
+      airborne first.
+    - `status: "landed_away_from_target"` - the aircraft is on the ground, but
+      not at the place it was last told to fly to. The field
+      `landed_away_from_target` names the distance. The commanded flight did
+      not happen, or did not finish.
+
+    Every answer, in every phase, carries the live position, altitude, vertical
+    speed, distance to the current target and distance from this session's
+    launch point. Read those rather than the status word.
 
     Args:
         ctx (Context): The context of the request.
@@ -834,21 +1151,14 @@ async def monitor_flight(ctx: Context, arrival_threshold_m: float = 20.0, auto_l
     drone = connector.drone
 
     try:
-        # First, check if drone is on the ground (mission complete)
-        async for landed_state in drone.telemetry.landed_state():
-            landed_state_str = str(landed_state).split(".")[-1]
-            break
-
-        async for in_air in drone.telemetry.in_air():
-            is_in_air = in_air
-            break
-
-        # Get current position
-        async for position in drone.telemetry.position():
-            current_lat = position.latitude_deg
-            current_lon = position.longitude_deg
-            current_alt = position.relative_altitude_m
-            break
+        reading = await _telemetry_now(drone)
+        landed_state_str = reading["landed_state"]
+        is_in_air = bool(reading["in_air"])
+        current_lat = reading["latitude_deg"]
+        current_lon = reading["longitude_deg"]
+        current_alt = reading["relative_altitude_m"] if reading["relative_altitude_m"] is not None else 0.0
+        live = _observables(connector, reading)
+        where = _where_text(live)
 
         # Evidence latch: "on the ground" only means "landed" if there was a
         # flight to land from. Without it, the first monitor_flight() call of a
@@ -858,48 +1168,96 @@ async def monitor_flight(ctx: Context, arrival_threshold_m: float = 20.0, auto_l
 
         on_the_ground = landed_state_str == "ON_GROUND" or (not is_in_air and current_alt < 1.0)
         if on_the_ground and not connector.was_airborne:
+            flew_before = getattr(connector, "last_movement", None) is not None
+            headline = (
+                "no flight is under way (the previous one has ended)" if flew_before else "the drone has not flown yet"
+            )
             result = {
-                "DISPLAY_TO_USER": f"⚠️ ON THE GROUND | Alt: {current_alt:.1f}m | The drone has not flown yet",
+                "DISPLAY_TO_USER": f"⚠️ ON THE GROUND | Alt: {current_alt:.1f}m | {headline}"
+                + (f" | {where}" if where else ""),
                 "status": "not_started",
-                "altitude_m": round(current_alt, 1),
+                **live,
                 "action_required": (
-                    "The drone is still on the ground and has not been airborne, so there is "
-                    "nothing to monitor. Arm and take off (or start the mission) first, then "
-                    "call monitor_flight() again."
+                    "The drone is on the ground and nothing is flying, so there is nothing to monitor. "
+                    "This is NOT a completed mission. If the aircraft still has somewhere to be, arm and "
+                    "take off (or start the mission), then call monitor_flight() again."
                 ),
                 "mission_complete": False,
             }
             log_tool_output(result)
             return result
 
-        # Check if landed (mission complete!)
+        # On the ground after a flight. Being on the ground is not, on its own,
+        # the flight having succeeded: it is also what an aircraft parked at the
+        # wrong end of an unflown return looks like. Eight T6 trials were told
+        # "MISSION COMPLETE - Drone has landed safely!" while standing 1.2-1.5 km
+        # from the launch point after an RTL that flew nothing. So completion
+        # asks the second question too: is the aircraft where it was sent?
         if on_the_ground:
-            connector.was_airborne = False
-            logger.info(f"{LogColors.SUCCESS}✅ MISSION COMPLETE - Drone has landed!{LogColors.RESET}")
-            get_flight_logger().log_entry("LANDED", "Mission complete")
-
-            # Clear all tracking state
-            connector.pending_destination = None
+            target = _target_of(connector)
+            missed_by = live["distance_to_target_m"]
             connector.landing_in_progress = False
+            if target and missed_by is not None and missed_by > max(arrival_threshold_m, COMPLETION_RADIUS_M):
+                label = live["target"]["label"]
+                logger.warning(
+                    f"{LogColors.ERROR}⚠️ ON THE GROUND {missed_by:.0f}m from {label} - "
+                    f"the commanded flight did not complete{LogColors.RESET}"
+                )
+                get_flight_logger().log_entry("LANDED_AWAY", f"{missed_by:.0f}m from {label}")
+                result = {
+                    "DISPLAY_TO_USER": (
+                        f"⚠️ ON THE GROUND, NOT AT THE TARGET | {missed_by:.0f}m from {label}"
+                        + (f" | {where}" if where else "")
+                    ),
+                    "status": "landed_away_from_target",
+                    **live,
+                    "landed_away_from_target": {
+                        "distance_m": missed_by,
+                        "target": live["target"],
+                        "commanded_by": (getattr(connector, "last_movement", None) or {}).get("tool"),
+                    },
+                    "action_required": (
+                        f"The aircraft is on the ground {missed_by:.0f} m from {label}, so the flight you "
+                        f"commanded did not happen or did not finish. Do NOT report it as completed. Check "
+                        f"get_position and get_armed, then fly the remaining leg (arm, takeoff, "
+                        f"go_to_location) if you still want to reach it."
+                    ),
+                    "mission_complete": False,
+                }
+                log_tool_output(result)
+                return result
+
+            connector.was_airborne = False
+            connector.pending_destination = None
+            logger.info(f"{LogColors.SUCCESS}✅ LANDED - the monitored flight has ended{LogColors.RESET}")
+            get_flight_logger().log_entry("LANDED", "Monitored flight ended on the ground")
 
             result = {
-                "DISPLAY_TO_USER": "✅ MISSION COMPLETE - Drone has landed safely!",
+                "DISPLAY_TO_USER": ("✅ LANDED | this monitored flight has ended" + (f" | {where}" if where else "")),
                 "status": "landed",
-                "altitude_m": round(current_alt, 1),
-                "action_required": None,
+                **live,
+                "action_required": (
+                    "This flight is over. It is not necessarily your whole task: if the task has another "
+                    "leg, fly it. Check the position above against where the task asked the aircraft to end up."
+                ),
                 "mission_complete": True,
             }
             log_tool_output(result)
             return result
 
-        # Check if landing in progress
-        if landed_state_str == "LANDING":
-            logger.info(f"🛬 Landing in progress... altitude: {current_alt:.1f}m")
-
+        # Airborne. Landing phase, either as the autopilot reports it or as this
+        # server latched it. Both used to answer with an altitude and the word
+        # "Descending" and nothing else - for as many as 24 consecutive polls,
+        # while the aircraft was climbing away on an RTL. Every field below is
+        # re-read from telemetry on every call.
+        if landed_state_str == "LANDING" or connector.landing_in_progress:
+            verb = _vertical_verb(live)
+            logger.info(f"🛬 {verb}... altitude: {current_alt:.1f}m {where}")
             result = {
-                "DISPLAY_TO_USER": f"🛬 LANDING | Alt: {current_alt:.1f}m | Descending...",
+                "DISPLAY_TO_USER": f"🛬 LANDING PHASE | Alt: {current_alt:.1f}m | {verb}"
+                + (f" | {where}" if where else ""),
                 "status": "landing",
-                "altitude_m": round(current_alt, 1),
+                **live,
                 "action_required": "SHOW the DISPLAY_TO_USER to user, then CALL monitor_flight() AGAIN",
                 "mission_complete": False,
             }
@@ -908,24 +1266,12 @@ async def monitor_flight(ctx: Context, arrival_threshold_m: float = 20.0, auto_l
 
         # Check if there's a pending destination (still navigating)
         if not connector.pending_destination:
-            # Check if we initiated landing (auto_land or manual land call)
-            if connector.landing_in_progress:
-                logger.info(f"🛬 Landing in progress (flag set)... altitude: {current_alt:.1f}m")
-                result = {
-                    "DISPLAY_TO_USER": f"🛬 LANDING | Alt: {current_alt:.1f}m | Descending...",
-                    "status": "landing",
-                    "altitude_m": round(current_alt, 1),
-                    "action_required": "call monitor_flight again",
-                    "mission_complete": False,
-                }
-                log_tool_output(result)
-                return result
-
             # No destination and not landing - drone is just hovering
             result = {
-                "DISPLAY_TO_USER": f"🚁 HOVERING | Alt: {current_alt:.1f}m | No destination set",
+                "DISPLAY_TO_USER": f"🚁 HOVERING | Alt: {current_alt:.1f}m | No destination set"
+                + (f" | {where}" if where else ""),
                 "status": "hovering",
-                "altitude_m": round(current_alt, 1),
+                **live,
                 "action_required": "Call go_to_location() to set destination, or land() to land here",
                 "mission_complete": False,
             }
@@ -1037,15 +1383,33 @@ async def monitor_flight(ctx: Context, arrival_threshold_m: float = 20.0, auto_l
                             if landed_state_str == "ON_GROUND" and not is_in_air:
                                 # Confirmed landed!
                                 connector.landing_in_progress = False
+                                # The flight this call was watching is over, and
+                                # the next one must earn its own completion: the
+                                # was_airborne latch left set here is what let a
+                                # LATER poll answer "MISSION COMPLETE - Drone has
+                                # landed safely!" on a parked aircraft that had
+                                # been commanded home and never moved.
+                                connector.was_airborne = False
                                 total_flight_time = asyncio.get_event_loop().time() - start_time
 
-                                logger.info(f"{LogColors.SUCCESS}✅ LANDED! Flight complete.{LogColors.RESET}")
-                                get_flight_logger().log_entry("LANDED", "Mission complete")
+                                logger.info(f"{LogColors.SUCCESS}✅ LANDED at the destination.{LogColors.RESET}")
+                                get_flight_logger().log_entry("LANDED", "Arrived and landed at the destination")
 
+                                live = _observables(connector, await _telemetry_now(drone))
+                                where = _where_text(live)
                                 result = {
-                                    "DISPLAY_TO_USER": f"✅ MISSION COMPLETE | Landed safely | Flight time: {total_flight_time:.0f}s",
+                                    "DISPLAY_TO_USER": (
+                                        f"✅ LANDED AT THE COMMANDED DESTINATION | Flight time: "
+                                        f"{total_flight_time:.0f}s" + (f" | {where}" if where else "")
+                                    ),
                                     "status": "landed",
+                                    **live,
                                     "flight_time_seconds": round(total_flight_time, 0),
+                                    "action_required": (
+                                        "This leg is finished. If your task also asks the aircraft to go "
+                                        "somewhere else afterwards, that has NOT happened yet - the aircraft "
+                                        "is at the position above, disarming or disarmed."
+                                    ),
                                     "mission_complete": True,
                                 }
                                 log_tool_output(result)
@@ -1057,21 +1421,27 @@ async def monitor_flight(ctx: Context, arrival_threshold_m: float = 20.0, auto_l
                         await asyncio.sleep(2)  # Check every 2 seconds
 
                     # Timeout - return landing status
+                    live = _observables(connector, await _telemetry_now(drone))
+                    where = _where_text(live)
                     result = {
-                        "DISPLAY_TO_USER": f"⚠️ LANDING TIMEOUT | Alt: {current_alt:.1f}m | Check drone status",
+                        "DISPLAY_TO_USER": f"⚠️ LANDING TIMEOUT | Alt: {current_alt:.1f}m | Check drone status"
+                        + (f" | {where}" if where else ""),
                         "status": "landing_timeout",
-                        "altitude_m": round(current_alt, 1),
+                        **live,
                         "mission_complete": False,
                     }
                     log_tool_output(result)
                     return result
                 else:
                     # Manual landing required (auto_land=False)
+                    live = _observables(connector, await _telemetry_now(drone))
+                    where = _where_text(live)
                     result = {
-                        "DISPLAY_TO_USER": f"✅ ARRIVED | Distance: {distance:.1f}m | Alt: {current_alt:.1f}m | Call land() to land",
+                        "DISPLAY_TO_USER": f"✅ ARRIVED | Distance: {distance:.1f}m | Alt: {current_alt:.1f}m | Call land() to land"
+                        + (f" | {where}" if where else ""),
                         "status": "arrived",
                         "distance_m": round(distance, 1),
-                        "altitude_m": round(current_alt, 1),
+                        **live,
                         "mission_complete": False,
                     }
                     log_tool_output(result)
@@ -1091,11 +1461,15 @@ async def monitor_flight(ctx: Context, arrival_threshold_m: float = 20.0, auto_l
         else:
             eta_str = "calculating..."
 
+        live = _observables(connector, await _telemetry_now(drone))
+        where = _where_text(live)
         result = {
-            "DISPLAY_TO_USER": f"🚁 FLYING | Dist: {distance:.0f}m | Alt: {current_alt:.1f}m | Speed: {ground_speed:.1f}m/s | ETA: {eta_str} | {progress:.0f}%",
+            "DISPLAY_TO_USER": f"🚁 FLYING | Dist: {distance:.0f}m | Alt: {current_alt:.1f}m | Speed: {ground_speed:.1f}m/s | ETA: {eta_str} | {progress:.0f}%"
+            + (f" | {where}" if where else ""),
             "status": "in_progress",
             "distance_m": round(distance, 1),
             "progress_percent": round(progress, 0),
+            **live,
             "action_required": "call monitor_flight again",
             "mission_complete": False,
         }
@@ -1321,6 +1695,11 @@ async def reposition(ctx: Context, latitude_deg: float, longitude_deg: float, al
             float("nan"),  # Maintain current heading
         )
 
+        _note_movement(
+            connector,
+            "reposition",
+            {"latitude": latitude_deg, "longitude": longitude_deg, "label": "the repositioning target"},
+        )
         return {
             "status": "success",
             "message": "Repositioning to new location",
