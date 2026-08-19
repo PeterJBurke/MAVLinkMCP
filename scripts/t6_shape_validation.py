@@ -60,7 +60,11 @@ RTL_LEG_M = 250.0
 ARRIVAL_M = 20.0
 TAKEOFF_ALT_M = 30.0
 CRUISE_REL_M = 40.0
-MONITOR_TIMEOUT = 90.0
+# monitor_flight's own auto-land branch waits up to 120 s for touchdown before
+# it answers at all. A 90 s client timeout expired first, so the gate recorded a
+# client-side timeout on landings the server was still legitimately watching.
+# 150 s leaves the server its documented worst case plus headroom.
+MONITOR_TIMEOUT = 150.0
 MAX_POLLS = 24  # 24 x ~30 s server-side wait = 12 min ceiling per leg
 
 
