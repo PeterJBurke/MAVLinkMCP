@@ -28,6 +28,42 @@ class MAVLinkConnector:
     # false and max_altitude 0.0 m, and reported the flight as flawless.
     # Without evidence of a flight there is nothing to report complete.
     was_airborne: bool = field(default=False)
+    # The last movement command this session issued, and where it pointed.
+    # ``{"tool": str, "target": {"latitude_deg", "longitude_deg", "label"} | None,
+    #   "commanded_at": float}``. monitor_flight needs it because
+    # ``pending_destination`` is cleared the moment the aircraft arrives, so by
+    # the time a later poll asks "did the commanded flight actually happen?"
+    # there is nothing left to compare the aircraft's position against. That is
+    # half of the T6 phantom-return defect (audit 2026-08-19, mechanism M1):
+    # eight trials commanded RTL at a hospital 1.2-1.5 km from the launch point
+    # and were told "MISSION COMPLETE - Drone has landed safely!".
+    last_movement: dict | None = field(default=None)
+    # Where this SESSION started, recorded once when the link came up. The
+    # autopilot's own home moves to wherever the aircraft last armed
+    # (ArduPilot re-zeroes it on every arm), so after a trial that armed at a
+    # destination the autopilot's "home" is that destination. This field does
+    # not move, so the two can be compared and the difference reported instead
+    # of silently handed to a model as "home". Deliberately NOT cleared by
+    # reset_flight_latches: it is a property of the session, not of a flight.
+    session_launch: dict | None = field(default=None)
+
+    def record_session_launch(
+        self, latitude_deg: float, longitude_deg: float, absolute_altitude_m: float | None, source: str
+    ) -> None:
+        """Record where this session started, once. First writer wins.
+
+        Called when the link comes up. Later callers cannot overwrite it,
+        because the whole point of the field is that it does not follow the
+        aircraft around.
+        """
+        if self.session_launch is not None:
+            return
+        self.session_launch = {
+            "latitude_deg": latitude_deg,
+            "longitude_deg": longitude_deg,
+            "absolute_altitude_m": absolute_altitude_m,
+            "source": source,
+        }
 
     def reset_flight_latches(self) -> None:
         """Clear per-flight tracking state so no trial inherits the last one's.
@@ -40,11 +76,17 @@ class MAVLinkConnector:
         model loops (an 88-call loop was seen this way). ``was_airborne`` and
         ``pending_destination`` leak the same way, so all three are reset at the
         start of a fresh flight (a fresh connection, and every arm_drone, which
-        the between-trial ferry runs once per trial).
+        the between-trial ferry runs once per trial). ``last_movement`` is a
+        per-flight fact for the same reason: the previous trial's destination
+        must not decide this trial's completion.
+
+        ``session_launch`` is NOT reset here. It is where the session began,
+        and a new flight does not move it.
         """
         self.landing_in_progress = False
         self.was_airborne = False
         self.pending_destination = None
+        self.last_movement = None
 
 
 # Global connector instance - persists across all HTTP requests
@@ -71,6 +113,49 @@ async def ensure_connection(connector: MAVLinkConnector, timeout: float = 30.0) 
     except asyncio.TimeoutError:
         logger.error(f"{LogColors.ERROR}❌ Drone connection timeout after {timeout}s{LogColors.RESET}")
         return False
+
+
+async def record_launch_point(drone, connector: "MAVLinkConnector") -> None:
+    """Stamp the session's launch point on ``connector``. Best effort, once.
+
+    Read at link-up, before anything has armed, so it is the point the aircraft
+    was standing on when this session began. The autopilot's own home is read
+    first because that is the coordinate an RTL will fly to and the one the
+    model is shown; where it cannot be read, the parked position is the same
+    place by definition (nothing has flown yet on this link).
+
+    Never raises: a session that could not record its launch point reports that
+    honestly in :func:`droneserver.tools.telemetry.get_home_position` rather
+    than blocking the connection.
+    """
+    from droneserver.telemetry.home import read_home
+
+    try:
+        home = await read_home(drone, 10.0)
+        connector.record_session_launch(
+            home.latitude_deg, home.longitude_deg, home.absolute_altitude_m, "autopilot home when the link came up"
+        )
+        logger.info(
+            "Session launch point recorded from the autopilot's home: %.7f, %.7f at %.1f m",
+            home.latitude_deg,
+            home.longitude_deg,
+            home.absolute_altitude_m,
+        )
+        return
+    except Exception as e:
+        logger.warning("could not read home for the session launch point (%s); falling back to position", e)
+
+    try:
+        async for position in drone.telemetry.position():
+            connector.record_session_launch(
+                position.latitude_deg,
+                position.longitude_deg,
+                position.absolute_altitude_m,
+                "parked position when the link came up",
+            )
+            break
+    except Exception as e:
+        logger.warning("could not record a session launch point at all: %s", e)
 
 
 async def connect_drone_background(
@@ -112,6 +197,7 @@ async def connect_drone_background(
             # connection is not judged against stale landing/airborne state.
             if connector is not None:
                 connector.reset_flight_latches()
+                await record_launch_point(drone, connector)
             # Signal that connection is ready!
             connection_ready.set()
             # Phase 4: if a managed mission was in flight when this server was

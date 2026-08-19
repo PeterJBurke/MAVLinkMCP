@@ -14,11 +14,17 @@ from mcp.server.fastmcp import Context
 
 from droneserver.app import mcp
 from droneserver.convert import to_jsonable
+from droneserver.geo import haversine_distance
 from droneserver.telemetry.flight_log import LogColors, log_tool_call, log_tool_output, logger
 from droneserver.telemetry.home import read_home
 from droneserver.tools._common import CONN_ERROR, first_stream_item, get_drone
 
 READ_TIMEOUT_S = 10.0
+
+#: How far the autopilot's home may sit from the session's launch point before
+#: the two count as different places. Comfortably inside the smallest return
+#: threshold any mission uses, so a warning means a real disagreement.
+HOME_DIVERGENCE_M = 20.0
 
 
 def _no_data(topic: str) -> dict:
@@ -201,9 +207,7 @@ async def get_battery(ctx: Context) -> dict:
         # so no low-battery warning is emitted from it. A pack-agnostic per-cell
         # figure gives a rough state that is explicitly labelled uncertain.
         battery_data["remaining_percent"] = None
-        battery_data["calibration_status"] = (
-            "unknown - autopilot did not report a calibrated remaining percentage"
-        )
+        battery_data["calibration_status"] = "unknown - autopilot did not report a calibrated remaining percentage"
         cells = max(1, round(voltage / 3.7))  # nominal LiPo cell is ~3.7 V
         per_cell = voltage / cells
         if per_cell >= 4.1:
@@ -289,12 +293,31 @@ async def get_health(ctx: Context) -> dict:
 async def get_home_position(ctx: Context) -> dict:
     """
     Get the home position where Return to Launch (RTL) will return to.
-    This is typically set at the launch location when the drone first arms.
+
+    WARNING, AND IT IS THE POINT OF THIS TOOL: "home" is not necessarily where
+    the aircraft took off from. ArduPilot re-sets it to wherever the aircraft
+    was standing the last time it ARMED, so an aircraft that landed somewhere,
+    re-armed and took off again has left its home at that somewhere. Ten trials
+    of the T6 hospital campaign read a home coordinate between 437 m and 1528 m
+    from where the aircraft was actually parked; three flew to it and reported
+    that they had returned to the launch point. One of those "return flights"
+    was 3.7 m long.
+
+    So the answer carries two coordinates:
+
+    - ``home``: what the autopilot will fly to on RTL, right now.
+    - ``session_launch_point``: where this server's link to the aircraft began,
+      recorded once and never moved.
+
+    When they disagree, ``home_matches_session_launch`` is false and
+    ``warning`` says by how much. Use ``session_launch_point`` (or a position
+    you read yourself before flying) when you mean "where we started".
 
     Returns:
-        dict: Home position coordinates and altitude.
+        dict: Both coordinates, their separation, and any disagreement warning.
     """
     log_tool_call("get_home_position")
+    connector = ctx.request_context.lifespan_context
     drone = await get_drone(ctx)
     if drone is None:
         return dict(CONN_ERROR)
@@ -316,11 +339,43 @@ async def get_home_position(ctx: Context) -> dict:
         "latitude_deg": home.latitude_deg,
         "longitude_deg": home.longitude_deg,
         "absolute_altitude_m": home.absolute_altitude_m,
+        "meaning": "where RTL will fly to; the autopilot moves this to wherever the aircraft last armed",
     }
     logger.info(
         f"Home position: {home_data['latitude_deg']}, {home_data['longitude_deg']} at {home_data['absolute_altitude_m']}m"
     )
-    return {"status": "success", "home": home_data}
+    result = {"status": "success", "home": home_data}
+    launch = getattr(connector, "session_launch", None)
+    if not launch:
+        result["session_launch_point"] = None
+        result["home_matches_session_launch"] = None
+        result["warning"] = (
+            "this session did not record a launch point, so there is nothing to check the autopilot's "
+            "home against. Do not assume home is where the aircraft took off - read get_position before "
+            "you fly and keep that coordinate."
+        )
+        return result
+
+    separation = haversine_distance(
+        home.latitude_deg, home.longitude_deg, launch["latitude_deg"], launch["longitude_deg"]
+    )
+    result["session_launch_point"] = {
+        "latitude_deg": launch["latitude_deg"],
+        "longitude_deg": launch["longitude_deg"],
+        "absolute_altitude_m": launch["absolute_altitude_m"],
+        "source": launch["source"],
+    }
+    result["distance_between_m"] = round(separation, 1)
+    matches = separation <= HOME_DIVERGENCE_M
+    result["home_matches_session_launch"] = matches
+    if not matches:
+        result["warning"] = (
+            f"the autopilot's home is {separation:.0f} m from where this session started. RTL will fly to "
+            f"the 'home' coordinate, NOT to the launch point. If you want the launch point, use "
+            f"session_launch_point with go_to_location."
+        )
+        logger.warning(f"{LogColors.ERROR}⚠️ home is {separation:.0f} m from the session launch point{LogColors.RESET}")
+    return result
 
 
 @mcp.tool()
