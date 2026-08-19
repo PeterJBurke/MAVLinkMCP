@@ -56,6 +56,30 @@ class MissionSettings(BaseSettings):
     #: Arm retry budget when starting a mission (prearm checks settle slowly).
     arm_timeout_s: float = 90.0
 
+    # ---- start confirmation / progress evidence ----
+    #: How long to wait for positive evidence that the autopilot really entered
+    #: mission execution after ``start_mission`` returned. ``start_mission``
+    #: cannot be trusted on its own: PX4 ACKs the mode change as ACCEPTED and
+    #: then refuses it ("Switching to Mission is currently not available"), so
+    #: MavSDK reports success for a mission that never runs. If no evidence
+    #: arrives within this window the mission FAILS - it is never reported as
+    #: running, and therefore can never be reported as finished.
+    start_confirm_timeout_s: float = 30.0
+
+    #: How far the vehicle must get from the point where the mission started
+    #: before that movement counts as evidence the mission is really flying.
+    #: Comfortably above GPS/position drift while loitering (measured: 0.6 m
+    #: over a whole PX4 trial that never left the launch point).
+    progress_distance_m: float = 15.0
+
+    #: Bring a RUNNING mission down (and FAIL it) if it has been airborne this
+    #: long without EVER progressing - no item reached past the one it started
+    #: on and no movement. Only catches "never started"; a mission that has
+    #: progressed once is never stalled out by this, however long its legs or
+    #: waypoint holds are. 0 disables. Fail-closed needs a bound, or "we are
+    #: not sure it finished" just means "loiter armed forever".
+    no_progress_timeout_s: float = 240.0
+
 
 def get_mission_settings() -> MissionSettings:
     return MissionSettings()

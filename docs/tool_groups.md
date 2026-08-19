@@ -376,6 +376,45 @@ what a GCS does. Additionally the raw mission layout must be
 the takeoff at seq 0 uploads fine but `start_mission` then fails with
 `UNKNOWN`. Both measured on ArduCopter 4.5.7 SITL.
 
+**PX4 refuses that same layout once the vehicle is airborne.** PX4 does not
+reserve `seq 0` for home — it reads the placeholder as a real waypoint — and
+with the vehicle in the air it then declines the mission-mode switch entirely:
+`STATUSTEXT` severity CRITICAL, *"Switching to Mission is currently not
+available"*. The refusal is not visible in the command result: PX4 answers the
+`DO_SET_MODE` with `COMMAND_ACK result=ACCEPTED` and denies the transition
+afterwards, so MavSDK's `start_mission()` **returns success for a mission that
+never runs**. Measured on PX4 v1.16.2 (llmuavpx4, 2026-08-19) across four
+flights — on the ground the layout is accepted; in the air it is refused
+whatever the placeholder's altitude and whatever the current-item index is set
+to; dropping the placeholder is accepted in the air, with or without the
+takeoff item.
+
+The runner therefore (a) treats a start as unconfirmed until it *sees* MISSION
+flight mode or real progress, (b) re-uploads without the placeholder and tries
+once more if it does not, and (c) FAILS the mission and brings the aircraft
+down if it still cannot confirm. It never reports a mission as running, and so
+can never report one as finished, on the strength of the command result alone.
+
+### Completion is evidence, not a signal
+
+`COMPLETED` requires all of: the vehicle was seen executing the mission
+(`MISSION` flight mode, which MavSDK reports for ArduCopter `AUTO` and PX4
+`AUTO.MISSION` alike); the mission demonstrably progressed — an item reached
+past the index it started on, or the aircraft `MISSION_PROGRESS_DISTANCE_M`
+(default 15 m) from where the mission started; and the flight ended landed and
+disarmed. Anything else lands as `FAILED`, with the evidence attached. The
+evidence itself is returned by `get_mission_status` as `progress_evidence` and
+carried in the mission events.
+
+This replaced a completion test that read `flight_mode == HOLD` as "PX4
+finished its mission". HOLD is also where PX4 sits after an ordinary takeoff —
+i.e. the signal was already true at item 0 — and in the 2026-08-12/13 PX4 N=5
+campaign it fired about seven seconds after the start, at 0 % progress, with
+the aircraft 0.6 m from its launch point, in 33 of 44 T4 failures across 9 of
+11 models. `MISSION_NO_PROGRESS_TIMEOUT_S` (default 240 s) bounds the
+fail-closed case so a mission that will never progress comes down instead of
+loitering armed.
+
 ### Safety-layer interaction (noted for the pending review)
 
 The three tools are classified in the tier table like every other tool

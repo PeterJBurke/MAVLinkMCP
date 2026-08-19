@@ -260,32 +260,49 @@ SITL** on the box `llmuavpx4` (tailnet `100.89.214.49`); on that box
 ```
   px4 SITL (udp 14540) ──▶ MAVProxy (llmuavpx4) ── tcpin  100.89.214.49:5760 ──┐
                                        │                                        │
-                          udpin 14550 (GCS)   udpout 100.100.244.74:14540 ──┐   │
-                                                (telemetry forward, added)   │   │
-  llmuavdev:                                                                 │   │
+                          udpin 14550 (GCS)                                     │
+  llmuavdev:                                                                    │
     droneserver-staging ─TCP 127.0.0.1:5679─▶ [ mavlink-relay-px4 ] ────────────┘
-                                                   │            │  (both directions)
-                                          TelemetryRecorder     └─UDP 127.0.0.1:14656
-                                          udp://:14540 ◀────────┘   MavlinkTap → mavlink.tlog
+                                                   │        │  (both directions)
+                          UDP 127.0.0.1:14657 ◀────┘        └──▶ UDP 127.0.0.1:14656
+                          TelemetryRecorder → telemetry.csv      MavlinkTap → mavlink.tlog
     logs/<date>/*.ulg  ──scp──▶ retain_remote_dataflash (llmuavpx4:/var/lib/px4-sitl/log)
 ```
 
 What differs from the ArduPilot stack, and why:
 
 1. **The relay is `mavlink-relay-px4.service`** — same byte-pump, upstream
-   `100.89.214.49:5760` (MAVProxy's `tcpin`), mirror `127.0.0.1:14656`. It
-   `Conflicts=` the ArduPilot `mavlink-relay.service` because both listen on
-   `127.0.0.1:5679`, so `droneserver-staging` needs no env change to swap
-   firmwares — only the relay does. Tap endpoint is therefore
-   `udpin:127.0.0.1:14656`.
+   `100.89.214.49:5760` (MAVProxy's `tcpin`), mirrors `127.0.0.1:14656` (tap)
+   and `127.0.0.1:14657` (recorder). It `Conflicts=` the ArduPilot
+   `mavlink-relay.service` because both listen on `127.0.0.1:5679`, so
+   `droneserver-staging` needs no env change to swap firmwares — only the relay
+   does. **Starting it stops the ArduPilot relay**, which takes any in-flight
+   ArduPilot campaign with it; swap deliberately:
 
-2. **The telemetry recorder needs its own forwarded UDP stream.** MAVProxy's
-   `tcpin` serves the relay as its single client; a second MavSDK client on
-   `tcpout://…:5760` does not get a working link. So `px4-mavbridge` was given a
-   dedicated `--out=udpout:100.100.244.74:14540` forward (a systemd drop-in,
-   `10-telemetry-forward.conf`), and the recorder uses the same
-   `udp://:14540` listen endpoint the ArduPilot stack uses. Restore by removing
-   the drop-in + `daemon-reload` + restart.
+   ```bash
+   systemctl stop mavlink-relay && systemctl start mavlink-relay-px4
+   systemctl restart droneserver-staging     # re-dial through the new relay
+   ```
+
+2. **The telemetry recorder gets its own mirror port — `127.0.0.1:14657`**
+   (resolved 2026-08-19; rule 5, option (a), the PX4 twin of ArduPilot's
+   `:14541`). MAVProxy's `tcpin` serves the relay as its single client, so a
+   second MavSDK client on `tcpout://…:5760` does not get a working link —
+   which is why the recorder is fed from the relay rather than from the
+   simulator, exactly like the tap. Port map:
+
+   | | tap (`--mavlink-endpoint`) | recorder (`--telemetry-address`) |
+   |---|---|---|
+   | ArduPilot (`mavlink-relay`) | `udpin:127.0.0.1:14655` | `udpin://127.0.0.1:14541` |
+   | PX4 (`mavlink-relay-px4`) | `udpin:127.0.0.1:14656` | `udpin://127.0.0.1:14657` |
+
+   The earlier PX4 route — a `--out=udpout:100.100.244.74:14540` forward from
+   `px4-mavbridge` (systemd drop-in `10-telemetry-forward.conf`) into a
+   bind-to-any `udp://:14540` — is the topology rule 5 exists to forbid, and is
+   superseded. **The drop-in is still installed on llmuavpx4**: nothing binds
+   `:14540` any more so the packets go nowhere, but remove it (+ `daemon-reload`
+   + `systemctl restart px4-mavbridge`, which drops the link — not mid-campaign)
+   to leave exactly one PX4 telemetry path.
 
 3. **PX4 logs are `.ulg`, nested by date** (`log/<YYYY-MM-DD>/HH_MM_SS.ulg`), so
    `--dataflash-remote llmuavpx4:/var/lib/px4-sitl/log` and
@@ -327,7 +344,7 @@ KEY="$(printf '%s' "$SAFETY_API_KEYS" | cut -d, -f1 | cut -d: -f2)"
   --audit-log /var/lib/droneserver/audit.jsonl \
   --target-label "PX4 SITL (llmuavpx4)" \
   --capture --mavlink-endpoint udpin:127.0.0.1:14656 \
-  --telemetry-address "udp://:14540" \
+  --telemetry-address "udpin://127.0.0.1:14657" \
   --firmware PX4 --firmware-version "PX4 v1.16.2" \
   --param-name MPC_XY_CRUISE \
   --sitl-host llmuavpx4 \

@@ -26,10 +26,35 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DOCKERFILE_DIR = REPO_ROOT / "docker" / "ardupilot-sitl"
 
 
+#: The PX4 SITL box. MAVProxy on llmuavpx4 serves MAVLink over TCP here; it is
+#: Tailscale-only, so this resolves and connects from the dev box and from
+#: nowhere else. Override with PX4_SITL_ADDRESS / PX4_SITL_PORT.
+PX4_SITL_ADDRESS = os.environ.get("PX4_SITL_ADDRESS", "llmuavpx4")
+PX4_SITL_PORT = int(os.environ.get("PX4_SITL_PORT", "5760"))
+
+
+def px4_sitl_reachable(timeout_s: float = 5.0) -> bool:
+    try:
+        with socket.create_connection((PX4_SITL_ADDRESS, PX4_SITL_PORT), timeout=timeout_s):
+            return True
+    except OSError:
+        return False
+
+
 def pytest_collection_modifyitems(config, items):
-    """Auto-skip @pytest.mark.px4 tests until the PX4 SITL (llmuavpx4) exists."""
+    """Skip @pytest.mark.px4 tests when the PX4 SITL cannot be reached.
+
+    Until 2026-08-19 this skipped them unconditionally ("llmuavpx4 pending").
+    The box exists now, so the gate is reachability: on a machine that is not
+    on the tailnet these still skip, and on this one they run.
+    """
+    if not any("px4" in item.keywords for item in items):
+        return
+    if px4_sitl_reachable():
+        return
     skip_px4 = pytest.mark.skip(
-        reason="PX4 SITL not yet available (llmuavpx4 pending); ArduPilot result in docs/firmware_notes.csv"
+        reason=f"PX4 SITL not reachable at {PX4_SITL_ADDRESS}:{PX4_SITL_PORT} "
+        "(tailnet-only); ArduPilot results in docs/firmware_notes.csv"
     )
     for item in items:
         if "px4" in item.keywords:

@@ -21,6 +21,13 @@ class MAVLinkConnector:
     pending_destination: dict | None = field(default=None)
     # Track if landing has been initiated (to properly monitor landing progress)
     landing_in_progress: bool = field(default=False)
+    # Latched the first time the drone is SEEN airborne. monitor_flight reports
+    # "MISSION COMPLETE - landed" from being on the ground, which is also true of
+    # a drone that never took off: on 2026-08-16 gemma-4-e4b's T4 got
+    # mission_complete=true on its first monitor_flight call with ever_armed
+    # false and max_altitude 0.0 m, and reported the flight as flawless.
+    # Without evidence of a flight there is nothing to report complete.
+    was_airborne: bool = field(default=False)
 
 
 # Global connector instance - persists across all HTTP requests

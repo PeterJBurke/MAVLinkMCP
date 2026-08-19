@@ -103,6 +103,25 @@ class MissionRecord:
     last_flight_mode: str | None = None
     last_armed: bool = True
 
+    # ---- progress evidence -------------------------------------------------
+    # Completion is never inferred from a signal that is already true at item 0.
+    # These four fields are the positive evidence that the mission ACTUALLY ran,
+    # and they are checkpointed so a monitor that reattaches after a server
+    # restart does not silently lose the proof and start guessing again.
+    #: The vehicle has been observed in MISSION flight mode since the start.
+    #: Without this the autopilot never accepted the mission at all.
+    mission_mode_confirmed: bool = False
+    #: ``mission_progress.current`` read immediately BEFORE the mission started.
+    #: Progress means moving past this, not merely being non-zero: PX4 reports
+    #: current=1 (the takeoff item) the moment a mission is uploaded.
+    baseline_item: int = 0
+    #: Highest ``mission_progress.current`` seen while the mission ran.
+    items_reached: int = 0
+    #: Where the vehicle was when the mission started, and how far it has been
+    #: from there since - the firmware-independent "it actually flew" signal.
+    start_position: dict | None = None
+    max_distance_from_start_m: float = 0.0
+
     error: str | None = None
     auto_actions_fired: list = field(default_factory=list)
     events: list = field(default_factory=list)
@@ -128,6 +147,28 @@ class MissionRecord:
         if not self.total_items:
             return 0.0
         return round(min(self.current_item / self.total_items, 1.0) * 100, 1)
+
+    def progressed(self, distance_threshold_m: float) -> bool:
+        """True only with positive evidence that the mission actually moved on.
+
+        Either a mission item was genuinely reached beyond the one the mission
+        started on, or the vehicle physically left the point it started from.
+        A mission sitting over its launch point at item 0 satisfies neither, so
+        nothing derived from this can fire before the mission has flown.
+        """
+        if self.items_reached > self.baseline_item:
+            return True
+        return distance_threshold_m > 0 and self.max_distance_from_start_m >= distance_threshold_m
+
+    def progress_evidence(self) -> dict:
+        """The evidence, as it is put in events and returned to the client."""
+        return {
+            "mission_mode_confirmed": self.mission_mode_confirmed,
+            "baseline_item": self.baseline_item,
+            "items_reached": self.items_reached,
+            "total_items": self.total_items,
+            "max_distance_from_start_m": round(self.max_distance_from_start_m, 1),
+        }
 
     def add_event(self, event: MissionEvent, max_events: int) -> None:
         self.events.append(asdict(event))

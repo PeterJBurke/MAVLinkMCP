@@ -31,6 +31,28 @@ uv run pytest -m longmission tests/integration/test_long_mission_demo.py
 > bare `-m sitl` will pull it in and add ~40 minutes. Use
 > `-m "sitl and not longmission"` for routine sweeps.
 
+### The PX4 tests
+
+`@pytest.mark.px4` tests fly the **persistent PX4 SITL on `llmuavpx4`**, not a
+docker container — PX4 SITL is not containerised here. They are skipped
+automatically wherever that box is not reachable (it is Tailscale-only), so a
+laptop off the tailnet still gets a green `-m sitl` run.
+
+```bash
+uv run pytest -m "sitl and px4" tests/integration     # ~10 min, two flights
+```
+
+Two rules, both learned the hard way:
+
+- **One client.** MAVProxy's `tcpin` on llmuavpx4 serves a single client, so
+  each test's `mavsdk_server` is killed in fixture teardown. A leftover one
+  makes the next `connect()` block forever rather than fail.
+- **One aircraft.** These tests share the real simulator with the benchmark
+  campaigns. They skip rather than run if they find the vehicle armed, and they
+  must not be run beside a PX4 campaign.
+
+Override the target with `PX4_SITL_ADDRESS` / `PX4_SITL_PORT`.
+
 First run builds the docker image (`droneserver-sitl-arducopter:4.5.7`);
 subsequent runs reuse it. Expect roughly 30-90 s for the SITL to become
 flight-ready (EKF converged, prearm checks passing) per test module.

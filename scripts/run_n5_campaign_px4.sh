@@ -72,22 +72,33 @@ for model in $MODELS; do
   provider=$(provider_of "$model")
   budget=$(budget_for "$provider")
   echo "############ $model  ($(date -u +%FT%TZ))  [$provider, cap \$$budget] ############"
-  # TELEMETRY-ADDRESS TOPOLOGY NOTE (2026-08-18) -- READ BEFORE THE NEXT RUN.
-  # The --telemetry-address below ("udp://:14540") binds EVERY source on that
-  # port, and the harness now REFUSES it at startup. That address is what let a
-  # second, idle SITL feed the MavSDK telemetry recorder and put two aircraft
-  # into single telemetry.csv rows across 472 trials -- see
+  # TELEMETRY-ADDRESS TOPOLOGY -- RESOLVED option (a), 2026-08-19.
+  # The PX4 recorder now has its OWN relay mirror port, the exact twin of what
+  # the ArduPilot campaign got on :14541: mavlink-relay-px4.service runs a
+  # second '--mirror 127.0.0.1:14657' next to the tap's :14656, so the address
+  # below carries ONLY what that relay carries (llmuavpx4's PX4 SITL). No
+  # bind-to-any, no second-aircraft contamination path, and no need for
+  # --allow-shared-telemetry-bind. Port map: AP tap :14655 / AP recorder :14541,
+  # PX4 tap :14656 / PX4 recorder :14657.
+  # This replaces the "udp://:14540" bind-to-any address, which the harness now
+  # refuses at startup and which is what put two aircraft into single
+  # telemetry.csv rows across 472 trials -- history in
   # /root/LLMUAV/Research/PX4-TELEMETRY-CONTAMINATION-VERIFICATION_2026-08-18.md
-  # and llm_runs/CHANGELOG-TELEMETRY-CLEAN.md. Resolve it ONE of two ways; the
-  # choice is a statement about the network, not a preference:
-  #   (a) PREFERRED -- give this firmware's recorder its OWN mirror port
-  #       ('mavlink_relay.py --mirror' is now repeatable, so one port feeds the
-  #       MAVLink tap and another feeds the recorder) and point
-  #       --telemetry-address at it. scripts/run_local_arm.sh already does this
-  #       with :14650, "fed only by llmuavsitl".
-  #   (b) add --allow-shared-telemetry-bind, which asserts that exactly ONE
-  #       autopilot can reach this port. capture/verify.py's "telemetry.csv
-  #       single-vehicle" check fails the bundle if that turns out to be false.
+  # and llm_runs/CHANGELOG-TELEMETRY-CLEAN.md.
+  # PREREQUISITE, and it is not optional: mavlink-relay-px4.service must be the
+  # RUNNING relay before this campaign starts. It Conflicts= mavlink-relay.service
+  # (both listen on 127.0.0.1:5679), so starting it STOPS the ArduPilot relay and
+  # takes any in-flight ArduPilot campaign down with it:
+  #   systemctl stop mavlink-relay && systemctl start mavlink-relay-px4
+  #   systemctl restart droneserver-staging      # re-dial through the new relay
+  # and to hand the link back to ArduPilot afterwards, the reverse.
+  # KNOWN LEFTOVER (not on this path, but tidy it before publishing): llmuavpx4
+  # still carries the drop-in /etc/systemd/system/px4-mavbridge.service.d/
+  # 10-telemetry-forward.conf, which UDP-forwards PX4 telemetry to
+  # llmuavdev:14540 unconditionally. Nothing binds :14540 any more, so it goes
+  # nowhere, but it is the old contaminating topology and removing it (plus a
+  # px4-mavbridge restart, which drops the link, so not mid-campaign) leaves
+  # exactly one PX4 telemetry path.
   timeout "$PER_MODEL_TIMEOUT" /root/.local/bin/uv run python scripts/run_llm_missions.py \
       --missions "$MISSIONS" --trials "$TRIALS" --model "$model" \
       --budget-usd "$budget" \
@@ -97,7 +108,7 @@ for model in $MODELS; do
       --label "$label" \
       --link-recovery-command "systemctl restart droneserver-staging" \
       --capture --mavlink-endpoint udpin:127.0.0.1:14656 \
-      --telemetry-address "udp://:14540" \
+      --telemetry-address "udpin://127.0.0.1:14657" \
       --firmware PX4 --firmware-version "PX4 v1.16.2" \
       --sitl-host llmuavpx4 \
       --dataflash-remote llmuavpx4:/var/lib/px4-sitl/log \

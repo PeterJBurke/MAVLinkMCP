@@ -250,14 +250,8 @@ class MissionRunner:
         # ---- upload ----
         self.set_phase(Phase.UPLOADING, s)
         items = _mission_items(build_raw_items, waypoints, record.takeoff_altitude_m, record.return_to_launch)
-        try:
-            await asyncio.wait_for(drone.mission_raw.upload_mission(items), timeout=60)
-        except Exception as e:
-            record.error = f"mission upload failed: {e}"
-            self.emit("error", record.error, s)
-            self.set_phase(Phase.FAILED, s, reason="upload")
+        if not await self._upload(drone, items, s):
             return
-        record.total_items = len(items)
         self.emit("info", f"uploaded {len(items)} mission items", s, items=len(items))
 
         # ---- arm ----
@@ -314,23 +308,141 @@ class MissionRunner:
             return
 
         # ---- start ----
-        started = False
-        for _ in range(3):
-            try:
-                await asyncio.wait_for(drone.mission_raw.start_mission(), timeout=20)
-                started = True
-                break
-            except Exception as e:
-                logger.warning(f"mission: start_mission retry after {e}")
-                await asyncio.sleep(3)
-        if not started:
+        # Baseline the progress counter BEFORE starting: "current item is not
+        # zero" is not progress. PX4 reports current=1 (the takeoff item) from
+        # the moment a mission is uploaded, so progress means moving past THIS.
+        await self._baseline(drone, record)
+
+        if not await self._start_mission(drone, s):
             record.error = "mission start was refused by the autopilot"
             self.emit("error", record.error, s)
-            self.set_phase(Phase.FAILED, s, reason="start")
+            await self._descend_and_fail(drone, s, "start")
             return
         self.set_phase(Phase.RUNNING, s)
 
+        # ---- confirm the autopilot ACTUALLY entered mission execution ----
+        # start_mission() returning success is NOT evidence that the mission is
+        # running. Measured on PX4 v1.16.2 (2026-08-19, llmuavpx4): PX4 answers
+        # the DO_SET_MODE with COMMAND_ACK result=ACCEPTED and *then* refuses the
+        # transition with STATUSTEXT severity CRITICAL "Switching to Mission is
+        # currently not available"; MavSDK reads the first ACK and reports
+        # success. The vehicle stays in HOLD over its launch point.
+        if not await self._confirm_running(drone, s):
+            self.emit(
+                "info",
+                "the autopilot did not enter mission execution - retrying without the "
+                "seq-0 home placeholder (PX4 refuses that layout in flight)",
+                s,
+                **record.progress_evidence(),
+            )
+            retry = _mission_items(
+                build_raw_items,
+                waypoints,
+                record.takeoff_altitude_m,
+                record.return_to_launch,
+                home_placeholder=False,
+            )
+            confirmed = False
+            if await self._upload(drone, retry, s):
+                await self._baseline(drone, record)
+                if await self._start_mission(drone, s):
+                    confirmed = await self._confirm_running(drone, s)
+            if not confirmed:
+                record.error = (
+                    "the autopilot accepted the start command but never entered mission "
+                    "execution: the flight mode never became MISSION and no mission item "
+                    "was reached. The mission did NOT fly."
+                )
+                self.emit("error", record.error, s, rule="mission.start_unconfirmed", **record.progress_evidence())
+                await self._descend_and_fail(drone, s, "start_unconfirmed")
+                return
+
         await self.monitor(drone, s)
+
+    # ------------------------------------------------------------- start/upload
+
+    async def _upload(self, drone, items: list, s: MissionSettings) -> bool:
+        assert self.record is not None
+        try:
+            await asyncio.wait_for(drone.mission_raw.upload_mission(items), timeout=60)
+        except Exception as e:
+            self.record.error = f"mission upload failed: {e}"
+            self.emit("error", self.record.error, s)
+            if self.record.phase_enum is Phase.UPLOADING:
+                self.set_phase(Phase.FAILED, s, reason="upload")
+            return False
+        self.record.total_items = len(items)
+        return True
+
+    async def _start_mission(self, drone, s: MissionSettings) -> bool:
+        for _ in range(3):
+            try:
+                await asyncio.wait_for(drone.mission_raw.start_mission(), timeout=20)
+                return True
+            except Exception as e:
+                logger.warning(f"mission: start_mission retry after {e}")
+                await asyncio.sleep(3)
+        return False
+
+    async def _baseline(self, drone, record: MissionRecord) -> None:
+        """Freeze the "before" side of the progress evidence.
+
+        Both halves need a baseline taken at the moment of the start, not a
+        constant: PX4 reports ``mission_progress.current = 1`` (the takeoff
+        item) from the moment the mission is uploaded, so "current is not zero"
+        proves nothing, and the aircraft is already at altitude over the launch
+        point, so "distance from home" is not the right origin either.
+        """
+        record.baseline_item = 0
+        with contextlib.suppress(Exception):
+            progress = await _first(drone.mission_raw.mission_progress(), 2.0)
+            if progress.total > 0:
+                record.baseline_item = int(progress.current)
+        record.items_reached = record.baseline_item
+        record.max_distance_from_start_m = 0.0
+        record.mission_mode_confirmed = False
+        record.start_position = None
+        with contextlib.suppress(Exception):
+            position = await _first(drone.telemetry.position(), 5.0)
+            record.start_position = {
+                "latitude_deg": round(position.latitude_deg, 7),
+                "longitude_deg": round(position.longitude_deg, 7),
+                "relative_altitude_m": round(position.relative_altitude_m, 1),
+            }
+
+    async def _confirm_running(self, drone, s: MissionSettings) -> bool:
+        """Wait for positive evidence that the mission is really executing.
+
+        Either signal is proof, and both are firmware-independent: the vehicle
+        reports MISSION flight mode (ArduCopter AUTO and PX4 AUTO.MISSION both
+        map to it in MavSDK - measured on ArduCopter 4.5.7 and PX4 v1.16.2), or
+        the mission demonstrably progressed. Absence of both is treated as a
+        refused start, never as a running mission.
+        """
+        assert self.record is not None
+        record = self.record
+        deadline = time.monotonic() + s.start_confirm_timeout_s
+        while time.monotonic() < deadline and not self._abort_requested:
+            await self._sample(drone, record, s)
+            if record.mission_mode_confirmed or record.progressed(s.progress_distance_m):
+                self.emit("info", "mission execution confirmed", s, **record.progress_evidence())
+                return True
+            await asyncio.sleep(s.poll_interval_s)
+        return False
+
+    async def _descend_and_fail(self, drone, s: MissionSettings, reason: str) -> None:
+        """Bring the aircraft down, then FAIL. Never leave it loitering armed.
+
+        The failure paths that reach here all happen after the GUIDED takeoff,
+        so the vehicle is at altitude. A stale or missing position must not be
+        read as "on the ground and therefore fine" - re-read it first.
+        """
+        assert self.record is not None
+        if self.record.last_position is None:
+            await self._sample(drone, self.record, s)
+        if (self.record.last_position or {}).get("relative_altitude_m", 0.0) > 2.0:
+            await self._do_action(s.mission_complete_action, drone, s, reason=reason)
+        self.set_phase(Phase.FAILED, s, reason=reason)
 
     # ------------------------------------------------------------- monitor
 
@@ -346,6 +458,10 @@ class MissionRunner:
         # mission_progress (both advisory - measured). The definitive signal is
         # "we were airborne and now the vehicle is disarmed on the ground".
         was_airborne = False
+        airborne_since: float | None = None
+        #: Set when the no-progress watchdog brought the aircraft down: the
+        #: flight then ends in FAILED, never in COMPLETED.
+        stalled = False
 
         while record.active:
             await asyncio.sleep(s.poll_interval_s)
@@ -437,13 +553,26 @@ class MissionRunner:
 
             # ---- completion ----
             # The definitive completion signal is firmware-agnostic: we were
-            # airborne and the vehicle is now disarmed on the ground.
+            # airborne and the vehicle is now disarmed on the ground. It says
+            # the FLIGHT is over; it does not say the MISSION was flown, so it
+            # only reads as COMPLETED with the progress evidence behind it.
             altitude = (record.last_position or {}).get("relative_altitude_m") or 0.0
             if record.last_armed and altitude > 2.0:
                 was_airborne = True
+                airborne_since = airborne_since or time.monotonic()
 
             if was_airborne and not record.last_armed and altitude <= 2.0:
-                self.set_phase(Phase.COMPLETED, s, reason="landed and disarmed")
+                if stalled or not record.mission_mode_confirmed or not record.progressed(s.progress_distance_m):
+                    record.error = record.error or (
+                        "the aircraft landed without flying the mission: no mission item "
+                        "past the one it started on was reached and it never left the "
+                        "point it started from"
+                    )
+                    self.emit("error", record.error, s, rule="mission.no_progress", **record.progress_evidence())
+                    self.set_phase(Phase.FAILED, s, reason="landed without flying the mission")
+                else:
+                    self.emit("info", "mission flown", s, **record.progress_evidence())
+                    self.set_phase(Phase.COMPLETED, s, reason="landed and disarmed")
                 return
 
             # Getting *to* that signal differs by firmware. ArduPilot missions
@@ -457,11 +586,37 @@ class MissionRunner:
                 was_airborne
                 and record.phase_enum is Phase.RUNNING
                 and not self._descent_commanded
-                and await self._mission_items_done(drone, record)
+                and self._mission_items_done(record, s)
             ):
                 self._descent_commanded = True
-                self.emit("info", "mission items complete - commanding return-to-launch", s)
+                self.emit("info", "mission items complete - commanding return-to-launch", s, **record.progress_evidence())
                 await self._do_action(s.mission_complete_action, drone, s, reason="mission items complete")
+
+            # ---- no-progress watchdog ----
+            # Fail-closed only means something if it is bounded: a mission that
+            # is never going to progress must come down rather than loiter armed
+            # until someone notices. This fires ONLY on a mission that has not
+            # progressed at all since it started, so a long leg or a long
+            # waypoint hold - both of which have progressed already - is safe.
+            if (
+                s.no_progress_timeout_s > 0
+                and was_airborne
+                and not stalled
+                and not self._descent_commanded
+                and record.phase_enum is Phase.RUNNING
+                and not record.progressed(s.progress_distance_m)
+                and airborne_since is not None
+                and (time.monotonic() - airborne_since) > s.no_progress_timeout_s
+            ):
+                stalled = True
+                self._descent_commanded = True
+                record.error = (
+                    f"the mission made no progress in {s.no_progress_timeout_s:.0f} s: no mission "
+                    "item past the one it started on was reached and the aircraft did not leave "
+                    "the point it started from"
+                )
+                self.emit("error", record.error, s, rule="mission.stalled", **record.progress_evidence())
+                await self._do_action(s.mission_complete_action, drone, s, reason="mission made no progress")
 
         return
 
@@ -488,43 +643,68 @@ class MissionRunner:
             ok = True
         with contextlib.suppress(Exception):
             record.last_flight_mode = str(await _first(drone.telemetry.flight_mode(), 5.0))
+        # MavSDK maps ArduCopter AUTO and PX4 AUTO.MISSION to the same
+        # FlightMode.MISSION, so this one latch is the firmware-independent
+        # proof that the autopilot really took the mission (measured on
+        # ArduCopter 4.5.7 and PX4 v1.16.2).
+        if (record.last_flight_mode or "").upper() == "MISSION":
+            record.mission_mode_confirmed = True
         with contextlib.suppress(Exception):
             record.last_armed = bool(await _first(drone.telemetry.armed(), 5.0))
         with contextlib.suppress(Exception):
             progress = await _first(drone.mission_raw.mission_progress(), 2.0)
             if progress.total > 0:
                 record.current_item = progress.current
+                record.items_reached = max(record.items_reached, int(progress.current))
                 record.total_items = max(record.total_items, progress.total)
+        if record.start_position and record.last_position:
+            with contextlib.suppress(Exception):
+                from droneserver.geo import haversine_distance
+
+                moved = haversine_distance(
+                    record.start_position["latitude_deg"],
+                    record.start_position["longitude_deg"],
+                    record.last_position["latitude_deg"],
+                    record.last_position["longitude_deg"],
+                )
+                record.max_distance_from_start_m = max(record.max_distance_from_start_m, moved)
         self._checkpoint(s)
         return ok
 
-    async def _mission_items_done(self, drone, record: MissionRecord) -> bool:
-        """True when the vehicle has flown every mission item.
+    def _mission_items_done(self, record: MissionRecord, s: MissionSettings) -> bool:
+        """True only when the vehicle has DEMONSTRABLY flown the mission items.
 
-        Three independent signals, any of which suffices - because no single one
-        is reliable across firmwares (measured on PX4 v1.16.2, 2026-08-12):
+        This gates the post-mission descent, and the descent is what the client
+        is told the mission finished by, so it must never be derivable from a
+        signal that is already true at item 0. It was: on 2026-08-12/13 PX4
+        refused the mission mode switch and loitered in ``HOLD`` over the launch
+        point, the old third signal read ``HOLD`` as "PX4 finished its mission",
+        and 33 of PX4's 44 T4 trials reported "mission items complete" about
+        seven seconds after start at 0% progress with the aircraft still on its
+        launch point. The models were told the mission had finished, and most of
+        them believed it.
 
-        1. MavSDK ``is_mission_finished()`` - reliable on ArduPilot;
-        2. the last ``mission_progress`` sample reaching ``current >= total`` -
-           populated on ArduPilot, but on PX4 the progress stream falls SILENT
-           once the mission ends (it only emits on waypoint transitions), so it
-           never arrives;
-        3. the flight mode dropping into ``HOLD`` - PX4 leaves mission execution
-           and loiters when it finishes, and this is the only one of the three
-           that actually fires there. ``HOLD`` is a PX4 mode name; ArduCopter
-           stays in ``AUTO`` through a mission and has no bare ``HOLD`` mode, so
-           this cannot mis-fire on ArduPilot mid-mission.
+        So the gate is evidence, and the order matters:
 
-        We never declare the mission *complete* from this alone - it only
-        triggers the post-mission descent; the authoritative completion is still
-        "landed and disarmed", and the caller gates this on was_airborne + the
-        RUNNING phase so a hold can only mean the mission is over.
+        1. the autopilot was actually SEEN executing the mission
+           (``mission_mode_confirmed``) - without that nothing else counts;
+        2. the mission actually PROGRESSED - an item past the one it started on
+           was reached, or the vehicle left the point it started from;
+        3. only then does "every item is accounted for" (``items_reached >=
+           total_items``, which ArduCopter reaches - measured: ``reached item
+           6/6``) or "left mission execution for HOLD" (PX4's "Mission finished,
+           loitering") mean the items are done.
+
+        ``mission_raw.is_mission_finished()`` is deliberately not consulted: it
+        does not exist on the MissionRaw plugin in MavSDK 3.0.1 (only on the
+        ``mission`` plugin), so the old call raised AttributeError inside a
+        suppress() on every poll and was never a signal on either firmware.
         """
-        with contextlib.suppress(Exception):
-            if bool(await asyncio.wait_for(drone.mission_raw.is_mission_finished(), timeout=5)):
-                return True
-        total = record.total_items
-        if total > 0 and record.current_item >= total:
+        if not record.mission_mode_confirmed:
+            return False
+        if not record.progressed(s.progress_distance_m):
+            return False
+        if record.total_items > 0 and record.items_reached >= record.total_items:
             return True
         return (record.last_flight_mode or "").upper() == "HOLD"
 
@@ -609,13 +789,37 @@ class MissionRunner:
                 self.set_phase(Phase.FAILED, s, reason=f"resume error: {e}")
 
 
-def _mission_items(build_raw_items, waypoints: list, takeoff_altitude_m: float, rtl: bool) -> list:
+def _mission_items(
+    build_raw_items,
+    waypoints: list,
+    takeoff_altitude_m: float,
+    rtl: bool,
+    home_placeholder: bool = True,
+) -> list:
     """Build raw mission items in the layout ArduPilot expects.
 
     seq 0 must be a HOME placeholder with ``current=0``; the first real item
     (the takeoff) carries ``current=1``. This is the layout QGroundControl
     produces, and MavSDK/ArduPilot reject or refuse to start anything else
     (measured: takeoff-at-seq-0 uploads but ``start_mission`` returns UNKNOWN).
+
+    ``home_placeholder=False`` drops seq 0 and makes the takeoff the first item.
+    That is the fallback layout for a firmware that does NOT reserve seq 0 for
+    home. PX4 does not: it reads the placeholder as a real waypoint, and while
+    the vehicle is in the air it then refuses the mission entirely -
+    "Switching to Mission is currently not available", COMMAND_ACK notwithstanding.
+    Measured on PX4 v1.16.2, llmuavpx4, 2026-08-19, four flights::
+
+        on the ground, placeholder present                 -> MISSION accepted
+        airborne, placeholder z=0 AMSL                     -> DENIED
+        airborne, placeholder z=home AMSL                  -> DENIED
+        airborne, placeholder present, current set past it -> DENIED
+        airborne, NO placeholder, takeoff at seq 0         -> MISSION accepted
+        airborne, NO placeholder, no takeoff item          -> MISSION accepted
+
+    so it is the placeholder's existence in flight, not its altitude and not the
+    takeoff item, that PX4 objects to. The runner only reaches for this layout
+    after the ArduPilot-shaped one failed to start; ArduPilot never gets here.
     """
     MAV_CMD_NAV_WAYPOINT = 16
     MAV_CMD_NAV_TAKEOFF = 22
@@ -628,22 +832,26 @@ def _mission_items(build_raw_items, waypoints: list, takeoff_altitude_m: float, 
     first_lat = float(first.get("latitude_deg", first.get("lat", 0.0)))
     first_lon = float(first.get("longitude_deg", first.get("lon", 0.0)))
 
-    dicts = [
+    dicts = []
+    if home_placeholder:
         # seq 0: HOME placeholder (content is ignored by the autopilot, which
         # substitutes its own home; the slot must exist).
+        dicts.append(
+            {
+                "seq": 0,
+                "frame": FRAME_GLOBAL_INT,
+                "command": MAV_CMD_NAV_WAYPOINT,
+                "current": 0,
+                "autocontinue": 1,
+                "x": int(round(first_lat * 1e7)),
+                "y": int(round(first_lon * 1e7)),
+                "z": 0.0,
+            }
+        )
+    # takeoff - the first real item, so it carries current=1.
+    dicts.append(
         {
-            "seq": 0,
-            "frame": FRAME_GLOBAL_INT,
-            "command": MAV_CMD_NAV_WAYPOINT,
-            "current": 0,
-            "autocontinue": 1,
-            "x": int(round(first_lat * 1e7)),
-            "y": int(round(first_lon * 1e7)),
-            "z": 0.0,
-        },
-        # seq 1: takeoff - the first real item, so it carries current=1.
-        {
-            "seq": 1,
+            "seq": len(dicts),
             "frame": FRAME_GLOBAL_REL_ALT,
             "command": MAV_CMD_NAV_TAKEOFF,
             "current": 1,
@@ -651,8 +859,8 @@ def _mission_items(build_raw_items, waypoints: list, takeoff_altitude_m: float, 
             "x": int(round(first_lat * 1e7)),
             "y": int(round(first_lon * 1e7)),
             "z": float(takeoff_altitude_m),
-        },
-    ]
+        }
+    )
     for wp in waypoints:
         lat = float(wp.get("latitude_deg", wp.get("lat", 0.0)))
         lon = float(wp.get("longitude_deg", wp.get("lon", 0.0)))

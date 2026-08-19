@@ -803,6 +803,11 @@ async def monitor_flight(ctx: Context, arrival_threshold_m: float = 20.0, auto_l
 
     Landing is automatic when the drone arrives (auto_land=True by default).
 
+    One exception to the loop: `status: "not_started"` means the drone is on the
+    ground and has NOT been airborne, so there is no flight to monitor. Do not
+    keep polling - get it airborne first. (A drone that never took off is on the
+    ground, which is why "on the ground" alone is not "mission complete".)
+
     Args:
         ctx (Context): The context of the request.
         arrival_threshold_m (float): Distance to consider "arrived" (default: 20m).
@@ -840,8 +845,31 @@ async def monitor_flight(ctx: Context, arrival_threshold_m: float = 20.0, auto_l
             current_alt = position.relative_altitude_m
             break
 
+        # Evidence latch: "on the ground" only means "landed" if there was a
+        # flight to land from. Without it, the first monitor_flight() call of a
+        # trial whose takeoff never happened answers "MISSION COMPLETE".
+        if is_in_air or current_alt >= 1.0:
+            connector.was_airborne = True
+
+        on_the_ground = landed_state_str == "ON_GROUND" or (not is_in_air and current_alt < 1.0)
+        if on_the_ground and not connector.was_airborne:
+            result = {
+                "DISPLAY_TO_USER": f"⚠️ ON THE GROUND | Alt: {current_alt:.1f}m | The drone has not flown yet",
+                "status": "not_started",
+                "altitude_m": round(current_alt, 1),
+                "action_required": (
+                    "The drone is still on the ground and has not been airborne, so there is "
+                    "nothing to monitor. Arm and take off (or start the mission) first, then "
+                    "call monitor_flight() again."
+                ),
+                "mission_complete": False,
+            }
+            log_tool_output(result)
+            return result
+
         # Check if landed (mission complete!)
-        if landed_state_str == "ON_GROUND" or (not is_in_air and current_alt < 1.0):
+        if on_the_ground:
+            connector.was_airborne = False
             logger.info(f"{LogColors.SUCCESS}✅ MISSION COMPLETE - Drone has landed!{LogColors.RESET}")
             get_flight_logger().log_entry("LANDED", "Mission complete")
 

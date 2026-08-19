@@ -44,6 +44,10 @@ def _status_payload(include_events: bool, event_limit: int) -> dict:
             "flight_mode": record.last_flight_mode,
             "armed": record.last_armed,
             "error": record.error,
+            # What the server actually SAW, so "completed" can be checked rather
+            # than taken on trust. A mission that never entered mission mode and
+            # never left its launch point cannot be reported as flown.
+            "progress_evidence": record.progress_evidence(),
             "auto_actions_fired": record.auto_actions_fired,
             "resumed_after_restart": record.resumed_after_restart,
             "event_count": len(record.events),
