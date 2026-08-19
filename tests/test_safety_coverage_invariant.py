@@ -33,7 +33,8 @@ NO_SPATIAL_OR_STATE_ARGS: dict[str, str] = {
     "land": "descends in place; the tool's own landing gate checks distance to destination",
     "return_to_launch": "flies to home, which is by definition inside any home-based fence",
     "kill_motors": "CRITICAL + confirmation token; a fence cannot make motor-kill safe",
-    "emergency_stop": "EMERGENCY tier; deliberately unguarded so it always works",
+    "emergency_stop": "EMERGENCY tier for land/rtl (ungated so they always work); "
+    "kill mode escalates to CRITICAL + token. No spatial argument either way, so no fence applies",
     "hold_position": "holds the current position - cannot leave the fence",
     "hold_mission_position": "holds the current position - cannot leave the fence",
     "set_flight_mode": "mode change, no target; modes are firmware-validated",

@@ -1,8 +1,11 @@
-"""Emergency stop (tier EMERGENCY - see docs/estop.md).
+"""Emergency stop (see docs/estop.md).
 
-Deliberately NOT confirmation-gated and exempt from rate limiting: requiring a
-token round-trip during an emergency would be a safety hazard. It still
-requires control scope and is always audited.
+The ``land`` and ``rtl`` recovery modes are tier EMERGENCY: deliberately NOT
+confirmation-gated and exempt from rate limiting, because requiring a token
+round-trip during an emergency would be a safety hazard. The ``kill`` mode cuts
+the motors (the drone falls), the same physical effect as ``kill_motors``, so
+it escalates to CRITICAL and requires the same confirmation token. All three
+modes require control scope and are always audited.
 """
 
 from mcp.server.fastmcp import Context
@@ -26,8 +29,11 @@ async def emergency_stop(ctx: Context, mode: str = "land") -> dict:
       will likely be destroyed.** Only for a genuine emergency where a
       falling drone is safer than a flying one (e.g. flyaway toward people).
 
-    This tool is exempt from the confirmation round-trip so it always works in
-    an emergency. It does NOT replace the out-of-band chain (RC takeover / GCS
+    The ``land`` and ``rtl`` recovery modes are exempt from the confirmation
+    round-trip so they always work in an emergency. ``kill`` cuts the motors and
+    is gated exactly like ``kill_motors``: call it once without a token to get a
+    single-use token plus this consequence, then repeat with that token to
+    execute. This tool does NOT replace the out-of-band chain (RC takeover / GCS
     / kill switch) - see docs/estop.md.
 
     Args:

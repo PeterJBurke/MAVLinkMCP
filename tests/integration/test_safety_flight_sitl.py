@@ -123,22 +123,33 @@ def test_emergency_stop_rejects_bad_mode(control_tools):
     assert result["status"] == "failed"
 
 
-def test_emergency_stop_kill_is_reachable_without_a_token(control_tools):
-    """B2 coverage (behaviour deliberately unchanged, pending Peter's ruling).
+def test_emergency_stop_kill_requires_a_confirmation_token(control_tools):
+    """FIX 4 (safety review 2026-08-19, option (b)): mode="kill" is gated.
 
-    mode="kill" was the one emergency_stop path with no test at all. It is
-    tier EMERGENCY: no confirmation token, no rate limit. Exercised here on the
-    GROUND and disarmed, where killing the motors is a no-op, so the test
-    proves reachability without risking a simulated crash.
+    Cutting the motors is the same physical effect as kill_motors, which has
+    always been token-gated. So emergency_stop kill mode now escalates to
+    CRITICAL and takes the same two-call handshake; the recovery modes (land,
+    rtl) stay ungated. Exercised on the GROUND and disarmed, where killing the
+    motors is a no-op, so the test proves the gate without risking a crash.
     """
     armed = control_tools.call("get_armed", timeout=30)
     assert armed.get("status") == "success" and armed["armed"] is False, (
         f"this test must run disarmed on the ground; state was {armed}"
     )
 
-    result = control_tools.call("emergency_stop", mode="kill", timeout=60)
-    assert result.get("status") != "confirmation_required", (
-        "emergency_stop must never require a token - a handshake during an emergency is itself a hazard"
+    # First call, no token: refused with a confirmation demand, nothing run.
+    issued = control_tools.call("emergency_stop", mode="kill", timeout=60)
+    assert issued["status"] == "confirmation_required", (
+        "kill mode must now require a confirmation token, exactly like kill_motors"
+    )
+    assert issued["confirm_token"], issued
+
+    still_disarmed = control_tools.call("get_armed", timeout=30)
+    assert still_disarmed["armed"] is False
+
+    # Second call quoting the token executes.
+    result = control_tools.call(
+        "emergency_stop", mode="kill", confirm_token=issued["confirm_token"], timeout=60
     )
     assert result["status"] in ("success", "failed"), result
     if result["status"] == "success":
@@ -147,6 +158,17 @@ def test_emergency_stop_kill_is_reachable_without_a_token(control_tools):
 
     still_disarmed = control_tools.call("get_armed", timeout=30)
     assert still_disarmed["armed"] is False
+
+
+def test_emergency_stop_recovery_modes_still_need_no_token(control_tools):
+    """The recovery modes stay ungated - a handshake in an emergency is itself
+    a hazard, so land and rtl must never demand a token."""
+    for mode in ("land", "rtl"):
+        result = control_tools.call("emergency_stop", mode=mode, timeout=60)
+        assert result.get("status") != "confirmation_required", (
+            f"emergency_stop(mode={mode!r}) is a safe recovery and must never require a token"
+        )
+        assert result["status"] in ("success", "failed"), result
 
 
 def test_emergency_stop_is_exempt_from_rate_limiting(control_tools):

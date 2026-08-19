@@ -130,12 +130,21 @@ emergency_stop(mode="kill")   # CUT MOTORS — the aircraft falls
 
 Design decisions, and why:
 
-- **It needs no confirmation step.** Every other dangerous command in this
-  server requires a two-call handshake: the first call returns a one-time token
-  plus a plain statement of the consequence, and only a second call quoting
-  that token executes. Requiring that during an emergency would itself be
-  dangerous, so this tool is exempt.
-- **It is exempt from rate limiting** for the same reason.
+- **The recovery modes (`land`, `rtl`) need no confirmation step.** Every other
+  dangerous command in this server requires a two-call handshake: the first call
+  returns a one-time token plus a plain statement of the consequence, and only a
+  second call quoting that token executes. Requiring that of a recovery command
+  during an emergency would itself be dangerous, so `land` and `rtl` are exempt.
+- **`kill` DOES require the confirmation token.** Cutting the motors makes the
+  aircraft fall, the same physical effect as the `kill_motors` tool, which has
+  always been token-gated. A safety review (2026-08-19) found that
+  `emergency_stop(mode="kill")` reached that effect with no token while
+  `kill_motors` did not, and the project owner chose to close the gap: `kill`
+  now takes the same two-call handshake as `kill_motors` (first call returns a
+  token and the consequence, second call quoting the token executes). The
+  recovery modes above are unchanged.
+- **The recovery modes are exempt from rate limiting** for the same reason they
+  skip the token; `kill`, being CRITICAL, is rate-limited like `kill_motors`.
 - **It still requires a control-scoped API key, and it is always logged.**
 - `land` and `rtl` first stop the repeating offboard instruction and cancel the
   watchdog — otherwise a stale instruction would keep commanding the aircraft

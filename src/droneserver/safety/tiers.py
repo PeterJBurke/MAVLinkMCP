@@ -272,7 +272,21 @@ def _critical_param(args: dict, state: dict) -> tuple[bool, str | None]:
     return False, None
 
 
-#: NORMAL -> CRITICAL escalations. Read together with TOOL_TIERS.
+def _estop_kill(args: dict, state: dict) -> tuple[bool, str | None]:
+    """emergency_stop(mode="kill") cuts motors instantly - the same physical
+    effect as kill_motors, which is token-gated. So kill mode escalates to
+    CRITICAL and requires the same confirmation round-trip. The recovery modes
+    (land, rtl) are safe de-energising actions and stay at EMERGENCY: never
+    token-gated, so they always work in an actual emergency.
+    """
+    if str(args.get("mode", "land")).lower() == "kill":
+        return True, "Cuts motors INSTANTLY. The drone falls and will likely be destroyed."
+    return False, None
+
+
+#: Escalations to CRITICAL. Read together with TOOL_TIERS: a NORMAL base
+#: escalates to CRITICAL when its predicate holds, and emergency_stop's
+#: EMERGENCY base escalates to CRITICAL for its "kill" mode only.
 ESCALATIONS: dict[str, Predicate] = {
     "disarm_drone": _disarm_in_air,
     "upload_geofence": _fence_write_in_air,
@@ -284,6 +298,7 @@ ESCALATIONS: dict[str, Predicate] = {
     "flight_logs": _erase_logs,
     "camera_storage": _format_storage,
     "set_parameter": _critical_param,
+    "emergency_stop": _estop_kill,
 }
 
 
@@ -297,7 +312,11 @@ def effective_tier(tool: str, args: dict, state: dict) -> tuple[Tier, str]:
     if base is None:
         return Tier.CRITICAL, f"Tool '{tool}' has no criticality classification; treated as critical."
     consequence = CONSEQUENCES.get(tool, f"Executes {tool}.")
-    if base is Tier.NORMAL and tool in ESCALATIONS:
+    # NORMAL tools escalate to CRITICAL for dangerous arguments/state. One
+    # EMERGENCY tool (emergency_stop) also escalates: its "kill" mode is a
+    # motor cut, so it is gated exactly like kill_motors while its safe
+    # recovery modes (land, rtl) stay EMERGENCY and ungated.
+    if base in (Tier.NORMAL, Tier.EMERGENCY) and tool in ESCALATIONS:
         escalate, override = ESCALATIONS[tool](args, state)
         if escalate:
             return Tier.CRITICAL, override or consequence
