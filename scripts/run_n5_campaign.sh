@@ -65,6 +65,7 @@ budget_for() {
                             # stop-before-the-$125-provider-cap rationale is superseded
                             # by that instruction; worst-case exposure of the four
                             # N=1 T6 trials is $19.30, real ~$1-4.
+    xai)       echo 130 ;;  # 100->130 2026-08-19 under Peter's T6-N5 \$150-campaign authorization: the ledger hit \$87.95 mid-makeups and the \$12/trial ceiling could not fit in the \$12.05 headroom, BUDGET-stopping grok-4.20-NR's three remaining trials; worst remaining xai exposure ~\$36
     *)         echo 100 ;;
   esac
 }
