@@ -17,6 +17,7 @@ echo "############ kimi-k3 OR retry ($(date -u +%FT%TZ)) ############"
 timeout 21600 /root/.local/bin/uv run python scripts/run_llm_missions.py \
     --missions T1,T2,T3,T4,T5,T7,T8,T9 --trials 1 \
     --model "moonshotai/kimi-k3" \
+    --endpoint-only "Moonshot AI" \
     --budget-usd 100 \
     --url http://127.0.0.1:8090/sse \
     --audit-log /var/lib/droneserver/audit.jsonl \
