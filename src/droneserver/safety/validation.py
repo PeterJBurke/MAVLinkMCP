@@ -15,6 +15,7 @@ from enum import Enum
 
 from droneserver.safety.config import SafetySettings
 from droneserver.safety.geofence import Geofence, check_mission, check_position
+from droneserver.telemetry.ground import height_above_launch_m
 
 
 @dataclass(frozen=True)
@@ -37,11 +38,22 @@ class Rejection:
 # --------------------------------------------------------------- altitude frames
 #
 # CAREFUL: tools do not agree on an altitude frame. Bounds and the geofence
-# ceiling are expressed as height ABOVE HOME (AGL-ish), so AMSL arguments must
-# be converted using the home altitude before they can be compared. If the home
-# altitude is not known yet, AMSL altitudes are NOT range-checked (checking
-# them against the wrong datum would reject legitimate commands); the
-# horizontal fence still applies. This is called out in docs/safety_review.md.
+# ceiling are expressed as height above the LAUNCH POINT (AGL-ish), so AMSL
+# arguments must be converted using a ground elevation before they can be
+# compared. If no ground elevation is known yet, AMSL altitudes are NOT
+# range-checked (checking them against the wrong datum would reject legitimate
+# commands); the horizontal fence still applies. This is called out in
+# docs/safety_review.md.
+#
+# WHICH ground elevation, and why it matters (FIX 12, 2026-08-19). Both the
+# conversion and the "how high is it now" reads used to run off datums that
+# MOVE: the autopilot's home follows every arm, and so does the relative
+# altitude measured from it. After a flight that armed 4.1 m lower down, a
+# ceiling of 120 m was really being enforced at 115.9 m or at 124.1 m depending
+# on the sign - and the second of those is a safety layer permitting what it
+# was configured to refuse. Heights are now measured against the session's
+# launch elevation, recorded at link-up before anything armed, with the
+# autopilot's home kept only as the fallback it always was.
 
 REL = "relative"  # metres above home / takeoff point
 AMSL = "amsl"  # metres above mean sea level
@@ -92,9 +104,43 @@ _ALTITUDE_ONLY_ARGS: dict[str, tuple[str, str]] = {
 }
 
 
+def _launch_amsl(state: dict) -> float | None:
+    """The ground elevation every height in this module is measured against.
+
+    The session's launch point first - it is recorded once, at link-up, before
+    anything armed, so it cannot follow the aircraft. The autopilot's home is
+    the fallback: it moves to wherever the aircraft last armed, but it is the
+    only other elevation there is, and using it is exactly the behaviour that
+    was here before. ``None`` means no datum at all, and the callers below then
+    decline to range-check rather than check against a datum they do not have.
+    """
+    launch = state.get("session_launch_amsl_m")
+    if launch is not None:
+        return float(launch)
+    home = state.get("home_altitude_m")
+    return None if home is None else float(home)
+
+
+def _current_height_m(state: dict) -> float | None:
+    """How high the vehicle is NOW, above the launch point. None if unknown.
+
+    Used wherever a commanded offset is resolved against the live altitude. The
+    raw ``relative_altitude_m`` is the fallback inside
+    :func:`~droneserver.telemetry.ground.height_above_launch_m`, not the
+    preference: on its own it is measured from the last arming point, so a
+    climb command resolved against it can clear a ceiling it should not.
+    """
+    position = state.get("position") or {}
+    return height_above_launch_m(
+        _launch_amsl(state),
+        position.get("absolute_altitude_m"),
+        position.get("relative_altitude_m"),
+    )
+
+
 def _relative_altitude(tool: str, args: dict, state: dict) -> float | None:
-    """Target altitude expressed as metres above home, or None if it cannot be
-    determined (unknown frame or missing home altitude)."""
+    """Target altitude expressed as metres above the launch point, or None if
+    it cannot be determined (unknown frame or no ground elevation known)."""
     frame: str | None = None
     raw: float | None = None
     if tool in _ALTITUDE_ONLY_ARGS:
@@ -113,11 +159,11 @@ def _relative_altitude(tool: str, args: dict, state: dict) -> float | None:
         return raw
     if frame == NED_DOWN:
         return -raw  # down is negative-up
-    # AMSL: needs the home altitude to become comparable
-    home_amsl = state.get("home_altitude_m")
-    if home_amsl is None:
+    # AMSL: needs a ground elevation to become comparable
+    launch_amsl = _launch_amsl(state)
+    if launch_amsl is None:
         return None
-    return raw - float(home_amsl)
+    return raw - launch_amsl
 
 
 #: Tools that command a speed.
@@ -185,10 +231,13 @@ def check_parameter_bounds(tool: str, args: dict, s: SafetySettings, state: dict
                 f"single-command distance of {s.max_distance_from_home_m:.0f} m",
                 f"Break the move into steps of at most {s.max_distance_from_home_m:.0f} m.",
             )
-        position = state.get("position") or {}
         down = _num(args, "down_m")
-        if altitude is None and down is not None and position.get("relative_altitude_m") is not None:
-            altitude = position["relative_altitude_m"] - down
+        # Resolved against how high the vehicle is above its LAUNCH point, not
+        # above wherever it last armed: the ceiling this is about to be checked
+        # against is expressed in the former.
+        current_height = _current_height_m(state)
+        if altitude is None and down is not None and current_height is not None:
+            altitude = current_height - down
     if altitude is not None and altitude > s.max_altitude_m:
         return Rejection(
             "bounds.max_altitude",
@@ -595,7 +644,11 @@ def resolve_target(
     """
     position = state.get("position") or {}
     cur_lat, cur_lon = position.get("latitude_deg"), position.get("longitude_deg")
-    cur_alt = position.get("relative_altitude_m")
+    # Height above the LAUNCH point, which is the frame the fence ceiling is
+    # expressed in. The autopilot's relative reading is the fallback inside
+    # height_above_launch_m, used only when there is no absolute altitude or no
+    # launch elevation to measure against.
+    cur_alt = _current_height_m(state)
 
     if tool in _TARGET_LOCATION_TOOLS:
         if str(args.get("action", "")).lower() != "target":

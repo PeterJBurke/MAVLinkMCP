@@ -192,6 +192,20 @@ def _drone_from_ctx(ctx):
         return None
 
 
+def _session_launch_from_ctx(ctx):
+    """The connector's launch record, or None.
+
+    Where this session started is the only ground elevation that does not move
+    with the aircraft (the autopilot's home follows every arm), so the state
+    tracker measures heights against it. Best effort: without it the layer
+    falls back to the autopilot's home exactly as before.
+    """
+    try:
+        return getattr(ctx.request_context.lifespan_context, "session_launch", None)
+    except Exception:
+        return None
+
+
 # --------------------------------------------------------------- pipeline
 
 
@@ -212,8 +226,11 @@ async def _evaluate(tool: str, args: dict, ctx, s: SafetySettings) -> tuple[dict
 
     state: dict = {"unknown": True}
     if tool in _STATE_DEPENDENT:
-        state = await LAYER.state_tracker.refresh(_drone_from_ctx(ctx), s.state_cache_ttl_s)
+        state = await LAYER.state_tracker.refresh(
+            _drone_from_ctx(ctx), s.state_cache_ttl_s, session_launch=_session_launch_from_ctx(ctx)
+        )
     else:
+        LAYER.state_tracker.note_session_launch(_session_launch_from_ctx(ctx))
         state = LAYER.state_tracker.state.snapshot()
 
     tier, consequence = effective_tier(tool, args, state)

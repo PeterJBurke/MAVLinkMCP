@@ -95,7 +95,14 @@ def check_position(
 ) -> FenceViolation | None:
     """Check one target position against the fence. Returns the first
     violation, or None if the target is allowed. ``None`` coordinates are
-    skipped (e.g. an altitude-only check)."""
+    skipped (e.g. an altitude-only check).
+
+    ``altitude_m`` is frame-agnostic here - this function compares whatever it
+    is given against the ceiling - so the FRAME is the caller's contract, and
+    the contract is: height above the launch point. Callers must not pass the
+    autopilot's raw ``relative_altitude_m``, whose datum moves to wherever the
+    aircraft last armed; see :mod:`droneserver.telemetry.ground` and the
+    callers in ``safety.validation`` and ``missions.runner``."""
     if not fence.active:
         return None
 
@@ -157,6 +164,10 @@ def check_mission(fence: Geofence, waypoints: list[dict]) -> list[tuple[int, Fen
             continue
         lat = wp.get("latitude_deg", wp.get("lat"))
         lon = wp.get("longitude_deg", wp.get("lon"))
+        # Not a telemetry reading and not a datum question: this is the
+        # caller's REQUESTED waypoint altitude, checked before anything is
+        # uploaded, and mission waypoints are flown in the relative-to-home
+        # frame. It is already expressed in the frame the ceiling uses.
         alt = wp.get("altitude_m", wp.get("relative_altitude_m", wp.get("alt")))
         try:
             lat = float(lat) if lat is not None else None

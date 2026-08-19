@@ -16,6 +16,7 @@ import contextlib
 import time
 from dataclasses import dataclass, field
 
+from droneserver.telemetry.ground import IN_THE_AIR_STATES, height_above_launch_m
 from droneserver.telemetry.home import read_home
 
 
@@ -27,7 +28,16 @@ class FlightState:
     in_air: bool = False
     unknown: bool = True
     home: tuple[float, float] | None = None
+    #: Elevation of the autopilot's HOME. Careful: ArduPilot moves home to
+    #: wherever the aircraft last armed, so this datum travels with the flight.
+    #: Prefer ``session_launch_amsl_m`` wherever a stable ground reference is
+    #: needed - this is the fallback, kept because it is the only other thing
+    #: there is (see :mod:`droneserver.telemetry.ground`).
     home_altitude_m: float | None = None
+    #: Elevation of the point this SESSION started from, taken from the
+    #: connector's ``session_launch`` (recorded at link-up, before anything
+    #: armed, and never overwritten). This one does not move.
+    session_launch_amsl_m: float | None = None
     #: Live position - required to fence offset/velocity commands.
     position: dict | None = None
     fetched_at: float = 0.0
@@ -45,6 +55,7 @@ class FlightState:
             "unknown": self.unknown,
             "home": self.home,
             "home_altitude_m": self.home_altitude_m,
+            "session_launch_amsl_m": self.session_launch_amsl_m,
             "position": self.position,
             "seconds_since_takeoff": since,
             "mission_uploaded": self.mission_uploaded,
@@ -80,16 +91,35 @@ class StateTracker:
             except Exception:
                 pass  # firmware may not support this topic; the fallbacks cover it
 
-    async def refresh(self, drone, ttl_s: float, timeout_s: float = 8.0) -> dict:
+    def note_session_launch(self, session_launch: dict | None) -> None:
+        """Adopt the connector's launch elevation. First writer wins.
+
+        The connector records it once, at link-up, before anything armed, so it
+        is the elevation of the ground the aircraft was standing on when this
+        session began. Never overwritten here for the same reason it is never
+        overwritten there: a datum that follows the aircraft is the defect this
+        exists to avoid.
+        """
+        if self.state.session_launch_amsl_m is not None or not session_launch:
+            return
+        amsl = session_launch.get("absolute_altitude_m")
+        if amsl is not None:
+            self.state.session_launch_amsl_m = float(amsl)
+
+    async def refresh(self, drone, ttl_s: float, timeout_s: float = 8.0, session_launch: dict | None = None) -> dict:
         """Return a state snapshot, refreshing from telemetry if stale.
 
         Topics are read independently and degrade gracefully: on ArduPilot
         ``in_air`` and ``home`` can take several seconds to emit their first
         sample, and ``in_air`` is not published at all on some setups, so it
-        falls back to ``landed_state`` and then to relative altitude. The
-        snapshot is only marked ``unknown`` when the vehicle's armed state -
-        the one fact every precondition needs - cannot be read.
+        falls back to ``landed_state`` and then to altitude. The snapshot is
+        only marked ``unknown`` when the vehicle's armed state - the one fact
+        every precondition needs - cannot be read.
+
+        ``session_launch`` is the connector's launch record, threaded through so
+        heights can be measured against a datum the autopilot cannot move.
         """
+        self.note_session_launch(session_launch)
         now = time.monotonic()
         if drone is None:
             self.state.unknown = True
@@ -110,6 +140,11 @@ class StateTracker:
 
             with contextlib.suppress(Exception):
                 position = await _first(drone.telemetry.position(), timeout_s)
+                # Raw capture, both frames. Nothing here compares them: the
+                # rules ask validation._current_height_m, which prefers the
+                # absolute reading against session_launch_amsl_m and keeps the
+                # relative one only as the fallback for a vehicle that has no
+                # launch elevation recorded.
                 self.state.position = {
                     "latitude_deg": position.latitude_deg,
                     "longitude_deg": position.longitude_deg,
@@ -117,7 +152,7 @@ class StateTracker:
                     "absolute_altitude_m": position.absolute_altitude_m,
                 }
 
-            in_air = await _read_in_air(drone, timeout_s)
+            in_air = await _read_in_air(drone, timeout_s, self.state.session_launch_amsl_m)
             if in_air is None:
                 # Cannot tell whether we are flying. Treat as unknown so the
                 # configured fail-open/fail-closed policy decides, rather than
@@ -167,10 +202,29 @@ class StateTracker:
         self._home_attempted_at = 0.0
 
 
-async def _read_in_air(drone, timeout_s: float) -> bool | None:
+async def _read_in_air(drone, timeout_s: float, launch_amsl_m: float | None = None) -> bool | None:
     """Is the vehicle airborne? Tries in_air, then landed_state, then altitude.
 
     Returns None when none of the three answer (state genuinely unknown).
+
+    The order is deliberate and is NOT
+    :func:`droneserver.telemetry.ground.ground_evidence`'s: ``in_air`` is the
+    direct answer to the question this function asks, it is the order this
+    layer has always used, and where the two topics disagree (a bounce, a
+    hard landing) the established reading decides. Both are the autopilot's
+    own assessment, so neither moves with an arming.
+
+    The third fallback did move. It compared ``relative_altitude_m`` - measured
+    from wherever the aircraft last ARMED - against 1 m, so a parked aircraft
+    carrying a +4.1 m datum offset (measured 2026-08-19) read as flying, and
+    the navigation preconditions that require "airborne" would have let a
+    phantom return fly from a vehicle standing on its pad. It is now measured
+    against the session's launch elevation where one is known.
+
+    It is still the LAST resort: a height above the launch field is not a
+    height above the ground the aircraft is actually standing on, so over
+    different terrain it can still be wrong. The two topics above are the
+    evidence; this only speaks when both are silent.
     """
     try:
         return bool(await _first(drone.telemetry.in_air(), timeout_s))
@@ -179,7 +233,7 @@ async def _read_in_air(drone, timeout_s: float) -> bool | None:
     try:
         landed = await _first(drone.telemetry.landed_state(), timeout_s)
         name = str(landed).rsplit(".", 1)[-1].upper()
-        if name in ("IN_AIR", "TAKING_OFF", "LANDING"):
+        if name in IN_THE_AIR_STATES:
             return True
         if name == "ON_GROUND":
             return False
@@ -187,7 +241,12 @@ async def _read_in_air(drone, timeout_s: float) -> bool | None:
         pass
     try:
         position = await _first(drone.telemetry.position(), timeout_s)
-        return position.relative_altitude_m > 1.0
+        height = height_above_launch_m(
+            launch_amsl_m,
+            getattr(position, "absolute_altitude_m", None),
+            position.relative_altitude_m,
+        )
+        return None if height is None else height > 1.0
     except Exception:
         return None
     return None

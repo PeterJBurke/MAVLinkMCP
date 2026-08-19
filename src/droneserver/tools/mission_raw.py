@@ -80,7 +80,13 @@ def _validate_imported_mission(mission_items) -> dict | None:
     AMSL_FRAMES = (0, 5)
     RELATIVE_FRAMES = (3, 6, 10, 11)
     POSITIONAL_COMMANDS = (16, 21, 22, 82)
-    home_amsl = LAYER.state_tracker.state.home_altitude_m
+    # Which ground elevation the AMSL items are converted against: the session's
+    # launch point if the state tracker has it, because the autopilot's home
+    # moves to wherever the aircraft last armed and would enforce the plan's
+    # ceiling metres away from where the operator set it (FIX 12). The home is
+    # the fallback, and no elevation at all still means "horizontal only".
+    state = LAYER.state_tracker.state
+    ground_amsl = state.session_launch_amsl_m if state.session_launch_amsl_m is not None else state.home_altitude_m
 
     waypoints = []
     for item in mission_items:
@@ -91,9 +97,9 @@ def _validate_imported_mission(mission_items) -> dict | None:
         altitude = None
         if item.frame in RELATIVE_FRAMES:
             altitude = item.z
-        elif item.frame in AMSL_FRAMES and home_amsl is not None:
-            altitude = item.z - float(home_amsl)
-        # else: AMSL with no known home - horizontal position is still checked
+        elif item.frame in AMSL_FRAMES and ground_amsl is not None:
+            altitude = item.z - float(ground_amsl)
+        # else: AMSL with no ground elevation - horizontal position is still checked
         waypoints.append(
             {
                 "latitude_deg": item.x / 1e7,
