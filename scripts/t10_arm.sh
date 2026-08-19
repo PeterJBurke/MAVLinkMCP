@@ -26,6 +26,11 @@ MAX_TURNS="${MAX_TURNS:-150}"
 # actual credit on the key being flown (anthropic 2026-08-19: 360.45 ledger +
 # $45 top-up = 405).
 BUDGET_USD="${BUDGET_USD:-260}"
+# Per-trial money ceiling. Default was the harness's $5, which structurally
+# binds opus pricing on a >10-min mission (Peter's ruling 2026-08-19: raise to
+# $12, the T6-campaign precedent, and refly the four ceiling-cut rows; frantic
+# pollers still fail via the 150-turn ceiling, so discrimination is preserved).
+MAX_TRIAL_COST_USD="${MAX_TRIAL_COST_USD:-12}"
 set -a; . /root/llmuav.env; set +a
 export DRONESERVER_API_KEY=$(grep "^SAFETY_API_KEYS=" /etc/droneserver/staging.env | cut -d= -f2- | cut -d, -f1 | cut -d: -f2)
 export DRONESERVER_RECORDER_API_KEY=$(cat /root/llmuav-recorder.key)
@@ -36,6 +41,7 @@ for model in $MODELS; do
   timeout 5400 /root/.local/bin/uv run python scripts/run_llm_missions.py \
       --missions T10 --trials 1 --model "$model" --include-slow \
       --max-turns "$MAX_TURNS" \
+      --max-trial-cost-usd "$MAX_TRIAL_COST_USD" \
       --budget-usd "$BUDGET_USD" \
       --url http://127.0.0.1:8090/sse \
       --audit-log /var/lib/droneserver/audit.jsonl \
