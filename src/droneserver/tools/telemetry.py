@@ -189,32 +189,49 @@ async def get_battery(ctx: Context) -> dict:
         "voltage_v": round(voltage, 2),
         "remaining_percent": round(percent_raw * 100, 1),  # Convert to percentage
     }
-    # Handle case where percentage is unavailable/uncalibrated (0% with good voltage)
-    if percent_raw == 0.0 and voltage > 10.0:
-        battery_data["note"] = "⚠️  Battery percentage unavailable - using voltage estimate"
-        battery_data["calibration_status"] = "Uncalibrated or not supported by autopilot"
-        # Rough 4S LiPo estimate: 16.8V full, 14.8V nominal, 14.0V empty
-        if voltage >= 16.0:
-            estimated_percent = 90
-        elif voltage >= 15.2:
-            estimated_percent = 75
-        elif voltage >= 14.8:
-            estimated_percent = 50
-        elif voltage >= 14.0:
-            estimated_percent = 25
+
+    calibrated = percent_raw > 0.0
+    if not calibrated and voltage > 10.0:
+        # The autopilot reported no usable remaining percentage (capacity not
+        # calibrated, or not supported). Report that honestly as UNKNOWN rather
+        # than inventing a number. The previous code assumed a 4S pack and, on a
+        # healthy 3S pack, read 12.6 V (a FULL 3S) as roughly 10% and raised a
+        # "LOW BATTERY - Land soon" alarm, which made models responsibly abort
+        # good flights. A missing calibration is not evidence of a low battery,
+        # so no low-battery warning is emitted from it. A pack-agnostic per-cell
+        # figure gives a rough state that is explicitly labelled uncertain.
+        battery_data["remaining_percent"] = None
+        battery_data["calibration_status"] = (
+            "unknown - autopilot did not report a calibrated remaining percentage"
+        )
+        cells = max(1, round(voltage / 3.7))  # nominal LiPo cell is ~3.7 V
+        per_cell = voltage / cells
+        if per_cell >= 4.1:
+            level = "full"
+        elif per_cell >= 3.8:
+            level = "nominal"
+        elif per_cell >= 3.6:
+            level = "getting low"
         else:
-            estimated_percent = 10
-        battery_data["estimated_percent"] = estimated_percent
-        battery_data["hint"] = "Set battery capacity parameter (BATT_CAPACITY) for accurate readings"
+            level = "low"
+        battery_data["voltage_state_estimate"] = (
+            f"~{level} (UNCERTAIN: {per_cell:.2f} V/cell across an estimated {cells}S pack; "
+            "a voltage guess, not a calibrated reading, so treat it as advisory only)"
+        )
+        battery_data["hint"] = (
+            "Set the battery capacity parameter (BATT_CAPACITY / BAT_CAPACITY) for an accurate percentage"
+        )
+    elif calibrated:
+        # A genuine, calibrated reading: real low-battery warnings still fire.
+        if percent_raw < 0.20:
+            battery_data["warning"] = "⚠️  LOW BATTERY - Land soon!"
+        elif percent_raw < 0.30:
+            battery_data["warning"] = "Battery getting low - consider landing"
 
-    effective_percent = percent_raw if percent_raw > 0 else (battery_data.get("estimated_percent", 100) / 100)
-    if effective_percent < 0.20:
-        battery_data["warning"] = "⚠️  LOW BATTERY - Land soon!"
-    elif effective_percent < 0.30:
-        battery_data["warning"] = "Battery getting low - consider landing"
-
+    shown_percent = battery_data["remaining_percent"]
     logger.info(
-        f"{LogColors.STATUS}Battery: {battery_data['voltage_v']}V, {battery_data['remaining_percent']}%{LogColors.RESET}"
+        f"{LogColors.STATUS}Battery: {battery_data['voltage_v']}V, "
+        f"{shown_percent if shown_percent is not None else 'unknown'}%{LogColors.RESET}"
     )
     return {"status": "success", "battery": battery_data}
 
