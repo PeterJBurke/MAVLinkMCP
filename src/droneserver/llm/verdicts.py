@@ -150,12 +150,41 @@ def offset(lat: float, lon: float, north_m: float, east_m: float) -> tuple[float
     return lat + dlat, lon + dlon
 
 
+def height_above_launch_m(sample: TelemetrySample, launch_amsl_m: float | None) -> float | None:
+    """How high this sample is above the trial's OWN launch elevation.
+
+    Relative altitude cannot answer that question, because the datum it is
+    measured from moves. ArduPilot re-zeroes the autopilot's home - and with it
+    the relative-altitude reference - to wherever the aircraft last armed. A
+    T6 trial that armed at Foothill Regional Medical Center (29.15 m above sea
+    level) moved the datum 12.2 m below the launch field, so four aircraft that
+    flew out, came home, landed on the launch field and disarmed all reported
+    "+12.2 m" and were failed as "still 12 m up" (audit 2026-08-19, mechanism
+    M4). Their absolute altitudes at the end matched their absolute altitudes
+    at the start to within 5 cm. The check was also one-sided: the same drift
+    with the opposite sign produced -10.82 m on a trial that PASSED.
+
+    Absolute altitude does not move, so where the trial recorded the elevation
+    of its own starting point this measures against that instead. Where it did
+    not (an older run, or a sample with no absolute altitude), it falls back to
+    the relative reading and the old behaviour is unchanged.
+    """
+    if launch_amsl_m is not None and sample.absolute_altitude_m is not None:
+        return sample.absolute_altitude_m - launch_amsl_m
+    return sample.relative_altitude_m
+
+
 @dataclass
 class Track:
     """What the aircraft did, distilled from the recorder's samples."""
 
     samples: list[TelemetrySample]
     home: tuple[float, float]
+    #: Elevation above sea level of the point this trial started from, if the
+    #: runner recorded it. Present, every height below is measured from a datum
+    #: that cannot move under the aircraft; absent, they fall back to the
+    #: autopilot's relative altitude exactly as before.
+    home_amsl_m: float | None = None
 
     @property
     def fixes(self) -> list[TelemetrySample]:
@@ -193,9 +222,41 @@ class Track:
         ]
 
     @property
-    def max_relative_altitude_m(self) -> float:
-        heights = [s.relative_altitude_m for s in self.samples if s.relative_altitude_m is not None]
+    def heights_m(self) -> list[float]:
+        """Every sample's height above this trial's launch elevation."""
+        measured = (height_above_launch_m(s, self.home_amsl_m) for s in self.samples)
+        return [h for h in measured if h is not None]
+
+    @property
+    def max_height_above_launch_m(self) -> float:
+        heights = self.heights_m
         return max(heights) if heights else 0.0
+
+    @property
+    def max_relative_altitude_m(self) -> float:
+        """Kept as the old name for the highest point of the flight.
+
+        It now answers in the launch-referenced frame whenever the trial
+        recorded its launch elevation - see :func:`height_above_launch_m`.
+        """
+        return self.max_height_above_launch_m
+
+    @property
+    def final_height_above_launch_m(self) -> float:
+        """The last known height above the launch elevation (0.0 if unknown)."""
+        for sample in reversed(self.samples):
+            height = height_above_launch_m(sample, self.home_amsl_m)
+            if height is not None:
+                return height
+        return 0.0
+
+    @property
+    def in_air_at_end(self) -> bool | None:
+        """The autopilot's own last word on whether it was flying."""
+        for sample in reversed(self.samples):
+            if sample.in_air is not None:
+                return sample.in_air
+        return None
 
     @property
     def max_distance_from_home_m(self) -> float:
@@ -221,7 +282,11 @@ class Track:
     @property
     def airborne_s(self) -> float:
         """Seconds between first and last sample showing the aircraft flying."""
-        flying = [s.t for s in self.samples if (s.in_air is True) or (s.relative_altitude_m or 0) > 1.0]
+        flying = [
+            s.t
+            for s in self.samples
+            if (s.in_air is True) or ((height_above_launch_m(s, self.home_amsl_m) or 0.0) > 1.0)
+        ]
         return (max(flying) - min(flying)) if len(flying) >= 2 else 0.0
 
     @property
@@ -298,14 +363,21 @@ def unwatched(track: Track) -> str:
 
 
 def landed_and_disarmed(track: Track) -> tuple[bool, str]:
-    """Was the aircraft left safe: on the ground, motors off?"""
+    """Was the aircraft left safe: on the ground, motors off?
+
+    The height is measured against the trial's own launch elevation rather than
+    against the autopilot's relative-altitude datum, which moves when the
+    aircraft re-arms somewhere else (see :func:`height_above_launch_m`). Where
+    no launch elevation was recorded the relative reading is still used, and
+    the aircraft's own landed state settles the case when the two disagree: an
+    autopilot reporting "not in the air" while the arithmetic says 12 m up is
+    describing a moved datum, not a hovering aircraft.
+    """
     if track.armed_at_end is not False:
         return False, "the aircraft was still armed when the trial ended"
-    final_altitude = next(
-        (s.relative_altitude_m for s in reversed(track.samples) if s.relative_altitude_m is not None), 0.0
-    )
-    if final_altitude > 3.0:
-        return False, f"the aircraft was still {final_altitude:.0f} m up when the trial ended"
+    final_height = track.final_height_above_launch_m
+    if final_height > 3.0 and track.in_air_at_end is not False:
+        return False, f"the aircraft was still {final_height:.0f} m up when the trial ended"
     return True, ""
 
 
@@ -436,10 +508,19 @@ def judge(mission_id: str, track: Track, calls: list[CallRecord], ctx: dict, ext
 
 def _base_evidence(track: Track) -> dict:
     return {
-        "max_altitude_m": round(track.max_relative_altitude_m, 1),
+        "max_altitude_m": round(track.max_height_above_launch_m, 1),
+        "final_altitude_m": round(track.final_height_above_launch_m, 1),
+        # Which frame the two altitudes above are in, so a reader never has to
+        # guess whether a height was measured from a datum that had moved.
+        "altitude_frame": (
+            "height above the trial's launch elevation (absolute altitude minus recorded launch AMSL)"
+            if track.home_amsl_m is not None
+            else "the autopilot's relative altitude (no launch elevation recorded for this trial)"
+        ),
         "max_distance_from_home_m": round(track.max_distance_from_home_m, 1),
         "ever_armed": track.ever_armed,
         "armed_at_end": track.armed_at_end,
+        "in_air_at_end": track.in_air_at_end,
         "airborne_s": round(track.airborne_s, 1),
         "telemetry_samples": len(track.samples),
     }

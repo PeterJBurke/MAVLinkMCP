@@ -87,7 +87,7 @@ from droneserver.llm.mcp_session import (
     MultiServerSession,
     ToolSession,
 )
-from droneserver.llm.prompts import SYSTEM_PROMPT, mission_prompts, system_prompt
+from droneserver.llm.prompts import mission_prompts, system_prompt
 from droneserver.llm.providers import ToolSpec, open_session, resolve_model
 from droneserver.llm.spend import BudgetExceeded, Price, SpendLedger, project_trial_cost_usd
 from droneserver.llm.verdicts import TRACK_HEADER, Track, Verdict, distance_m, judge
@@ -586,6 +586,14 @@ def _record_spend(config: SuiteConfig, result: TrialResult, log) -> None:
         f"[{_utc()}] spend: ${result.cost_usd:.4f} this trial; ${cumulative:.2f} of "
         f"${config.ledger.budget_usd:.2f} used on {config.key_id}"
     )
+
+
+def _as_float(value: object) -> float | None:
+    """``value`` as a number, or ``None``. Used for optional context readings."""
+    try:
+        return None if value is None else float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
 
 
 def _link_errors(calls: list[CallRecord]) -> int:
@@ -1136,7 +1144,11 @@ async def _run_trial(
 
     capture_status = await _finalize_capture(config, trial_capture, ctx, mission_id, trial, run, capture_started, log)
 
-    track = Track(poller.samples, ctx["home"])
+    # The trial's own origin AND the elevation of that origin: the verdicts
+    # measure height from the second one, because the autopilot's relative
+    # altitude is measured from a datum that re-zeroes wherever the aircraft
+    # last armed (see verdicts.height_above_launch_m).
+    track = Track(poller.samples, ctx["home"], _as_float(ctx.get("home_amsl_m")))
     link_errors = _link_errors(run.calls)
     if link_errors >= LINK_ERROR_THRESHOLD:
         log(
