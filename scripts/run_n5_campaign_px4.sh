@@ -114,7 +114,7 @@ for model in $MODELS; do
       --dataflash-remote llmuavpx4:/var/lib/px4-sitl/log \
       --param-name MPC_XY_CRUISE --param-write-value 8.0 \
       --require-complete-capture \
-      2>&1 | grep -E -A2 "^model:|^price:|^budget:|PASS |FAIL |VOID|LINK |BUDGET|PROVIDER|spend:|spend on|capture:|degraded|ERROR|Error|Traceback|passed on"
+      2>&1 | grep -E -A2 "^model:|^price:|^budget:|PASS |FAIL |VOID|LINK |BUDGET|PROVIDER|spend:|spend on|capture:|degraded|ERROR|Error|Traceback|HARNESS CRASH|passed on"
   rc=${PIPESTATUS[0]}
   case "$rc" in
     0) verdict="all judged missions passed" ;;
@@ -123,6 +123,11 @@ for model in $MODELS; do
     3) verdict="PROVIDER REFUSED THE KEY - remaining trials abandoned"
        REFUSED="$REFUSED $model" ;;
     4) verdict="missions ran but a Plan 19 capture bundle came out DEGRADED" ;;
+    # 5 = OUR harness crashed mid-trial. A VOID row naming the exception is in
+    #     missions.csv and the harness tried to land the aircraft on its way
+    #     out - but nothing here is a result about the model, and the vehicle
+    #     should be looked at before anything else flies.
+    5) verdict="THE HARNESS CRASHED mid-trial - trial recorded VOID; CHECK THE AIRCRAFT" ;;
     124) verdict="TIMED OUT after ${PER_MODEL_TIMEOUT}s - trials were cut off" ;;
     *) verdict="unexpected exit" ;;
   esac

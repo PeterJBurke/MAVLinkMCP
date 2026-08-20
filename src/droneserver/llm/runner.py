@@ -72,6 +72,7 @@ import csv
 import json
 import statistics
 import time
+import traceback
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -98,6 +99,18 @@ if TYPE_CHECKING:  # the capture layer is imported lazily, never at runtime here
     from droneserver.benchmark.capture_session import CaptureConfig
 
 HARNESS_CLIENT_NAME = "droneserver-llm-harness"
+
+
+class HarnessCrash(RuntimeError):
+    """The harness itself failed mid-run, and the run is not a result.
+
+    Raised by :func:`run_llm_suite` after it has done everything it still can:
+    tried to land the aircraft, closed what it could, and written a VOID row for
+    the trial that was in the air. The caller turns it into a distinct exit code
+    so a campaign script can tell "the model flew badly" from "our own harness
+    fell over" without reading prose.
+    """
+
 
 #: Signatures of the drone link itself being down, rather than a tool saying
 #: no. The server talks to the aircraft through a helper process; if that
@@ -357,8 +370,14 @@ class TrialResult:
     #: :func:`droneserver.llm.verdicts.not_evaluated`.
     not_evaluated: bool = False
     #: Plan 19 bundle verdict for this trial: ``complete`` / ``degraded[...]``,
-    #: or ``""`` when the trial was flown without ``--capture``.
+    #: or ``""`` when the trial was flown without ``--capture``. capture_status
+    #: is about the bundle, never about the flight.
     capture_status: str = ""
+    #: The exception that ended the run while this trial was in the air, if the
+    #: harness crashed rather than the trial finishing. It is recorded as VOID
+    #: (``not_evaluated``): the aircraft flew, but nothing measured it to the
+    #: end, so it is neither a pass nor a failure. See :func:`run_llm_suite`.
+    harness_crash: str = ""
 
     @property
     def verdict_label(self) -> str:
@@ -802,6 +821,12 @@ async def run_llm_suite(config: SuiteConfig, log=print) -> list[TrialResult]:
     #: the model runs, so it starts with a clean critical budget. 0 = no wait.
     pace_until = 0.0
 
+    #: The trial that is in the air right now, so that a crash can say which one
+    #: it lost. ``None`` between trials.
+    in_flight: tuple[str, int] | None = None
+    #: What ended the run, if anything other than running out of missions.
+    crash: BaseException | None = None
+
     harness = LiveMCPSession(config.url, config.api_key, HARNESS_CLIENT_NAME, "2")
     await harness.__aenter__()
     try:
@@ -889,6 +914,7 @@ async def run_llm_suite(config: SuiteConfig, log=print) -> list[TrialResult]:
                         f"[{_utc()}] budget: ${left:.2f} left on {config.key_id}; this trial is "
                         f"capped at ${projected:.2f}"
                     )
+                in_flight = (mission_id, trial)
                 result = await _run_trial(
                     config, harness, ctx, prompts[mission_id], mission_id, trial, agent_version, log, pace_until
                 )
@@ -916,6 +942,7 @@ async def run_llm_suite(config: SuiteConfig, log=print) -> list[TrialResult]:
                     result.harness_intervened = (
                         f"{result.harness_intervened}; " if result.harness_intervened else ""
                     ) + f"drone link was restarted before this attempt (retry {attempt + 1})"
+                in_flight = None
                 results.append(result)
                 _record_spend(config, result, log)
 
@@ -958,41 +985,128 @@ async def run_llm_suite(config: SuiteConfig, log=print) -> list[TrialResult]:
                 )
             if stop_everything:
                 break
+    except BaseException as e:  # noqa: BLE001 - see the guard's docstring below
+        crash = e
+        results.append(_crash_result(e, in_flight, log))
     finally:
-        with contextlib.suppress(Exception):
-            await _settle(harness)
-        # Leave the aircraft where the run found it. Each model in a campaign
-        # is a separate process, so a run that ends 60 m downrange hands that
-        # 60 m to the next model as its launch point - the same drift as
-        # before, just one run further out. Ending where we started makes the
-        # whole campaign start from one place instead of eleven.
-        if config.reset_position_between_trials and ctx.get("launch"):
-            with contextlib.suppress(Exception):
-                distance, note = await _ferry_to_launch(
-                    harness,
-                    ctx["launch"],
-                    float(ctx.get("launch_amsl_m") or 0.0),
-                    float(ctx["takeoff_altitude_m"]),
-                    config.start_tolerance_m,
-                    float(ctx.get("nav_timeout_s") or 240.0),
-                    log,
-                )
-                log(
-                    f"[{_utc()}] run finished with the aircraft {distance:.0f} m from the launch point"
-                    f"{'; ' + note if note else ''}"
-                )
-        await harness.aclose()
+        await _land_and_close(config, harness, ctx, log)
+
+    # Synchronously, and outside the try: this is the bookkeeping that used to
+    # be skipped entirely when the harness crashed, which is why two of the
+    # 2026-08-20 trials cannot be scored at all. It writes files and awaits
+    # nothing, so it still completes even on an event loop poisoned by an
+    # orphaned cancel scope - the state the crash it exists for leaves behind.
+    try:
+        _write_outputs(config, results, ctx, route, window_start, agent_version)
+    except Exception as e:  # noqa: BLE001
+        log(f"[{_utc()}] CRITICAL: the run's output files could not be written: {type(e).__name__}: {e}")
+        if crash is None:
+            raise
+
+    if crash is not None:
+        if isinstance(crash, (KeyboardInterrupt, SystemExit)):
+            # An operator stopping the run is not a harness fault. The aircraft
+            # has been landed and the row written; keep Ctrl-C meaning Ctrl-C.
+            raise crash
+        # Everything else - including a bare CancelledError, which is what an
+        # orphaned cancel scope delivers - is reported as what it is. Nothing
+        # legitimately cancels this coroutine: it is the whole of the process's
+        # asyncio.run, so a cancellation arriving here is a fault, not a request.
+        raise HarnessCrash(
+            f"the harness failed mid-run and the run was abandoned: {type(crash).__name__}: {crash}"
+        ) from crash
+    return results
+
+
+def _crash_result(error: BaseException, in_flight: tuple[str, int] | None, log) -> TrialResult:
+    """The VOID row for a trial the harness lost, with the exception in it.
+
+    **Why this exists.** On 2026-08-20 the harness died mid-trial six times with
+    an anyio cancel-scope error (see
+    :class:`droneserver.llm.mcp_session.MCPSessionTaskError`). The process
+    stopped where it stood: no verdict, no cleanup, once an aircraft left
+    airborne - and, because ``missions.csv`` is written only after the mission
+    loop finishes, *no row at all*. Two of those trials are unscoreable for that
+    reason alone: not because they failed, but because nothing recorded that
+    they had happened.
+
+    So whatever kills a trial, a row is written for it. VOID, never FAIL: the
+    model may have been flying perfectly when our own code fell over, and
+    recording that as a model failure would put a harness bug in the paper's
+    results table. The exception is in the reason, in full, because the next
+    such bug will not be this one.
+    """
+    mission_id, trial = in_flight or ("?", 0)
+    detail = f"{type(error).__name__}: {error}".strip().rstrip(":")
+    log(f"[{_utc()}] HARNESS CRASH during {mission_id} trial {trial}: {detail}")
+    log(f"[{_utc()}] {traceback.format_exc()}")
+    return TrialResult(
+        mission_id=mission_id,
+        trial=trial,
+        passed=False,
+        reason=(
+            f"not evaluated - the HARNESS crashed while this trial was in the air ({detail}). "
+            f"Nothing here is a result about the model: the trial was not measured to the end, and "
+            f"the remaining trials were not flown"
+        ),
+        started_at=time.time(),
+        evidence={"harness_crash": detail, "traceback": traceback.format_exc()[-4000:]},
+        not_evaluated=True,
+        harness_crash=detail,
+    )
+
+
+async def _land_and_close(config: SuiteConfig, harness: LiveMCPSession, ctx: dict, log) -> None:
+    """Land the aircraft, put it back on the launch point, and close up.
+
+    Every step is best-effort and independent: this runs after a crash as well
+    as after a clean run, and a step that cannot complete must not stop the next
+    one from trying. ``BaseException`` rather than ``Exception`` because the
+    failure mode this was built for delivers a bare ``CancelledError`` - and
+    keeps delivering it - so a ``suppress(Exception)`` here would let the very
+    crash we are cleaning up after skip the landing attempt.
+    """
+
+    async def ferry_home() -> None:
+        distance, note = await _ferry_to_launch(
+            harness,
+            ctx["launch"],
+            float(ctx.get("launch_amsl_m") or 0.0),
+            float(ctx["takeoff_altitude_m"]),
+            config.start_tolerance_m,
+            float(ctx.get("nav_timeout_s") or 240.0),
+            log,
+        )
+        log(
+            f"[{_utc()}] run finished with the aircraft {distance:.0f} m from the launch point"
+            f"{'; ' + note if note else ''}"
+        )
+
+    async def close_capture_loop() -> None:
         # The capture loop is shared by every trial, so the run closes it (see
         # droneserver.benchmark.capture_session.capture_loop). Off the event
         # loop: closing it joins a thread.
-        if config.capture is not None:
-            with contextlib.suppress(Exception):
-                from droneserver.benchmark.capture_session import shutdown_capture_loop
+        from droneserver.benchmark.capture_session import shutdown_capture_loop
 
-                await asyncio.to_thread(shutdown_capture_loop)
+        await asyncio.to_thread(shutdown_capture_loop)
 
-    _write_outputs(config, results, ctx, route, window_start, agent_version)
-    return results
+    steps: list[tuple[str, object]] = [("land and disarm the aircraft", lambda: _settle(harness))]
+    # Leave the aircraft where the run found it. Each model in a campaign is a
+    # separate process, so a run that ends 60 m downrange hands that 60 m to the
+    # next model as its launch point - the same drift as before, just one run
+    # further out. Ending where we started makes the whole campaign start from
+    # one place instead of eleven.
+    if config.reset_position_between_trials and ctx.get("launch"):
+        steps.append(("return the aircraft to the launch point", ferry_home))
+    steps.append(("close the harness connection", harness.aclose))
+    if config.capture is not None:
+        steps.append(("close the capture loop", close_capture_loop))
+
+    for what, step in steps:
+        try:
+            await step()  # type: ignore[operator]
+        except BaseException as e:  # noqa: BLE001 - a terminal cleanup path; see the docstring
+            log(f"[{_utc()}] cleanup: could not {what}: {type(e).__name__}: {e}")
 
 
 async def _run_trial(
@@ -1115,9 +1229,12 @@ async def _run_trial(
                 with contextlib.suppress(Exception):
                     await model.aclose()
             await session.aclose()
-            with contextlib.suppress(Exception):
-                await poller.sample_once(full=True)
-            await poller.stop()
+            # The closing full sample is taken by the poller's OWN task, not
+            # here. Calling into its session from this task is what unwound the
+            # transport's anyio cancel scope in the wrong task and cancelled
+            # this one mid-trial - see McpTelemetryPoller and
+            # mcp_session.MCPSessionTaskError.
+            await poller.stop(final_sample=True)
 
         duration = time.perf_counter() - clock
         # The harness's own landing, if it needs one, is part of the flight and
@@ -1824,6 +1941,23 @@ def _write_summary(config: SuiteConfig, results: list[TrialResult], ctx: dict, r
             "",
             "The missions below that trial were **not attempted**. Nothing here is a result about the "
             "model, and the run cannot be compared with a complete one.",
+            "",
+        ]
+
+    crashed = next((r for r in results if r.harness_crash), None)
+    if crashed is not None:
+        lines += [
+            "## The harness crashed",
+            "",
+            f"**{crashed.mission_id} trial {crashed.trial}** was in the air when the harness itself "
+            f"failed, and the run was abandoned there:",
+            "",
+            f"> {crashed.harness_crash}",
+            "",
+            "That trial is recorded VOID, not FAIL - the model may have been flying it correctly when "
+            "our own code fell over, and there is no measurement to say either way. The harness tried "
+            "to land the aircraft on the way out; the log above says whether it managed to. **Check "
+            "where the aircraft is before flying anything else.**",
             "",
         ]
 

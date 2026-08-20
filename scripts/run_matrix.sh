@@ -29,6 +29,6 @@ for model in $MODELS; do
       --target-label "llmuavsitl (ArduPilot SITL over tailnet)" \
       --label "$label" \
       --link-recovery-command "systemctl restart droneserver-staging" \
-      2>&1 | grep -E "^model:|^price:|^budget:|PASS |FAIL |LINK |BUDGET|spend:|spend on|ERROR|Traceback|passed on"
+      2>&1 | grep -E "^model:|^price:|^budget:|PASS |FAIL |LINK |BUDGET|spend:|spend on|ERROR|Traceback|HARNESS CRASH|passed on"
   echo "############ end $model (exit $?) ############"
 done

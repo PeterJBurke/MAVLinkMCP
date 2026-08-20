@@ -46,6 +46,11 @@ tell the outcomes apart without reading prose:
        on to the next model; nothing here is a result about the model
 ``4``  the missions ran but a Plan 19 capture bundle came out degraded
        (only with ``--require-complete-capture``)
+``5``  the HARNESS crashed mid-trial. The trial that was in the air is
+       recorded VOID in ``missions.csv`` with the exception in its reason, and
+       the harness tried to land the aircraft on its way out - but it cannot
+       promise that worked. Nothing here is a result about the model, and
+       **the aircraft should be checked before anything else flies**
 =====  =====================================================================
 """
 
@@ -74,6 +79,7 @@ from droneserver.llm.runner import (
     DEFAULT_START_TOLERANCE_M,
     LLM_SUITE,
     SKIPPED,
+    HarnessCrash,
     SuiteConfig,
     run_llm_suite,
 )
@@ -487,7 +493,18 @@ def main() -> int:
         print("dry run: nothing was flown")
         return 0
 
-    results = asyncio.run(run_llm_suite(config))
+    try:
+        results = asyncio.run(run_llm_suite(config))
+    except HarnessCrash as e:
+        # Exit 5 = "our own harness fell over", distinct from a mission failure
+        # (1), a bad invocation (2), a dead provider key (3) and a degraded
+        # capture (4). The suite has already written missions.csv - with a VOID
+        # row for the trial that was in the air - and tried to land the
+        # aircraft; what it cannot promise is that the landing worked.
+        print(f"\nHARNESS CRASH: {e}", file=sys.stderr)
+        print(f"a VOID row was written to {out_dir}/missions.csv; the remaining trials were NOT run.", file=sys.stderr)
+        print("CHECK WHERE THE AIRCRAFT IS before starting anything else.", file=sys.stderr)
+        return 5
     flown = [
         r
         for r in results

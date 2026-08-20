@@ -206,7 +206,7 @@ class _FakePoller:
     async def start(self):
         return None
 
-    async def stop(self):
+    async def stop(self, final_sample=False):
         return None
 
     async def sample_once(self, full=True):

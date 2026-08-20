@@ -61,6 +61,36 @@ class MCPTransportError(RuntimeError):
     """The connection to the drone server failed (not a tool refusing a call)."""
 
 
+class MCPSessionTaskError(MCPTransportError):
+    """A session was opened in one asyncio task and closed in another.
+
+    **This is the defect that killed six long trials on 2026-08-20**, and the
+    reason the check exists at all rather than a comment asking people to be
+    careful.
+
+    :func:`mcp.client.sse.sse_client` is an ``@asynccontextmanager`` whose body
+    is ``async with anyio.create_task_group() as tg: ... yield ... finally:
+    tg.cancel_scope.cancel()``. An anyio cancel scope belongs to the task that
+    *entered* it, and cancelling it cancels **that** task. So closing the
+    session from a different task does two things, both fatal:
+
+    1. it raises ``RuntimeError: Attempted to exit cancel scope in a different
+       task than it was entered in`` out of the exit (which a
+       ``suppress(Exception)`` will hide, so the closing task looks fine); and
+    2. it fires the scope's cancellation at the task that opened it - which by
+       then is somewhere else entirely, typically mid-trial in the agent loop.
+       That task gets a bare ``CancelledError("Cancelled by cancel scope ...")``
+       nothing is expecting, and since the scope is now orphaned it keeps
+       re-delivering that cancellation forever: **every subsequent await in the
+       owning task is cancelled too**, so even a cleanup handler cannot land the
+       aircraft. The process dies with no verdict written.
+
+    Raising this instead is deliberate. It leaves the connection intact for its
+    owner to close, it degrades to one recorded ``transport_error`` (or one
+    counted poller error) instead of a dead process, and it names the mistake.
+    """
+
+
 @dataclass
 class CallRecord:
     """One tool call as the harness saw it, from the outside.
@@ -118,6 +148,14 @@ class LiveMCPSession:
     the per-command latency figures. If the transport does drop mid-mission we
     reconnect once and retry, and the retry is visible in the record rather
     than smoothed away.
+
+    **One task owns the session for its whole life.** Opening it enters an anyio
+    cancel scope, and anyio scopes may only be exited by the task that entered
+    them - so the task that calls :meth:`_connect` is the only one that may
+    close, reconnect, or otherwise unwind it. Any other task gets
+    :class:`MCPSessionTaskError` rather than the process-killing behaviour
+    described there. A background poller therefore opens *and* closes its
+    session inside its own task; it does not have one handed to it.
     """
 
     def __init__(
@@ -142,6 +180,9 @@ class LiveMCPSession:
         self.auth_header = auth_header
         self._session: ClientSession | None = None
         self._stack: contextlib.AsyncExitStack | None = None
+        #: The task that opened the connection, and the only one allowed to
+        #: close it. See :class:`MCPSessionTaskError`.
+        self._owner_task: asyncio.Task | None = None
         self.reconnects = 0
 
     @property
@@ -177,14 +218,32 @@ class LiveMCPSession:
         )
         await session.initialize()
         self._stack, self._session = stack, session
+        self._owner_task = asyncio.current_task()
+
+    def _check_owner(self, what: str) -> None:
+        """Refuse to unwind the connection from a task that did not open it."""
+        if self._stack is None or self._owner_task is None:
+            return
+        current = asyncio.current_task()
+        if current is not self._owner_task:
+            raise MCPSessionTaskError(
+                f"refusing to {what} the MCP session to {self.url} from task "
+                f"{getattr(current, 'get_name', lambda: current)()!r}: it was opened by task "
+                f"{self._owner_task.get_name()!r}, and unwinding an anyio cancel scope from another "
+                f"task cancels the task that opened it (see MCPSessionTaskError)"
+            )
 
     async def aclose(self) -> None:
-        stack, self._stack, self._session = self._stack, None, None
+        self._check_owner("close")
+        stack, self._stack, self._session, self._owner_task = self._stack, None, None, None
         if stack is not None:
             with contextlib.suppress(Exception):
                 await stack.aclose()
 
     async def _reconnect(self) -> None:
+        # Closes and reopens, so it inherits the same-task rule: a reconnect
+        # attempted from a borrowed session in another task raises
+        # MCPSessionTaskError here rather than cancelling the session's owner.
         await self.aclose()
         self.reconnects += 1
         await self._connect()
@@ -369,6 +428,17 @@ class McpTelemetryPoller:
     change what it is measuring, and it swallows its own errors: a hiccup in
     the recorder must not fail a flight.
 
+    **Its connection is opened, polled and closed inside that one background
+    task**, and no other task touches it. It used to be opened by whoever called
+    :meth:`start` and then polled from the background task, which is the bug in
+    :class:`MCPSessionTaskError`: the first tool error the poller met sent it
+    into :meth:`LiveMCPSession._reconnect`, the reconnect unwound the transport's
+    anyio cancel scope from the wrong task, and the cancellation landed on the
+    task running the trial. Six long trials on 2026-08-20 died that way, one of
+    them leaving the aircraft airborne, because the orphaned scope goes on
+    cancelling its owner and no cleanup handler can complete. Nothing about the
+    polling changed; only who holds the connection.
+
     **It must be given its own API key.** The server's rate limiter counts
     calls per *client*, and a client is an API key - so a recorder sharing the
     model's key spends the model's allowance. The first LLM run hit exactly
@@ -388,6 +458,13 @@ class McpTelemetryPoller:
     #: Read armed/in-air state on every Nth cycle (see the class docstring).
     FULL_SAMPLE_EVERY = 4
 
+    #: How long :meth:`stop` waits for the polling task to wind itself up.
+    STOP_TIMEOUT_S = 30.0
+    #: The same, when a closing full sample was asked for: that is three tool
+    #: calls with a 30 s timeout each, and cutting it short would throw away the
+    #: one reading that answers "did the trial end with the aircraft disarmed?".
+    FINAL_SAMPLE_TIMEOUT_S = 120.0
+
     def __init__(self, url: str, api_key: str = "", interval_s: float = 1.5):
         self.session = LiveMCPSession(url, api_key, client_name=RECORDER_CLIENT_NAME, client_version="2")
         self.interval_s = interval_s
@@ -396,19 +473,73 @@ class McpTelemetryPoller:
         self._cycle = 0
         self._task: asyncio.Task | None = None
         self._stop = asyncio.Event()
+        #: Set by the polling task once it has connected (or failed to).
+        self._started = asyncio.Event()
+        #: How the connection failed, re-raised to whoever called :meth:`start`.
+        self._start_error: BaseException | None = None
+        #: Asked for by :meth:`stop`; taken by the polling task, not the caller.
+        self._final_sample = False
 
     async def start(self) -> None:
-        await self.session.__aenter__()
-        self._stop.clear()
-        self._task = asyncio.create_task(self._loop())
+        """Start polling. Raises whatever stopped the connection from opening.
 
-    async def stop(self) -> None:
+        The connection itself is opened by :meth:`_run`, in the polling task -
+        never here. This method only waits to hear how that went, so that a
+        recorder that cannot reach the server still fails in the caller's face
+        rather than silently recording nothing.
+        """
+        self._stop.clear()
+        self._started.clear()
+        self._start_error = None
+        self._final_sample = False
+        self._task = asyncio.create_task(self._run())
+        await self._started.wait()
+        if self._start_error is not None:
+            await self._join(self.STOP_TIMEOUT_S)
+            raise self._start_error
+
+    async def stop(self, final_sample: bool = False) -> None:
+        """Ask the polling task to finish, and wait for it to close its session.
+
+        ``final_sample`` asks for one last *full* reading before it closes.
+        Taking it here, in the caller's task, is what used to make the trial
+        runner share the poller's connection across two tasks; the poller takes
+        it itself instead.
+        """
+        self._final_sample = final_sample
         self._stop.set()
-        if self._task is not None:
+        await self._join(self.FINAL_SAMPLE_TIMEOUT_S if final_sample else self.STOP_TIMEOUT_S)
+
+    async def _join(self, timeout_s: float) -> None:
+        task, self._task = self._task, None
+        if task is not None:
+            # A timeout cancels the polling task, which is exactly right: the
+            # cancellation lands *inside* the task that owns the transport, so
+            # the anyio scope is still unwound by its owner.
             with contextlib.suppress(Exception):
-                await asyncio.wait_for(self._task, timeout=30)
-            self._task = None
-        await self.session.aclose()
+                await asyncio.wait_for(task, timeout=timeout_s)
+
+    async def _run(self) -> None:
+        """Open the connection, poll, close it - all in this one task.
+
+        The whole of the session's life is inside this coroutine on purpose;
+        see the class docstring and :class:`MCPSessionTaskError`.
+        """
+        try:
+            await self.session.__aenter__()
+        except BaseException as e:  # noqa: BLE001 - reported through start()
+            self._start_error = e
+            self._started.set()
+            return
+        self._started.set()
+        try:
+            await self._loop()
+            if self._final_sample:
+                with contextlib.suppress(Exception):
+                    await self.sample_once(full=True)
+        finally:
+            with contextlib.suppress(Exception):
+                await self.session.aclose()
 
     async def _loop(self) -> None:
         while not self._stop.is_set():
