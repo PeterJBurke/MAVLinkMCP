@@ -33,6 +33,7 @@ from droneserver.missions.state import (
 from droneserver.safety.audit import AuditRecord, new_call_id
 from droneserver.safety.config import get_safety_settings
 from droneserver.safety.geofence import Geofence, check_mission, check_position, parse_polygon
+from droneserver.telemetry import ground_stream
 from droneserver.telemetry.ground import SETTLED_RATE_M_S, ground_evidence, height_above_launch_m
 
 #: A height at or below which the aircraft counts as down, used ONLY when the
@@ -761,11 +762,17 @@ class MissionRunner:
         record.last_landed_state = None
         record.last_in_air = None
         record.last_vertical_speed_m_s = None
+        # Through the re-requesting reader (FIX 15): ArduPilot publishes
+        # landed_state only on request, and a lost request would otherwise
+        # retire this mission's completion evidence for the rest of the flight -
+        # the exact evidence FIX 11 moved this runner TO.
+        # ``ok`` is this poll's own evidence that the link is alive, which is
+        # what lets a silent ground topic be re-requested without a re-requester
+        # ever having to mistake a dead link for a lost message.
         with contextlib.suppress(Exception):
-            landed = await _first(drone.telemetry.landed_state(), 2.0)
-            record.last_landed_state = str(landed).rsplit(".", 1)[-1].upper()
+            record.last_landed_state = await ground_stream.read_landed_state(drone, 2.0, link_live=ok)
         with contextlib.suppress(Exception):
-            record.last_in_air = bool(await _first(drone.telemetry.in_air(), 2.0))
+            record.last_in_air = await ground_stream.read_in_air(drone, 2.0, link_live=ok)
         with contextlib.suppress(Exception):
             velocity = await _first(drone.telemetry.velocity_ned(), 2.0)
             # NED: down is positive, so a climb is a negative down rate.

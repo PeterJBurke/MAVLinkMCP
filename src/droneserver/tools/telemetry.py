@@ -16,6 +16,7 @@ from droneserver.app import mcp
 from droneserver.convert import to_jsonable
 from droneserver.geo import haversine_distance
 from droneserver.telemetry.flight_log import LogColors, log_tool_call, log_tool_output, logger
+from droneserver.telemetry.ground_stream import read_in_air, read_landed_state
 from droneserver.telemetry.home import read_home
 from droneserver.tools._common import CONN_ERROR, first_stream_item, get_drone
 
@@ -487,12 +488,13 @@ async def get_in_air(ctx: Context) -> dict:
     drone = await get_drone(ctx)
     if drone is None:
         return dict(CONN_ERROR)
+    # Re-requesting read, for the same reason as get_landed_state above (FIX 15).
     try:
-        in_air = await first_stream_item(drone.telemetry.in_air(), READ_TIMEOUT_S)
-    except TimeoutError:
-        return _no_data("in_air")
+        in_air = await read_in_air(drone, READ_TIMEOUT_S)
     except Exception as e:
         return _read_error("in_air", e)
+    if in_air is None:
+        return _no_data("in_air")
     status_text = "IN AIR (flying)" if in_air else "ON GROUND"
     logger.info(f"{LogColors.STATUS}Drone status: {status_text}{LogColors.RESET}")
     return {"status": "success", "in_air": in_air, "status_text": status_text}
@@ -566,13 +568,16 @@ async def get_landed_state(ctx: Context) -> dict:
     drone = await get_drone(ctx)
     if drone is None:
         return dict(CONN_ERROR)
+    # Not a plain subscription read: ArduPilot publishes EXTENDED_SYS_STATE
+    # only after a SET_MESSAGE_INTERVAL request, and a lost request leaves this
+    # topic silent on a link that is otherwise healthy. read_landed_state
+    # re-requests it before giving up. See droneserver.telemetry.ground_stream.
     try:
-        landed_state = await first_stream_item(drone.telemetry.landed_state(), READ_TIMEOUT_S)
-    except TimeoutError:
-        return _no_data("landed_state")
+        state_name = await read_landed_state(drone, READ_TIMEOUT_S)
     except Exception as e:
         return _read_error("landed state", e)
-    state_str = str(landed_state)
+    if state_name is None:
+        return _no_data("landed_state")
     state_descriptions = {
         "UNKNOWN": "State cannot be determined",
         "ON_GROUND": "Drone is on the ground, not moving",
@@ -580,8 +585,7 @@ async def get_landed_state(ctx: Context) -> dict:
         "TAKING_OFF": "Drone is in the process of taking off",
         "LANDING": "Drone is in the process of landing",
     }
-    state_name = state_str.split(".")[-1] if "." in state_str else state_str
-    description = state_descriptions.get(state_name, state_str)
+    description = state_descriptions.get(state_name, state_name)
     logger.info(f"{LogColors.STATUS}Landed state: {state_name} - {description}{LogColors.RESET}")
     result = {
         "status": "success",

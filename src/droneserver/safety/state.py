@@ -16,6 +16,7 @@ import contextlib
 import time
 from dataclasses import dataclass, field
 
+from droneserver.telemetry import ground_stream
 from droneserver.telemetry.ground import IN_THE_AIR_STATES, height_above_launch_m
 from droneserver.telemetry.home import read_home
 
@@ -77,6 +78,12 @@ class StateTracker:
         ArduPilot does not publish in_air / landed_state / home until asked;
         without this the first read of each takes seconds or times out (a
         25 s state refresh, measured). Best effort, requested once.
+
+        Once is enough only while the request survives. When one of these
+        one-shot requests is lost the topic goes silent for the rest of the
+        connection, so the READS re-request it themselves:
+        :mod:`droneserver.telemetry.ground_stream` for the two ground topics
+        and :func:`droneserver.telemetry.home.read_home` for home (FIX 15).
         """
         if self._rates_requested:
             return
@@ -154,8 +161,10 @@ class StateTracker:
                 self.state.unknown = True
                 return self.state.snapshot()
 
+            position_ok = False
             with contextlib.suppress(Exception):
                 position = await _first(drone.telemetry.position(), timeout_s)
+                position_ok = True
                 # Raw capture, both frames. Nothing here compares them: the
                 # rules ask validation._current_height_m, which prefers the
                 # absolute reading against session_launch_amsl_m and keeps the
@@ -168,7 +177,7 @@ class StateTracker:
                     "absolute_altitude_m": position.absolute_altitude_m,
                 }
 
-            in_air = await _read_in_air(drone, timeout_s, self.state.session_launch_amsl_m)
+            in_air = await _read_in_air(drone, timeout_s, self.state.session_launch_amsl_m, link_live=position_ok)
             if in_air is None:
                 # Cannot tell whether we are flying. Treat as unknown so the
                 # configured fail-open/fail-closed policy decides, rather than
@@ -218,7 +227,9 @@ class StateTracker:
         self._home_attempted_at = 0.0
 
 
-async def _read_in_air(drone, timeout_s: float, launch_amsl_m: float | None = None) -> bool | None:
+async def _read_in_air(
+    drone, timeout_s: float, launch_amsl_m: float | None = None, link_live: bool | None = None
+) -> bool | None:
     """Is the vehicle airborne? Tries in_air, then landed_state, then altitude.
 
     Returns None when none of the three answer (state genuinely unknown).
@@ -241,20 +252,23 @@ async def _read_in_air(drone, timeout_s: float, launch_amsl_m: float | None = No
     height above the ground the aircraft is actually standing on, so over
     different terrain it can still be wrong. The two topics above are the
     evidence; this only speaks when both are silent.
+
+    Both topics are read through
+    :mod:`droneserver.telemetry.ground_stream`, which re-requests a stream that
+    has gone silent while the rest of the link is live (FIX 15). Without it a
+    single lost SET_MESSAGE_INTERVAL retires BOTH of the evidence-bearing
+    answers for the rest of the connection, and every state refresh falls
+    through to the altitude fallback below - the one reading in the list that
+    can be wrong.
     """
-    try:
-        return bool(await _first(drone.telemetry.in_air(), timeout_s))
-    except Exception:
-        pass
-    try:
-        landed = await _first(drone.telemetry.landed_state(), timeout_s)
-        name = str(landed).rsplit(".", 1)[-1].upper()
-        if name in IN_THE_AIR_STATES:
-            return True
-        if name == "ON_GROUND":
-            return False
-    except Exception:
-        pass
+    in_air = await ground_stream.read_in_air(drone, timeout_s, link_live=link_live)
+    if in_air is not None:
+        return in_air
+    name = await ground_stream.read_landed_state(drone, timeout_s, link_live=link_live)
+    if name in IN_THE_AIR_STATES:
+        return True
+    if name == "ON_GROUND":
+        return False
     try:
         position = await _first(drone.telemetry.position(), timeout_s)
         height = height_above_launch_m(

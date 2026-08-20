@@ -17,6 +17,7 @@ from droneserver.telemetry.flight_log import (
     logger,
 )
 from droneserver.telemetry.ground import ground_evidence, height_above_launch_m, settled_on_ground
+from droneserver.telemetry.ground_stream import read_ground_topics, read_in_air
 from droneserver.telemetry.home import read_home
 
 #: How far from a commanded target the aircraft may touch down and still be
@@ -85,15 +86,16 @@ async def _read_ground_state(drone) -> tuple[bool | None, bool | None]:
     state it actually read, so a telemetry hiccup can never turn a real command
     into a refusal or a no-op.
     """
-    armed = in_air = None
+    armed = None
     try:
         armed = bool(await _first(drone.telemetry.armed()))
     except Exception as e:
         logger.warning(f"could not read armed state: {e}")
-    try:
-        in_air = bool(await _first(drone.telemetry.in_air()))
-    except Exception as e:
-        logger.warning(f"could not read in_air state: {e}")
+    # in_air through the re-requesting reader (FIX 15): a lost stream request
+    # makes this topic silent while the link is perfectly healthy, and these
+    # honesty checks would then read "unknown" on every call for the rest of
+    # the flight.
+    in_air = await read_in_air(drone, _READ_TIMEOUT_S)
     return armed, in_air
 
 
@@ -118,18 +120,27 @@ async def _telemetry_now(drone) -> dict:
         "vertical_speed_m_s": None,
         "flight_mode": None,
     }
-    async for landed_state in drone.telemetry.landed_state():
-        reading["landed_state"] = str(landed_state).split(".")[-1]
-        break
-    async for in_air in drone.telemetry.in_air():
-        reading["in_air"] = bool(in_air)
-        break
-    async for position in drone.telemetry.position():
+    # Position first, and not only because it is the field the report is built
+    # around: reading it here is also the evidence that the LINK is alive, which
+    # is what lets the ground topics below tell "this one topic has gone quiet"
+    # from "the aircraft is gone" without a second read of anything (FIX 15).
+    try:
+        position = await _first(drone.telemetry.position(), _READ_TIMEOUT_S)
         reading["latitude_deg"] = position.latitude_deg
         reading["longitude_deg"] = position.longitude_deg
         reading["relative_altitude_m"] = position.relative_altitude_m
         reading["absolute_altitude_m"] = getattr(position, "absolute_altitude_m", None)
-        break
+    except Exception as e:
+        logger.warning(f"could not read position: {e}")
+    # The autopilot's own ground evidence, read through the re-requesting
+    # reader: ArduPilot publishes landed_state only after a SET_MESSAGE_INTERVAL
+    # request, and a lost request used to leave two unbounded `async for` loops
+    # here waiting on a topic that would never speak again - with no timeout at
+    # all, on the function every landing watch calls. See
+    # droneserver.telemetry.ground_stream (FIX 15).
+    reading["landed_state"], reading["in_air"] = await read_ground_topics(
+        drone, _READ_TIMEOUT_S, link_live=reading["latitude_deg"] is not None
+    )
     # Both are extras: they sharpen the report but no phase depends on them, so
     # a firmware that does not publish them costs a bounded wait, not an answer.
     try:

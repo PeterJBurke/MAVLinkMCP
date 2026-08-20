@@ -11,6 +11,7 @@ from mcp.server.fastmcp import FastMCP
 from droneserver.config import get_settings
 from droneserver.geo import haversine_distance
 from droneserver.logging_setup import logger
+from droneserver.telemetry import ground_stream
 from droneserver.telemetry.flight_log import LogColors
 from droneserver.telemetry.ground import ground_evidence
 
@@ -212,13 +213,17 @@ async def _parked_here(drone) -> tuple[object | None, bool | None, bool | None]:
     """
     position = await _read_topic(drone, "position")
     armed = await _read_topic(drone, "armed")
-    landed_state = await _read_topic(drone, "landed_state")
-    in_air = await _read_topic(drone, "in_air")
-    on_ground = ground_evidence(
-        None if landed_state is None else str(landed_state).rsplit(".", 1)[-1].upper(),
-        None if in_air is None else bool(in_air),
-    )
-    return position, (None if armed is None else bool(armed)), on_ground
+    # The two ground topics go through the re-requesting reader (FIX 15): at
+    # link-up nothing has asked ArduPilot for EXTENDED_SYS_STATE yet, so a
+    # plain read of landed_state here would nearly always come back empty and
+    # this decision would fall to "could not be confirmed" on every connection.
+    try:
+        landed_state, in_air = await ground_stream.read_ground_topics(
+            drone, LAUNCH_READ_TIMEOUT_S, link_live=position is not None
+        )
+    except Exception:
+        landed_state, in_air = None, None
+    return position, (None if armed is None else bool(armed)), ground_evidence(landed_state, in_air)
 
 
 async def record_launch_point(drone, connector: "MAVLinkConnector") -> None:
@@ -382,6 +387,10 @@ async def connect_drone_background(
             # connection is not judged against stale landing/airborne state.
             if connector is not None:
                 connector.reset_flight_latches()
+                # A fresh link has a fresh set of stream requests coming, so
+                # the previous link's re-request history says nothing about
+                # this one (FIX 15).
+                ground_stream.reset_rerequests()
                 await record_launch_point(drone, connector)
             # Signal that connection is ready!
             connection_ready.set()
