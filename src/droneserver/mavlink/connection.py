@@ -9,8 +9,32 @@ from mavsdk import System
 from mcp.server.fastmcp import FastMCP
 
 from droneserver.config import get_settings
+from droneserver.geo import haversine_distance
 from droneserver.logging_setup import logger
 from droneserver.telemetry.flight_log import LogColors
+from droneserver.telemetry.ground import ground_evidence
+
+#: Two launch fixes closer than this - horizontally and in elevation - are the
+#: same place. A parked aircraft's GPS wanders by a metre or two, and a
+#: re-anchor that logged every metre of that would bury the moves that matter.
+ANCHOR_UNCHANGED_M = 2.0
+
+#: Bound on each telemetry read taken while deciding where this session began.
+#: Short: the link has just come up, this runs before the server answers
+#: anything, and every branch has a fallback.
+LAUNCH_READ_TIMEOUT_S = 5.0
+
+
+def _same_place(launch: dict, latitude_deg: float, longitude_deg: float, absolute_altitude_m: float | None) -> bool:
+    """Is this fix the same spot as the one already recorded?"""
+    if haversine_distance(launch["latitude_deg"], launch["longitude_deg"], latitude_deg, longitude_deg) > (
+        ANCHOR_UNCHANGED_M
+    ):
+        return False
+    have, new = launch.get("absolute_altitude_m"), absolute_altitude_m
+    if have is None or new is None:
+        return have is None and new is None
+    return abs(have - new) <= ANCHOR_UNCHANGED_M
 
 
 @dataclass
@@ -54,7 +78,8 @@ class MAVLinkConnector:
 
         Called when the link comes up. Later callers cannot overwrite it,
         because the whole point of the field is that it does not follow the
-        aircraft around.
+        aircraft around. The one exception is deliberate and explicit - see
+        :meth:`reanchor_session_launch`.
         """
         if self.session_launch is not None:
             return
@@ -64,6 +89,50 @@ class MAVLinkConnector:
             "absolute_altitude_m": absolute_altitude_m,
             "source": source,
         }
+
+    def reanchor_session_launch(
+        self, latitude_deg: float, longitude_deg: float, absolute_altitude_m: float | None, source: str
+    ) -> bool:
+        """Move the session launch point deliberately. ``True`` if it moved.
+
+        The ONLY way this field is ever overwritten, and it exists for one
+        caller: the trial layer, which parks the aircraft on the run's launch
+        point before each trial and therefore knows something the connector
+        cannot - that a new flight starts HERE. A link that came up while the
+        aircraft was standing 143 m (or, once, 2.0 km) from where the next
+        trial would fly from otherwise carries that stale point all session.
+
+        This is emphatically NOT for the aircraft's own arming. ArduPilot
+        re-homes on every arm, and a launch point that followed those arms
+        would be the moving datum FIX 8a/10/11/12 exist to escape: a T6-shape
+        mission that lands at a hospital and re-arms there would report itself
+        0 m from its launch point while standing 1.4 km away. Nothing on the
+        vehicle side may call this.
+
+        Returns ``False`` when the new fix is the same place (within
+        :data:`ANCHOR_UNCHANGED_M` horizontally and vertically), so a caller
+        that re-anchors on every poll logs a move only when there is one.
+        """
+        current = self.session_launch
+        if current is not None and _same_place(current, latitude_deg, longitude_deg, absolute_altitude_m):
+            return False
+        self.session_launch = {
+            "latitude_deg": latitude_deg,
+            "longitude_deg": longitude_deg,
+            "absolute_altitude_m": absolute_altitude_m,
+            "source": source,
+        }
+        if current is not None:
+            logger.info(
+                "Session launch point re-anchored to %.7f, %.7f (%s); it was %.7f, %.7f (%s)",
+                latitude_deg,
+                longitude_deg,
+                source,
+                current["latitude_deg"],
+                current["longitude_deg"],
+                current["source"],
+            )
+        return True
 
     def reset_flight_latches(self) -> None:
         """Clear per-flight tracking state so no trial inherits the last one's.
@@ -115,14 +184,69 @@ async def ensure_connection(connector: MAVLinkConnector, timeout: float = 30.0) 
         return False
 
 
+async def _read_topic(drone, topic: str, timeout_s: float = LAUNCH_READ_TIMEOUT_S):
+    """One item from a MavSDK subscription, or ``None``. Never raises.
+
+    A topic the firmware does not publish, a stream that never emits and a
+    plugin that does not exist at all are the same answer here - "no reading" -
+    because every caller of this module has a fallback for exactly that.
+    """
+
+    async def first():
+        async for item in getattr(drone.telemetry, topic)():
+            return item
+        raise TimeoutError("stream ended without an item")
+
+    try:
+        return await asyncio.wait_for(first(), timeout=timeout_s)
+    except Exception:
+        return None
+
+
+async def _parked_here(drone) -> tuple[object | None, bool | None, bool | None]:
+    """``(position, armed, on_ground)`` - each ``None`` where nothing answered.
+
+    ``on_ground`` is the AUTOPILOT's own assessment (``landed_state`` then
+    ``in_air``), which no arming anywhere can move; see
+    :mod:`droneserver.telemetry.ground`.
+    """
+    position = await _read_topic(drone, "position")
+    armed = await _read_topic(drone, "armed")
+    landed_state = await _read_topic(drone, "landed_state")
+    in_air = await _read_topic(drone, "in_air")
+    on_ground = ground_evidence(
+        None if landed_state is None else str(landed_state).rsplit(".", 1)[-1].upper(),
+        None if in_air is None else bool(in_air),
+    )
+    return position, (None if armed is None else bool(armed)), on_ground
+
+
 async def record_launch_point(drone, connector: "MAVLinkConnector") -> None:
     """Stamp the session's launch point on ``connector``. Best effort, once.
 
-    Read at link-up, before anything has armed, so it is the point the aircraft
-    was standing on when this session began. The autopilot's own home is read
-    first because that is the coordinate an RTL will fly to and the one the
-    model is shown; where it cannot be read, the parked position is the same
-    place by definition (nothing has flown yet on this link).
+    **Where the aircraft is standing, not where it last armed.** This used to
+    read the autopilot's HOME first, on the reasoning that nothing had flown
+    yet on this link. That reasoning is wrong the moment the link is not the
+    aircraft's first: ArduPilot keeps home wherever the vehicle last ARMED,
+    across reboots of *this* server, so a session that came up after a trial
+    that armed somewhere else inherits that somewhere else as its launch
+    point - measured at 143 m on one lane and 2.0 km on another on 2026-08-19,
+    and then handed to models as ``session_launch_point``, the very field
+    FIX 8a added so they would have a coordinate that does NOT move.
+
+    So the precedence is now the aircraft's own live position, taken when the
+    autopilot says it is disarmed and on the ground - which at link-up is the
+    ordinary case, and which is where any flight on this link will start. Home
+    remains the fallback for the two cases where the position is not the
+    launch point or cannot be had at all:
+
+    * the position could not be read, or
+    * the vehicle is already armed or airborne, in which case home is its
+      takeoff point and the live position is somewhere along its flight.
+
+    Every branch records WHICH of these happened in ``source``, so
+    ``get_home_position`` can show a reader what the coordinate actually is
+    instead of implying a certainty the link-up did not have.
 
     Never raises: a session that could not record its launch point reports that
     honestly in :func:`droneserver.tools.telemetry.get_home_position` rather
@@ -130,32 +254,93 @@ async def record_launch_point(drone, connector: "MAVLinkConnector") -> None:
     """
     from droneserver.telemetry.home import read_home
 
-    try:
-        home = await read_home(drone, 10.0)
+    position, armed, on_ground = await _parked_here(drone)
+    airborne = armed is True or on_ground is False
+    if position is not None and not airborne:
+        settled = armed is False and on_ground is not False
+        source = (
+            "parked position when the link came up"
+            if settled
+            else "position when the link came up (the aircraft's armed/ground state could not be confirmed)"
+        )
         connector.record_session_launch(
-            home.latitude_deg, home.longitude_deg, home.absolute_altitude_m, "autopilot home when the link came up"
+            position.latitude_deg,
+            position.longitude_deg,
+            getattr(position, "absolute_altitude_m", None),
+            source,
         )
         logger.info(
-            "Session launch point recorded from the autopilot's home: %.7f, %.7f at %.1f m",
-            home.latitude_deg,
-            home.longitude_deg,
-            home.absolute_altitude_m,
+            "Session launch point recorded from the aircraft's own position: %.7f, %.7f (%s)",
+            position.latitude_deg,
+            position.longitude_deg,
+            source,
         )
         return
-    except Exception as e:
-        logger.warning("could not read home for the session launch point (%s); falling back to position", e)
 
+    why = (
+        "the aircraft was already armed or airborne"
+        if airborne
+        else "the aircraft's position could not be read at link-up"
+    )
+    logger.warning("using the autopilot's home as the session launch point: %s", why)
     try:
-        async for position in drone.telemetry.position():
-            connector.record_session_launch(
-                position.latitude_deg,
-                position.longitude_deg,
-                position.absolute_altitude_m,
-                "parked position when the link came up",
-            )
-            break
+        home = await read_home(drone, 10.0)
     except Exception as e:
         logger.warning("could not record a session launch point at all: %s", e)
+        return
+    connector.record_session_launch(
+        home.latitude_deg,
+        home.longitude_deg,
+        home.absolute_altitude_m,
+        f"autopilot home when the link came up ({why}); the autopilot moves home to wherever it last armed",
+    )
+    logger.info(
+        "Session launch point recorded from the autopilot's home: %.7f, %.7f at %.1f m",
+        home.latitude_deg,
+        home.longitude_deg,
+        home.absolute_altitude_m,
+    )
+
+
+async def anchor_launch_point_here(drone, connector: "MAVLinkConnector", source: str) -> dict:
+    """Re-anchor the session launch point to where the aircraft is parked NOW.
+
+    The re-anchor hook FIX 13 owes the trial layer. Between trials the harness
+    ferries the aircraft back to the run's launch point and only then does it
+    know that the next flight starts there; this is how it says so. It is
+    deliberately not reachable from the tool surface the model sees (see
+    :func:`droneserver.safety.middleware.maybe_anchor_launch_point`): the
+    aircraft's own arming must never move this datum.
+
+    Refuses unless the autopilot itself says the vehicle is disarmed and on the
+    ground, because a fix taken in flight is not a launch point. Returns a
+    small record of what happened - ``{"anchored": bool, "reason": str, ...}`` -
+    and never raises.
+    """
+    try:
+        position, armed, on_ground = await _parked_here(drone)
+    except Exception as e:  # noqa: BLE001 - a telemetry fault must not fail the call it rode in on
+        return {"anchored": False, "reason": f"could not read the aircraft's state ({type(e).__name__}: {e})"}
+    if position is None:
+        return {"anchored": False, "reason": "the aircraft's position could not be read"}
+    if armed is not False:
+        return {"anchored": False, "reason": "the aircraft is armed, or its armed state could not be read"}
+    if on_ground is not True:
+        return {"anchored": False, "reason": "the autopilot does not report the aircraft on the ground"}
+    moved = connector.reanchor_session_launch(
+        position.latitude_deg,
+        position.longitude_deg,
+        getattr(position, "absolute_altitude_m", None),
+        source,
+    )
+    return {
+        "anchored": True,
+        "moved": moved,
+        "reason": "re-anchored to the parked position" if moved else "already anchored on this position",
+        "latitude_deg": position.latitude_deg,
+        "longitude_deg": position.longitude_deg,
+        "absolute_altitude_m": getattr(position, "absolute_altitude_m", None),
+    }
 
 
 async def connect_drone_background(

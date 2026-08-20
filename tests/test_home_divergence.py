@@ -112,23 +112,31 @@ async def test_a_session_with_no_recorded_launch_point_says_so():
 # ---------------------------------------------------- recording the point
 
 
-async def test_the_launch_point_is_recorded_from_the_autopilot_home_at_link_up():
-    connector = MAVLinkConnector(drone=types.SimpleNamespace(telemetry=_Telemetry(LAUNCH)))
-    await record_launch_point(connector.drone, connector)
-    assert connector.session_launch["latitude_deg"] == pytest.approx(LAUNCH[0])
-    assert connector.session_launch["source"] == "autopilot home when the link came up"
+async def test_the_launch_point_is_recorded_from_the_aircrafts_own_position():
+    """FIX 13: where the aircraft is standing, not where it last armed.
 
-
-async def test_the_launch_point_falls_back_to_the_parked_position():
-    class _NoHome(_Telemetry):
-        async def home(self):
-            raise TimeoutError("ArduPilot has no home yet")
-            yield  # pragma: no cover
-
-    drone = types.SimpleNamespace(telemetry=_NoHome(LAUNCH, position=LAUNCH))
+    The autopilot's home here is the HOSPITAL - left there by a previous
+    session's arming, which is exactly the state a restarted server finds.
+    """
+    drone = types.SimpleNamespace(telemetry=_Telemetry(HOSPITAL, position=LAUNCH))
     connector = MAVLinkConnector(drone=drone)
     await record_launch_point(drone, connector)
-    assert connector.session_launch["source"] == "parked position when the link came up"
+    assert connector.session_launch["latitude_deg"] == pytest.approx(LAUNCH[0])
+    assert connector.session_launch["source"].startswith("position when the link came up")
+
+
+async def test_the_launch_point_falls_back_to_home_when_the_position_cannot_be_read():
+    class _NoPosition(_Telemetry):
+        async def position(self):
+            raise RuntimeError("no GPS fix yet")
+            yield  # pragma: no cover
+
+    drone = types.SimpleNamespace(telemetry=_NoPosition(LAUNCH))
+    connector = MAVLinkConnector(drone=drone)
+    await record_launch_point(drone, connector)
+    assert connector.session_launch["latitude_deg"] == pytest.approx(LAUNCH[0])
+    assert connector.session_launch["source"].startswith("autopilot home when the link came up")
+    assert "position could not be read" in connector.session_launch["source"]
 
 
 async def test_recording_never_raises_when_nothing_can_be_read():

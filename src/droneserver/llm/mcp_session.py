@@ -166,6 +166,7 @@ class LiveMCPSession:
         client_version: str = "2",
         transport: str = "sse",
         auth_header: str = "X-API-Key",
+        extra_headers: dict | None = None,
     ):
         self.url = url
         self.api_key = api_key
@@ -178,6 +179,11 @@ class LiveMCPSession:
         #: Google Maps wants ``X-Goog-Api-Key``. Kept explicit so a second
         #: server can authenticate its own way without touching the first.
         self.auth_header = auth_header
+        #: Extra transport headers this session carries on every call. Used by
+        #: the trial layer for the launch-point re-anchor (FIX 13), which is a
+        #: header rather than a tool argument precisely so that a model driving
+        #: the agent session cannot reach it.
+        self.extra_headers = dict(extra_headers or {})
         self._session: ClientSession | None = None
         self._stack: contextlib.AsyncExitStack | None = None
         #: The task that opened the connection, and the only one allowed to
@@ -192,7 +198,9 @@ class LiveMCPSession:
 
     @property
     def headers(self) -> dict:
-        return {self.auth_header: self.api_key} if self.api_key else {}
+        headers = {self.auth_header: self.api_key} if self.api_key else {}
+        headers.update(self.extra_headers)
+        return headers
 
     async def __aenter__(self) -> LiveMCPSession:
         await self._connect()

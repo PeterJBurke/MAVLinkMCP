@@ -106,6 +106,22 @@ class StateTracker:
         if amsl is not None:
             self.state.session_launch_amsl_m = float(amsl)
 
+    def reanchor_session_launch(self, session_launch: dict | None) -> None:
+        """Adopt a launch elevation that was moved DELIBERATELY (FIX 13).
+
+        The counterpart to :meth:`note_session_launch`'s first-writer-wins, and
+        the only thing that may overwrite the datum. The connector refuses to
+        move it for anything the aircraft does; the trial layer moves it when
+        it has parked the aircraft on the point the next flight starts from,
+        and this layer must measure the ceiling from the same point or the two
+        would disagree about how high the vehicle is.
+        """
+        if not session_launch:
+            return
+        amsl = session_launch.get("absolute_altitude_m")
+        if amsl is not None:
+            self.state.session_launch_amsl_m = float(amsl)
+
     async def refresh(self, drone, ttl_s: float, timeout_s: float = 8.0, session_launch: dict | None = None) -> dict:
         """Return a state snapshot, refreshing from telemetry if stale.
 

@@ -192,6 +192,75 @@ def _drone_from_ctx(ctx):
         return None
 
 
+#: Transport header a TRIAL-LAYER client sets to say "this session's launch
+#: point is wherever the aircraft is parked right now" (FIX 13). It is a header
+#: and not a tool argument on purpose: the model never reaches it, because a
+#: launch point the aircraft's own arming can move is the defect FIX 8a/10/11/12
+#: exist to escape. The harness sets it on its own MCP session
+#: (``droneserver.llm.runner``), where every call it makes is either mid-ferry
+#: (the vehicle is armed, and the re-anchor declines) or with the aircraft
+#: parked on the point the next trial will fly from.
+ANCHOR_HEADER = "x-session-launch-anchor"
+
+#: Smallest gap between two re-anchor attempts. The harness polls, and each
+#: attempt costs a few telemetry reads; the aircraft does not move while parked.
+ANCHOR_MIN_INTERVAL_S = 2.0
+
+_last_anchor_attempt = 0.0
+
+
+def _headers_from_ctx(ctx):
+    try:
+        request = getattr(ctx.request_context, "request", None)
+    except Exception:
+        return None
+    return getattr(request, "headers", None)
+
+
+def _anchor_requested(ctx) -> bool:
+    """Did this call arrive on a session that re-anchors the launch point?"""
+    headers = _headers_from_ctx(ctx)
+    if not headers:
+        return False
+    try:
+        value = headers.get(ANCHOR_HEADER)
+    except Exception:
+        return False
+    return str(value or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+async def maybe_anchor_launch_point(ctx) -> dict:
+    """Re-anchor the session launch point for a trial-layer call. Never raises.
+
+    Runs before the state refresh so the snapshot this call is judged against
+    already measures height from the new point. Declines - loudly in the log,
+    silently to the caller - whenever the autopilot does not say the vehicle is
+    disarmed and on the ground.
+    """
+    global _last_anchor_attempt
+
+    now = time.monotonic()
+    if (now - _last_anchor_attempt) < ANCHOR_MIN_INTERVAL_S:
+        return {"anchored": False, "reason": "an attempt was made moments ago"}
+    _last_anchor_attempt = now
+    try:
+        connector = ctx.request_context.lifespan_context
+        drone = getattr(connector, "drone", None)
+        if drone is None:
+            return {"anchored": False, "reason": "no drone link"}
+        from droneserver.mavlink.connection import anchor_launch_point_here
+
+        outcome = await anchor_launch_point_here(
+            drone, connector, "parked position when the trial layer re-anchored the session"
+        )
+        if outcome.get("moved"):
+            LAYER.state_tracker.reanchor_session_launch(getattr(connector, "session_launch", None))
+        return outcome
+    except Exception as e:  # noqa: BLE001 - an anchor fault must not refuse the call it rode in on
+        logger.warning("session-launch re-anchor failed: %s: %s", type(e).__name__, e)
+        return {"anchored": False, "reason": f"{type(e).__name__}: {e}"}
+
+
 def _session_launch_from_ctx(ctx):
     """The connector's launch record, or None.
 
@@ -223,6 +292,12 @@ def _guards_in_force(s: SafetySettings) -> dict:
 async def _evaluate(tool: str, args: dict, ctx, s: SafetySettings) -> tuple[dict | None, Tier, object, dict]:
     """Run checks 1-9. Returns (rejection_result_or_None, tier, client, state)."""
     client = auth_mod.authenticate(_client_key_from_ctx(ctx), s)
+
+    # 2a. the trial layer's launch-point re-anchor (FIX 13). Gated on control
+    # scope for the same reason every state-changing call is: a telemetry-scope
+    # client may read where the aircraft is, not redefine where it started.
+    if _anchor_requested(ctx) and (not s.auth_enabled or client.can(Tier.NORMAL)):
+        await maybe_anchor_launch_point(ctx)
 
     state: dict = {"unknown": True}
     if tool in _STATE_DEPENDENT:

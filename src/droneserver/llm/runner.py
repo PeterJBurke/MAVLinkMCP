@@ -93,12 +93,24 @@ from droneserver.llm.providers import ToolSpec, open_session, resolve_model
 from droneserver.llm.spend import BudgetExceeded, Price, SpendLedger, project_trial_cost_usd
 from droneserver.llm.verdicts import TRACK_HEADER, Track, Verdict, distance_m, judge
 from droneserver.safety.config import SafetySettings
+from droneserver.safety.middleware import ANCHOR_HEADER
 from droneserver.safety.tiers import Tier, effective_tier
 
 if TYPE_CHECKING:  # the capture layer is imported lazily, never at runtime here
     from droneserver.benchmark.capture_session import CaptureConfig
 
 HARNESS_CLIENT_NAME = "droneserver-llm-harness"
+
+#: The harness's own session tells the server that this session's launch point
+#: is wherever the aircraft is parked at the time of the call (FIX 13). The
+#: server acts on it only when the autopilot says the vehicle is disarmed and on
+#: the ground, so of the calls the harness makes it binds on exactly the ones
+#: that matter: the reads it takes after ferrying the aircraft back onto the run
+#: launch point, immediately before the trial flies. Mid-ferry calls (armed, in
+#: the air) are declined, and the AGENT's session does not carry the header at
+#: all - the model must not be able to move the datum by re-arming somewhere
+#: else, which is the whole reason the field exists.
+HARNESS_ANCHOR_HEADERS = {ANCHOR_HEADER: "1"}
 
 
 class HarnessCrash(RuntimeError):
@@ -636,6 +648,12 @@ async def _trial_origin(harness: LiveMCPSession, fallback: dict) -> dict:
 
     The parked position is also what the autopilot will adopt as home the
     moment it arms, so this single reading is the origin in both senses.
+
+    These two reads are also how the server is told (FIX 13): they travel on
+    the harness session, which carries :data:`HARNESS_ANCHOR_HEADERS`, so a
+    server whose link came up while the aircraft was standing somewhere else
+    re-anchors its ``session_launch_point`` here - on a vehicle its own
+    telemetry confirms is disarmed and on the ground - before the trial flies.
     """
     armed = await harness.call_raw("get_armed", {}, 60)
     position = await harness.call_raw("get_position", {}, 60)
@@ -827,7 +845,9 @@ async def run_llm_suite(config: SuiteConfig, log=print) -> list[TrialResult]:
     #: What ended the run, if anything other than running out of missions.
     crash: BaseException | None = None
 
-    harness = LiveMCPSession(config.url, config.api_key, HARNESS_CLIENT_NAME, "2")
+    harness = LiveMCPSession(
+        config.url, config.api_key, HARNESS_CLIENT_NAME, "2", extra_headers=HARNESS_ANCHOR_HEADERS
+    )
     await harness.__aenter__()
     try:
         log(f"[{_utc()}] connecting to {config.url} ...")
