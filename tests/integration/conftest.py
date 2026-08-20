@@ -238,6 +238,13 @@ def droneserver_url(sitl, tmp_path_factory):
         # adversarial suite (case G1); throttling the functional tests would
         # only make them flaky. Everything else keeps its production default.
         SAFETY_RATE_LIMIT_CRITICAL_CALLS="100",
+        # 2026-08-16: the unconfigured-install default tightened from control
+        # to telemetry (independent-review recommendation), which read-onlys
+        # every command tool for this keyless functional fixture. These suites
+        # test the tools, not authentication - the auth path has its own keys
+        # and its own suite (SAFETY_ENV / test_adversarial_sitl.py) - so the
+        # documented override restores command scope for the test client.
+        SAFETY_UNAUTHENTICATED_SCOPE="control",
     )
     log_path = workdir / "server.log"
     with open(log_path, "w") as log_file:
