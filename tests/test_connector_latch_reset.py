@@ -29,9 +29,20 @@ class _FakeAction:
         self.armed = True
 
 
+class _FakeTelemetry:
+    """The armed topic arm_drone confirms itself against (FIX 14)."""
+
+    def __init__(self, action: _FakeAction) -> None:
+        self._action = action
+
+    async def armed(self):
+        yield self._action.armed
+
+
 class _FakeDrone:
     def __init__(self) -> None:
         self.action = _FakeAction()
+        self.telemetry = _FakeTelemetry(self.action)
 
 
 class _FakeRequestContext:

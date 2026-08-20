@@ -257,10 +257,44 @@ def _vertical_verb(fields: dict) -> str:
     return "Holding altitude"
 
 
+#: How long :func:`arm_drone` waits for the autopilot's OWN armed telemetry to
+#: confirm the command. Arming is near-instant when it works; this is the bound
+#: on deciding that it did not.
+ARM_CONFIRM_TIMEOUT_S = 10.0
+#: How often the armed topic is re-read while waiting.
+ARM_POLL_INTERVAL_S = 0.5
+
+
+async def _wait_until_armed(drone, timeout_s: float | None = None) -> tuple[bool | None, float]:
+    """``(armed, seconds_waited)`` - the autopilot's own word, or ``None``.
+
+    ``None`` means the armed topic never answered, which is not the same
+    answer as "disarmed" and is not reported as one.
+    """
+    timeout_s = ARM_CONFIRM_TIMEOUT_S if timeout_s is None else timeout_s
+    started = _monotonic_s()
+    answered = False
+    while True:
+        try:
+            if bool(await _first(drone.telemetry.armed(), 2.0)):
+                return True, _monotonic_s() - started
+            answered = True
+        except Exception as e:
+            logger.warning(f"could not read armed state while confirming the arm command: {e}")
+        waited = _monotonic_s() - started
+        if waited >= timeout_s:
+            return (False if answered else None), waited
+        await asyncio.sleep(min(ARM_POLL_INTERVAL_S, max(0.0, timeout_s - waited)))
+
+
 # ARM
 @mcp.tool()
 async def arm_drone(ctx: Context, force: bool = False) -> dict:
-    """Arm the drone. Waits for drone connection if not yet ready.
+    """Arm the drone, and confirm from telemetry that it actually armed.
+
+    Reports success only when the AUTOPILOT says the vehicle is armed. A
+    command the autopilot accepted and then did not act on is reported as a
+    failure, with what the telemetry said.
 
     Args:
         force (bool): if True, force-arm WITHOUT prearm safety checks
@@ -280,17 +314,67 @@ async def arm_drone(ctx: Context, force: bool = False) -> dict:
     # flight's monitor_flight is not driven by the last flight's landing state.
     # The between-trial ferry arms once per trial, so this fires every trial.
     connector.reset_flight_latches()
+    method = "drone.action.arm_force" if force else "drone.action.arm"
     try:
-        if force:
-            log_mavlink_cmd("drone.action.arm_force")
-            await drone.action.arm_force()
-            return {"status": "success", "message": "Drone FORCE-armed (prearm checks bypassed)"}
-        log_mavlink_cmd("drone.action.arm")
-        await drone.action.arm()
+        log_mavlink_cmd(method)
+        await (drone.action.arm_force() if force else drone.action.arm())
     except Exception as e:
         logger.error(f"arm failed: {e}")
-        return {"status": "failed", "error": f"Arming failed: {e}"}
-    return {"status": "success", "message": "Drone armed"}
+        return {"status": "failed", "armed": False, "error": f"Arming failed: {e}"}
+
+    # FIX 14. The command returning is not the vehicle arming. MAVSDK's
+    # arm_force sends MAV_CMD_COMPONENT_ARM_DISARM with the force magic and
+    # returns as soon as the autopilot ACCEPTS it; ArduPilot can accept that
+    # command and still not arm - it did on 2026-08-19, and the tool reported
+    # "Drone FORCE-armed" to a model that then commanded a takeoff of a vehicle
+    # standing inert on its pad. The plain arm path raises on a refusal, but
+    # only on a refusal it is told about; both now finish the same way every
+    # other honesty fix in this module does, by asking the autopilot.
+    armed, waited = await _wait_until_armed(drone)
+    label = "FORCE-armed (prearm checks bypassed)" if force else "armed"
+    if armed:
+        message = f"Drone {label}"
+        logger.info(f"{LogColors.STATUS}{message} - confirmed by telemetry after {waited:.1f}s{LogColors.RESET}")
+        return {
+            "status": "success",
+            "message": message,
+            "armed": True,
+            "evidence": f"the autopilot reported the vehicle armed {waited:.1f}s after the command",
+        }
+    if armed is False:
+        logger.error(
+            f"{LogColors.ERROR}❌ {method} was accepted but the vehicle is still DISARMED "
+            f"after {waited:.1f}s{LogColors.RESET}"
+        )
+        return {
+            "status": "failed",
+            "armed": False,
+            "error": (
+                f"the autopilot accepted the {'force-' if force else ''}arm command but the vehicle is still "
+                f"DISARMED {waited:.0f}s later. It is not armed, and nothing that needs an armed vehicle - "
+                "takeoff, any navigation command - will work."
+            ),
+            "remedy": (
+                "Read get_health / print_status_text for what the autopilot is refusing on (a prearm check, a "
+                "safety switch, a failsafe, or a mode that will not arm), fix that, and arm again. Do not "
+                "command a takeoff: the aircraft is on the ground and disarmed."
+                + ("" if force else " force=True bypasses PREARM checks only; it cannot make the autopilot arm.")
+            ),
+        }
+    logger.error(f"{LogColors.ERROR}❌ {method} sent, but the armed state could not be read{LogColors.RESET}")
+    return {
+        "status": "failed",
+        "armed": None,
+        "error": (
+            f"the {'force-' if force else ''}arm command was sent, but the vehicle's armed state could not be "
+            f"read within {waited:.0f}s, so the server cannot say whether it armed. This is reported as a "
+            "failure rather than a success because there is no evidence of an armed aircraft."
+        ),
+        "remedy": (
+            "Call get_armed. If it answers armed, continue; if it does not answer either, the telemetry link "
+            "is not healthy enough to fly on - tell the operator rather than commanding a takeoff."
+        ),
+    }
 
 
 @mcp.tool()
