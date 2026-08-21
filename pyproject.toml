@@ -1,6 +1,6 @@
 [project]
 name = "droneserver"
-version = "0.2.0"
+version = "2.0.0"
 description = "MAVLink MCP Server - AI-powered drone control via Model Context Protocol"
 authors = [
     {name = "Peter J Burke"},
