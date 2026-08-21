@@ -26,7 +26,11 @@ def arm_and_takeoff(drone_tools: MCPToolClient, altitude_m: float = 15.0) -> Non
 
 def land_and_wait_disarm(drone_tools: MCPToolClient, timeout_s: float = 180.0) -> None:
     result = drone_tools.call("land", force=True, timeout=60)
-    assert result["status"] == "success", f"land failed: {result}"
+    # "no_action" is the honest answer for an aircraft that already landed and
+    # disarmed itself (e.g. a flown mission plan ending in auto-land) - FIX 5.
+    assert result["status"] in ("success", "no_action"), f"land failed: {result}"
+    if result["status"] == "no_action":
+        return
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         r = drone_tools.call("get_armed", timeout=30)

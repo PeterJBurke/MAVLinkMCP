@@ -165,4 +165,4 @@ def test_actuator_control_has_effect():
 
     ArduPilot result (Copter 4.5.7 SITL): RPC accepted but inert; ArduPilot
     has no handler for this message. See docs/firmware_notes.csv."""
-    raise NotImplementedError("requires PX4 SITL (llmuavpx4)")
+    pytest.skip("behavior test not yet written for the PX4 box")

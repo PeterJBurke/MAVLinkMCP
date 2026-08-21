@@ -40,7 +40,7 @@ def test_rtl_on_a_parked_disarmed_aircraft_is_refused(control_tools):
     result = control_tools.call("return_to_launch", timeout=60)
     assert result["status"] == "rejected", result
     assert result["rule"] == "precondition.rtl_requires_airborne", result
-    assert "disarmed" in result.get("reason", "")
+    assert "disarmed" in result.get("error", "")  # the wire result carries the reason under "error"
     # And the same command through the other door.
     by_mode = control_tools.call("set_flight_mode", mode="RTL", timeout=60)
     assert by_mode["status"] == "rejected", by_mode
@@ -74,9 +74,11 @@ def test_an_rtl_in_flight_is_observable_all_the_way_home(control_tools):
     must carry a live position and a distance, and the distance must close.
     """
     arm_and_takeoff(control_tools, altitude_m=20.0)
+    # +0.0015 deg (~167 m) stays inside the safety fixture's +/-0.002 deg
+    # polygon; the docstring's promise not to fly outside the geofence is load-bearing.
     out = control_tools.call(
         "go_to_location",
-        latitude_deg=SITL_HOME["lat"] + 0.0025,
+        latitude_deg=SITL_HOME["lat"] + 0.0015,
         longitude_deg=SITL_HOME["lon"],
         absolute_altitude_m=HOME_ALT + 30,
         timeout=60,
