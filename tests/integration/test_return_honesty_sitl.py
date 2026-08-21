@@ -115,9 +115,11 @@ def test_a_landing_away_from_the_target_is_not_mission_complete(control_tools):
     ``landed_away_from_target`` and never as a completed mission.
     """
     arm_and_takeoff(control_tools, altitude_m=20.0)
+    # +0.0015 deg (~167 m): inside the safety fixture's +/-0.002 deg polygon,
+    # still far enough that the deliberate 10 s land leaves > 20 m to target.
     away = control_tools.call(
         "go_to_location",
-        latitude_deg=SITL_HOME["lat"] + 0.0025,
+        latitude_deg=SITL_HOME["lat"] + 0.0015,
         longitude_deg=SITL_HOME["lon"],
         absolute_altitude_m=HOME_ALT + 30,
         timeout=60,
