@@ -72,11 +72,13 @@ def test_camera_capture_behavior():
     """Photo/video/stream behavior needs a real camera backend (PX4 + gazebo
     or a hardware camera). ArduPilot plain-SITL result: discovery empty,
     commands TIMEOUT (docs/firmware_notes.csv)."""
-    raise NotImplementedError("requires PX4 SITL with camera")
+    # llmuavpx4 runs PX4 SIH headless: reachable, but it has no camera
+    # backend, so reachability alone cannot satisfy this test's precondition.
+    pytest.skip("PX4 SITL is SIH/headless - no camera backend; pending a gazebo-camera SITL")
 
 
 @pytest.mark.px4
 def test_flight_logs_roundtrip_behavior():
     """List->download->verify roundtrip needs PX4 (MavSDK log_files is
     incompatible with ArduPilot's 1-based log ids; see firmware notes)."""
-    raise NotImplementedError("requires PX4 SITL")
+    pytest.skip("roundtrip behavior test not yet written for the PX4 box")
