@@ -1,0 +1,22 @@
+[Unit]
+Description=droneserver v2 lane %i (llmuavfarm) - MCP drone server, safety layer ON
+Documentation=https://github.com/PeterJBurke/droneserver
+After=network.target sitl@%i.service mavlink-relay-lane@%i.service
+Wants=sitl@%i.service mavlink-relay-lane@%i.service
+Requires=mavlink-relay-lane@%i.service
+
+[Service]
+Type=simple
+WorkingDirectory=/root/droneserver
+EnvironmentFile=/etc/droneserver/lane%i.env
+ExecStart=/root/droneserver/.venv/bin/python -m droneserver.server
+Restart=on-failure
+RestartSec=10
+# Binds to 127.0.0.1 only (MCP_HOST in lane%i.env) - the harness runs ON this
+# box, so nothing here needs to leave loopback. ufw (tailscale0-only) is the
+# outer boundary; this is never exposed even there.
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

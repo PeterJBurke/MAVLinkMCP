@@ -1,0 +1,34 @@
+[Unit]
+Description=PX4 SITL lane %i (PX4 v1.16.2 54f0455f, SIH built-in simulator, headless, llmuavfarm)
+Documentation=file:///home/dronepilot/PX4-Autopilot/Tools/sitl_run.sh
+After=network.target
+
+[Service]
+Type=simple
+User=dronepilot
+Group=dronepilot
+WorkingDirectory=/opt/sitl/lane%i
+# Mirrors llmuavpx4's px4-sitl.service (single shared PX4 build tree, one
+# build, all lanes run the same binary+ROMFS - same principle as the AP
+# lanes' -N/--no-rebuild against ONE ardupilot tree). -i %i is PX4's
+# multi-instance flag: it offsets every MAVLink/uXRCE port PX4 opens by the
+# instance number (see px4-rc.mavlink: offboard link local
+# 14580+instance, remote 14540+instance - that remote port is what
+# px4-mavbridge-lane@%i.service's --master=udpin:127.0.0.1:$((14540+%i))
+# listens on). -w is this lane's OWN mutable state dir (param.bson, dataman,
+# log/) so lane%i's state never touches another lane's; -s/rootfs point at
+# the ONE shared build tree's ROMFS (read-only startup scripts + airframes),
+# same file every lane sources, same as llmuavpx4.
+Environment=PX4_SIM_MODEL=sihsim_quadx
+Environment=PX4_HOME_LAT=33.6405
+Environment=PX4_HOME_LON=-117.8443
+Environment=PX4_HOME_ALT=20
+ExecStart=/home/dronepilot/PX4-Autopilot/build/px4_sitl_default/bin/px4 -i %i -d -s /home/dronepilot/PX4-Autopilot/build/px4_sitl_default/etc/init.d-posix/rcS -w /opt/sitl/lane%i /home/dronepilot/PX4-Autopilot/build/px4_sitl_default/etc
+Restart=on-failure
+RestartSec=10s
+Nice=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

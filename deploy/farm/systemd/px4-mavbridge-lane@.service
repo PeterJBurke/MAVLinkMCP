@@ -1,0 +1,30 @@
+[Unit]
+Description=MAVProxy UDP->TCP bridge for PX4 SITL lane %i (llmuavfarm)
+Documentation=file:///home/dronepilot/venv-px4-mavbridge/bin/mavproxy.py
+# PX4's mavlink module is UDP-only (no built-in tcpin), unlike ArduPilot's
+# sim_vehicle.py which can emit --out=tcpin directly. This bridge is the PX4
+# equivalent of that tcpin output: it catches lane%i's PX4 SITL "offboard"
+# MAVLink push (see px4-rc.mavlink: -o $((14540+px4_instance)), 127.0.0.1)
+# and re-exposes it as a TCP tcpin server on the SAME port convention the AP
+# lanes' SITL already uses (127.0.0.1:$((5670+%i))), so
+# mavlink-relay-lane@%i.service's --upstream needs no PX4-specific change.
+# Same role as px4-mavbridge.service on llmuavpx4, scoped to one lane and
+# loopback-only (no tailnet --out here; capture mirrors are the relay's job).
+After=network.target sitl-px4@%i.service
+Wants=sitl-px4@%i.service
+Before=mavlink-relay-lane@%i.service
+
+[Service]
+Type=simple
+User=dronepilot
+Group=dronepilot
+WorkingDirectory=/opt/sitl/lane%i
+Environment=MAVPROXY_HOME=/opt/sitl/lane%i
+ExecStart=/bin/bash -c 'exec /home/dronepilot/venv-px4-mavbridge/bin/mavproxy.py --master=udpin:127.0.0.1:$((14540 + %i)) --out=tcpin:127.0.0.1:$((5670 + %i)) --daemon --non-interactive --state-basedir=/opt/sitl/lane%i'
+Restart=on-failure
+RestartSec=10s
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

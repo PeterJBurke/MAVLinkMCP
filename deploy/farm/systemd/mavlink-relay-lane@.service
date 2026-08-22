@@ -1,0 +1,23 @@
+[Unit]
+Description=MAVLink relay for lane %i (loopback tap for droneserver-lane%i, llmuavfarm)
+Documentation=file:///root/droneserver/scripts/mavlink_relay.py
+After=network.target sitl@%i.service
+Wants=sitl@%i.service
+Before=droneserver-lane@%i.service
+
+[Service]
+Type=simple
+WorkingDirectory=/root/droneserver
+# listen: what droneserver-lane%i connects to (MAVLINK_ADDRESS=127.0.0.1,
+# MAVLINK_PORT from /etc/droneserver/lane%i.env). upstream: this lane's SITL
+# tcpin output. mirror #1: wire-tap capture port; mirror #2: this lane's
+# dedicated MavSDK telemetry-recorder port (own port per lane so recorders
+# never cross-contaminate between lanes - the fix documented in
+# mavlink_relay.py's module docstring).
+ExecStart=/bin/bash -c 'exec /root/droneserver/.venv/bin/python /root/droneserver/scripts/mavlink_relay.py --listen 127.0.0.1:$((15670 + %i)) --upstream 127.0.0.1:$((5670 + %i)) --mirror 127.0.0.1:$((14650 + 10*%i)) --mirror 127.0.0.1:$((14541 + 10*%i))'
+Restart=always
+RestartSec=5
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

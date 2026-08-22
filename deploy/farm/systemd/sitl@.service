@@ -1,0 +1,32 @@
+[Unit]
+Description=ArduPilot SITL lane %i (ArduCopter Copter-4.5.7, llmuavfarm)
+Documentation=file:///home/dronepilot/CreateSITLenv/README.md
+After=network.target
+
+[Service]
+Type=simple
+User=dronepilot
+Group=dronepilot
+WorkingDirectory=/opt/sitl/lane%i
+# One lane = one -I instance run with cwd = WorkingDirectory (/opt/sitl/lane%i):
+# sim_vehicle.py writes eeprom.bin/*.parm/logs/ into its invocation cwd for a
+# single-instance run (see sim_vehicle.py base_dir/instance_dir logic), so -v
+# ArduCopter is passed explicitly (cwd is "lane%i", not "ArduCopter", so the
+# magic vehicle-type-from-dirname detection is bypassed on purpose) and each
+# lane's state never touches another lane's or the shared source tree's.
+# Single explicit --out (127.0.0.1 only, matches the role llmuavsitl's port
+# 6789 plays) is what the per-lane mavlink relay attaches to as upstream.
+# Same field origin as llmuavsitl (drone_sim.service --custom-location).
+# -N/--no-rebuild is mandatory here: without it every lane's sim_vehicle.py
+# independently runs "waf build" against the ONE shared /home/dronepilot/
+# ardupilot build tree at startup, and 8 concurrent builds racing the same
+# object files is a corruption risk, not just wasted CPU. The binary is built
+# once (see /root/build_ardupilot*.sh) and all 8 lanes run that same binary.
+ExecStart=/bin/bash -c 'source /home/dronepilot/venv-ardupilot/bin/activate && exec /home/dronepilot/ardupilot/Tools/autotest/sim_vehicle.py -v ArduCopter -I %i -C -N --mavproxy-args="--daemon" --out=tcpin:127.0.0.1:$((5670 + %i)) --custom-location=33.64586111,-117.84275,25,0'
+Restart=on-failure
+RestartSec=10s
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
