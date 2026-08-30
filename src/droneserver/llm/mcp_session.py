@@ -61,6 +61,31 @@ class MCPTransportError(RuntimeError):
     """The connection to the drone server failed (not a tool refusing a call)."""
 
 
+def _still_owed(task: asyncio.Task | None, owed: int) -> bool:
+    """Is a cancellation still outstanding that the transport did not issue?
+
+    The one question :class:`LiveMCPSession` has to answer when a
+    ``CancelledError`` arrives out of an MCP transport: *was that the
+    transport's own cancel scope, or is somebody genuinely cancelling this
+    trial?* Absorbing the first is the whole of FIX 16; absorbing the second
+    would leave a wall-clock guard or a Ctrl-C with no effect, which is worse
+    than the crash.
+
+    They are told apart mechanically, not by guesswork. An anyio cancel scope
+    cancels its owning task by calling ``task.cancel()``, and when that scope is
+    *exited by its owner* anyio calls ``task.uncancel()`` for exactly the
+    cancellations it issued. So: record ``task.cancelling()`` before the call,
+    tear the transport down after the cancellation, and compare.
+
+    * transport's own scope - measured 0 -> 1 -> **0** after teardown -> absorb;
+    * a real ``task.cancel()`` - measured 0 -> 1 -> **1** after teardown -> re-raise.
+
+    Both numbers were measured against the real
+    :func:`mcp.client.streamable_http.streamablehttp_client`, not reasoned about.
+    """
+    return task is None or task.cancelling() > owed
+
+
 class MCPSessionTaskError(MCPTransportError):
     """A session was opened in one asyncio task and closed in another.
 
@@ -156,6 +181,32 @@ class LiveMCPSession:
     :class:`MCPSessionTaskError` rather than the process-killing behaviour
     described there. A background poller therefore opens *and* closes its
     session inside its own task; it does not have one handed to it.
+
+    **A transport may also cancel its own owner, and that is FIX 16.** Even with
+    one task holding the session for its whole life, an MCP transport is
+    ``async with anyio.create_task_group() as tg:`` with background tasks inside
+    it. When one of those tasks dies - the streamable-HTTP client's
+    ``post_writer`` losing the far end is the case we met - the group cancels its
+    cancel scope, and that scope's owner is *this* task, sitting in
+    ``call_tool`` waiting for a reply. The reply never comes; a
+    ``CancelledError`` does instead.
+
+    ``CancelledError`` is a ``BaseException``, so it walks straight through the
+    ``except Exception`` that exists to turn a broken connection into one
+    recorded ``transport_error`` - and out through the agent loop, and out of
+    the trial. **This killed all three of ``z-ai/glm-5.2``'s Mission 6 attempts
+    on 2026-08-23**, each on its first call into the second (Google Maps) server,
+    each at $0.00 with no capture bundle: the retry logic written for exactly
+    this failure never ran, because the failure did not arrive as an
+    ``Exception``.
+
+    :meth:`_invoke` therefore catches it, unwinds the dead transport - which is
+    what actually *ends* the cancellation, because exiting an anyio scope in its
+    owning task is what makes anyio reclaim it - and re-raises it as an
+    :class:`MCPTransportError`, which the existing reconnect-and-retry path
+    already knows what to do with. A cancellation that survives that teardown
+    was never the transport's, and is re-raised untouched; see
+    :func:`_still_owed`.
     """
 
     def __init__(
@@ -190,6 +241,10 @@ class LiveMCPSession:
         #: close it. See :class:`MCPSessionTaskError`.
         self._owner_task: asyncio.Task | None = None
         self.reconnects = 0
+        #: How many times this session absorbed a cancellation issued by its own
+        #: transport (FIX 16). Kept as a count because "it happened and we
+        #: recovered" is a different thing from "the connection dropped".
+        self.transport_cancellations = 0
 
     @property
     def client_label(self) -> str:
@@ -210,23 +265,42 @@ class LiveMCPSession:
         await self.aclose()
 
     async def _connect(self) -> None:
+        task = asyncio.current_task()
+        owed = task.cancelling() if task is not None else 0
         stack = contextlib.AsyncExitStack()
-        if self.transport == "http":
-            # streamablehttp_client yields a third element (a session-id getter)
-            # the drone SSE transport does not; ignore it.
-            read, write, *_ = await stack.enter_async_context(streamablehttp_client(self.url, headers=self.headers))
-        else:
-            read, write = await stack.enter_async_context(sse_client(self.url, headers=self.headers))
-        session = await stack.enter_async_context(
-            ClientSession(
-                read,
-                write,
-                client_info=mcp_types.Implementation(name=self.client_name, version=self.client_version),
+        try:
+            if self.transport == "http":
+                # streamablehttp_client yields a third element (a session-id getter)
+                # the drone SSE transport does not; ignore it.
+                read, write, *_ = await stack.enter_async_context(streamablehttp_client(self.url, headers=self.headers))
+            else:
+                read, write = await stack.enter_async_context(sse_client(self.url, headers=self.headers))
+            session = await stack.enter_async_context(
+                ClientSession(
+                    read,
+                    write,
+                    client_info=mcp_types.Implementation(name=self.client_name, version=self.client_version),
+                )
             )
-        )
-        await session.initialize()
+            await session.initialize()
+        except asyncio.CancelledError as cancelled:
+            # Opening a connection to a server that is not there cancels the
+            # opener exactly as a broken call does: the transport's background
+            # writer fails, its task group cancels the scope, and the scope's
+            # owner is this task, mid-`initialize`. A reconnect that dies this
+            # way took the trial with it - which is how FIX 16's crash finished
+            # even after the failing call itself was contained.
+            await self._unwind(stack)
+            if _still_owed(task, owed):
+                raise
+            raise MCPTransportError(
+                f"connecting to {self.url}: the transport cancelled the task opening it ({cancelled or 'no message'})"
+            ) from None
+        except BaseException:
+            await self._unwind(stack)
+            raise
         self._stack, self._session = stack, session
-        self._owner_task = asyncio.current_task()
+        self._owner_task = task
 
     def _check_owner(self, what: str) -> None:
         """Refuse to unwind the connection from a task that did not open it."""
@@ -241,12 +315,31 @@ class LiveMCPSession:
                 f"task cancels the task that opened it (see MCPSessionTaskError)"
             )
 
+    async def _unwind(self, stack: contextlib.AsyncExitStack) -> None:
+        """Close a transport's exit stack without letting its teardown kill us.
+
+        Unwinding fires the transport's cancel scope at whoever owns it - this
+        task. ``suppress(Exception)`` cannot suppress that, because
+        ``CancelledError`` is a ``BaseException``, so a teardown used to be able
+        to kill the trial it was tidying up after. Absorb the transport's own
+        cancellation; re-raise anything still owed afterwards (:func:`_still_owed`).
+        """
+        task = asyncio.current_task()
+        owed = task.cancelling() if task is not None else 0
+        try:
+            await stack.aclose()
+        except asyncio.CancelledError:
+            if _still_owed(task, owed):
+                raise
+            self.transport_cancellations += 1
+        except Exception:
+            pass
+
     async def aclose(self) -> None:
         self._check_owner("close")
         stack, self._stack, self._session, self._owner_task = self._stack, None, None, None
         if stack is not None:
-            with contextlib.suppress(Exception):
-                await stack.aclose()
+            await self._unwind(stack)
 
     async def _reconnect(self) -> None:
         # Closes and reopens, so it inherits the same-task rule: a reconnect
@@ -265,19 +358,50 @@ class LiveMCPSession:
             for t in listing.tools
         ]
 
+    async def _invoke(self, tool: str, arguments: dict, timeout_s: float):
+        """One attempt at a tool call, with the transport's own cancellation contained.
+
+        The containment is FIX 16 and is described on the class. In short: a
+        transport that cancels the task holding it must not be able to end the
+        trial, and the only way to *stop* that cancellation is to unwind the
+        transport here, in the task that owns its cancel scope. Having done
+        that, this is a failed call like any other and is reported as one, so
+        the caller's ordinary reconnect-and-retry applies.
+        """
+        assert self._session is not None
+        task = asyncio.current_task()
+        owed = task.cancelling() if task is not None else 0
+        try:
+            return await self._session.call_tool(
+                tool, arguments=arguments or None, read_timeout_seconds=timedelta(seconds=timeout_s)
+            )
+        except asyncio.CancelledError as cancelled:
+            if self._owner_task is not None and task is not self._owner_task:
+                # Not our scope to unwind: the same-task rule outranks this, and
+                # unwinding from here is the 2026-08-20 defect all over again.
+                raise
+            await self.aclose()
+            if _still_owed(task, owed):
+                raise
+            self.transport_cancellations += 1
+            raise MCPTransportError(
+                f"{tool}: the transport cancelled the task that owns it "
+                f"({cancelled or 'no message'}); the connection has been torn down"
+            ) from None
+
     async def call_raw(self, tool: str, arguments: dict, timeout_s: float = 300.0) -> dict:
         """Execute one tool call and return the tool's own result dictionary."""
-        assert self._session is not None
+        if self._session is None:
+            # An earlier reconnect could not re-open the connection. Try again
+            # here rather than failing every remaining call of the trial on a
+            # stale ``None``: a transport that was down for one call is often up
+            # for the next, and the point of FIX 16 is that the trial continues.
+            await self._reconnect()
         try:
-            result = await self._session.call_tool(
-                tool, arguments=arguments or None, read_timeout_seconds=timedelta(seconds=timeout_s)
-            )
+            result = await self._invoke(tool, arguments, timeout_s)
         except Exception:
             await self._reconnect()
-            assert self._session is not None
-            result = await self._session.call_tool(
-                tool, arguments=arguments or None, read_timeout_seconds=timedelta(seconds=timeout_s)
-            )
+            result = await self._invoke(tool, arguments, timeout_s)
         return _parse(tool, result)
 
     async def call(self, tool: str, arguments: dict, *, turn: int = 0, seq: int = 0, timeout_s: float = 300.0):
@@ -362,16 +486,37 @@ class MultiServerSession:
 
     async def __aenter__(self) -> "MultiServerSession":
         await self.primary.__aenter__()
-        for _, session in self.extras:
-            await session.__aenter__()
+        opened: list[LiveMCPSession] = []
+        try:
+            for _, session in self.extras:
+                await session.__aenter__()
+                opened.append(session)
+        except BaseException:
+            # A second server that will not open must not leave the first one's
+            # transport - and its anyio cancel scope - alive in this task with
+            # nobody holding a reference to close it.
+            for session in reversed(opened):
+                with contextlib.suppress(Exception):
+                    await session.aclose()
+            with contextlib.suppress(Exception):
+                await self.primary.aclose()
+            raise
         return self
 
     async def __aexit__(self, *exc) -> None:
         await self.aclose()
 
     async def aclose(self) -> None:
+        """Close every server, even if one of them refuses to close.
+
+        The drone server is closed last and its failure is the one that is
+        allowed to surface: it owns the aircraft. An extra server failing to
+        shut down cleanly must not be able to leave the drone session open -
+        which is what happened when this was a bare loop.
+        """
         for _, session in self.extras:
-            await session.aclose()
+            with contextlib.suppress(Exception):
+                await session.aclose()
         await self.primary.aclose()
 
     async def list_tools(self) -> list[ToolSpec]:
