@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 
 from mavsdk import System
+from mavsdk.telemetry import Position
 from mcp.server.fastmcp import FastMCP
 
 from droneserver.config import get_settings
@@ -204,8 +205,12 @@ async def _read_topic(drone, topic: str, timeout_s: float = LAUNCH_READ_TIMEOUT_
         return None
 
 
-async def _parked_here(drone) -> tuple[object | None, bool | None, bool | None]:
+async def _parked_here(drone) -> tuple[Position | None, bool | None, bool | None]:
     """``(position, armed, on_ground)`` - each ``None`` where nothing answered.
+
+    The first element is the MavSDK ``Position`` the ``position`` topic
+    yields; every caller reads ``latitude_deg``/``longitude_deg`` off it, so
+    naming it here rather than ``object`` is what the callers already assume.
 
     ``on_ground`` is the AUTOPILOT's own assessment (``landed_state`` then
     ``in_air``), which no arming anywhere can move; see

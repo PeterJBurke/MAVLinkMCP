@@ -9,6 +9,7 @@ unchanged from v1. Two tools complete the plugin: ``get_telemetry_extended``
 
 import asyncio
 import math
+from typing import Any
 
 from mcp.server.fastmcp import Context
 
@@ -345,7 +346,11 @@ async def get_home_position(ctx: Context) -> dict:
     logger.info(
         f"Home position: {home_data['latitude_deg']}, {home_data['longitude_deg']} at {home_data['absolute_altitude_m']}m"
     )
-    result = {"status": "success", "home": home_data}
+    # Heterogeneous by design - strings, a nested dict, a float, and a
+    # three-valued bool|None flag - so it is spelled out rather than inferred:
+    # from the two string-ish seed values alone mypy infers the join
+    # ``dict[str, Collection[str]]`` and then rejects every later key.
+    result: dict[str, Any] = {"status": "success", "home": home_data}
     launch = getattr(connector, "session_launch", None)
     if not launch:
         result["session_launch_point"] = None

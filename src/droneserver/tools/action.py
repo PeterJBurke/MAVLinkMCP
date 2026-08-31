@@ -2,6 +2,7 @@
 
 import asyncio
 import math
+from typing import Any
 
 from mcp.server.fastmcp import Context
 
@@ -888,7 +889,10 @@ async def return_to_launch(ctx: Context) -> dict:
         logger.error(f"{LogColors.ERROR}❌ TOOL ERROR - RTL failed: {e}{LogColors.RESET}")
         return {"status": "failed", "error": f"Return to Launch failed: {str(e)}"}
 
-    result = {
+    # Spelled out, not inferred: the later keys are a nested destination dict,
+    # a float drift and an explicit ``None``, none of which fit the
+    # ``dict[str, str]`` mypy infers from the two seed values.
+    result: dict[str, Any] = {
         "status": "success",
         "message": "Return to Launch initiated - the aircraft is flying to the autopilot's home position",
     }
