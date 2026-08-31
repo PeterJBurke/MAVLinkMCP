@@ -698,7 +698,9 @@ class MissionRunner:
                 and self._mission_items_done(record, s)
             ):
                 self._descent_commanded = True
-                self.emit("info", "mission items complete - commanding return-to-launch", s, **record.progress_evidence())
+                self.emit(
+                    "info", "mission items complete - commanding return-to-launch", s, **record.progress_evidence()
+                )
                 await self._do_action(s.mission_complete_action, drone, s, reason="mission items complete")
 
             # ---- no-progress watchdog ----

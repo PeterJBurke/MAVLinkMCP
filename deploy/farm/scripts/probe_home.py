@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """One-off probe: call get_home_position through the MCP client, print it."""
+
 import sys
 
 sys.path.insert(0, "/root/droneserver/src")

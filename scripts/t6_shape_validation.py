@@ -123,19 +123,31 @@ def monitor_leg(c: BenchmarkClient, checks: Checks, leg: str, auto_land: bool, u
 
     # V2: the retired string must never appear, in any phase.
     offenders = [d for d in displays if "MISSION COMPLETE" in d.upper()]
-    checks.add("V2", f"{leg}: no 'MISSION COMPLETE' from monitor_flight", not offenders,
-               offenders[0] if offenders else f"{len(displays)} polls clean")
+    checks.add(
+        "V2",
+        f"{leg}: no 'MISSION COMPLETE' from monitor_flight",
+        not offenders,
+        offenders[0] if offenders else f"{len(displays)} polls clean",
+    )
 
     # V3a: every answer carries live position + distance from the launch point.
     blind = [r for r in results if r.get("position") is None or r.get("distance_from_launch_point_m") is None]
-    checks.add("V3", f"{leg}: every poll carries live position + launch distance", not blind,
-               f"{len(results) - len(blind)}/{len(results)} observable")
+    checks.add(
+        "V3",
+        f"{leg}: every poll carries live position + launch distance",
+        not blind,
+        f"{len(results) - len(blind)}/{len(results)} observable",
+    )
 
     # V3b: the loop never freezes on one display string (the 24-identical-polls
     # signature of the blind return).
-    frozen = any(len(set(displays[i:i + 5])) == 1 for i in range(max(0, len(displays) - 4)))
-    checks.add("V3", f"{leg}: no 5 consecutive identical displays", not frozen,
-               "varied" if not frozen else "frozen display detected")
+    frozen = any(len(set(displays[i : i + 5])) == 1 for i in range(max(0, len(displays) - 4)))
+    checks.add(
+        "V3",
+        f"{leg}: no 5 consecutive identical displays",
+        not frozen,
+        "varied" if not frozen else "frozen display detected",
+    )
 
     return results[-1] if results else {}, results
 
@@ -173,13 +185,20 @@ def main() -> int:
         origin_amsl = ground_elevation(c)
 
         hp = c.call("get_home_position", timeout=60)
-        checks.add("V4", "get_home_position carries session_launch_point", "session_launch_point" in hp,
-                   str(hp.get("session_launch_point"))[:60])
+        checks.add(
+            "V4",
+            "get_home_position carries session_launch_point",
+            "session_launch_point" in hp,
+            str(hp.get("session_launch_point"))[:60],
+        )
 
         rtl = c.call("return_to_launch", timeout=90)
-        checks.add("V1", "parked RTL at the origin is refused",
-                   rtl.get("status") == "rejected" and rtl.get("rule") == "precondition.rtl_requires_airborne",
-                   f"status={rtl.get('status')} rule={rtl.get('rule')}")
+        checks.add(
+            "V1",
+            "parked RTL at the origin is refused",
+            rtl.get("status") == "rejected" and rtl.get("rule") == "precondition.rtl_requires_airborne",
+            f"status={rtl.get('status')} rule={rtl.get('rule')}",
+        )
 
         # ---------------- Phase B: outbound leg (the hospital analog) ----------------
         print(f"\nPhase B — outbound {OUT_LEG_M:.0f} m, auto-land at the remote site", flush=True)
@@ -188,8 +207,13 @@ def main() -> int:
             checks.add("--", "outbound arm+takeoff", False, why)
             return 1
         dest = _offset(origin[0], origin[1], OUT_LEG_M, 0.0)
-        go = c.call("go_to_location", latitude_deg=dest[0], longitude_deg=dest[1],
-                    absolute_altitude_m=origin_amsl + CRUISE_REL_M, timeout=90)
+        go = c.call(
+            "go_to_location",
+            latitude_deg=dest[0],
+            longitude_deg=dest[1],
+            absolute_altitude_m=origin_amsl + CRUISE_REL_M,
+            timeout=90,
+        )
         if go.get("status") != "success":
             checks.add("--", "outbound go_to_location accepted", False, str(go.get("error") or go.get("rule")))
             return 1
@@ -197,21 +221,31 @@ def main() -> int:
         wait_disarm(c)
         here = _position(c)
         at_dest = here and _distance_m((here[0], here[1]), dest) <= 30.0
-        checks.add("--", "aircraft landed at the remote site", bool(at_dest),
-                   f"{_distance_m((here[0], here[1]), dest):.1f} m from it" if here else "no position")
+        checks.add(
+            "--",
+            "aircraft landed at the remote site",
+            bool(at_dest),
+            f"{_distance_m((here[0], here[1]), dest):.1f} m from it" if here else "no position",
+        )
         if not at_dest:
             return 1
 
         # ---------------- Phase C: the T6 trap, parked away from the origin ----------------
         print("\nPhase C — parked at the remote site (the M1 trap)", flush=True)
         rtl = c.call("return_to_launch", timeout=90)
-        checks.add("V1", "parked RTL at the REMOTE site is refused",
-                   rtl.get("status") == "rejected" and rtl.get("rule") == "precondition.rtl_requires_airborne",
-                   f"status={rtl.get('status')} rule={rtl.get('rule')}")
+        checks.add(
+            "V1",
+            "parked RTL at the REMOTE site is refused",
+            rtl.get("status") == "rejected" and rtl.get("rule") == "precondition.rtl_requires_airborne",
+            f"status={rtl.get('status')} rule={rtl.get('rule')}",
+        )
         mon = c.call("monitor_flight", arrival_threshold_m=ARRIVAL_M, auto_land=False, timeout=MONITOR_TIMEOUT)
-        checks.add("V2", "fresh monitor on the parked remote aircraft does not claim completion",
-                   mon.get("mission_complete") is False,
-                   f"status={mon.get('status')} mission_complete={mon.get('mission_complete')}")
+        checks.add(
+            "V2",
+            "fresh monitor on the parked remote aircraft does not claim completion",
+            mon.get("mission_complete") is False,
+            f"status={mon.get('status')} mission_complete={mon.get('mission_complete')}",
+        )
 
         # ---------------- Phase D: re-arm moves HOME; the tool must say so ----------------
         print("\nPhase D — re-arm at the remote site (the M3 trap)", flush=True)
@@ -225,35 +259,53 @@ def main() -> int:
             "latitude_deg" in home
             and _distance_m((home["latitude_deg"], home["longitude_deg"]), origin) > OUT_LEG_M * 0.8
         )
-        checks.add("--", "autopilot HOME followed the re-arm (the trap is armed)", home_moved,
-                   f"home {_distance_m((home['latitude_deg'], home['longitude_deg']), origin):.0f} m from origin"
-                   if home_moved else str(home)[:60])
+        checks.add(
+            "--",
+            "autopilot HOME followed the re-arm (the trap is armed)",
+            home_moved,
+            f"home {_distance_m((home['latitude_deg'], home['longitude_deg']), origin):.0f} m from origin"
+            if home_moved
+            else str(home)[:60],
+        )
         flag = hp.get("home_matches_session_launch")
         if flag is None:
-            checks.add("V4", "home/launch divergence disclosed", None,
-                       "session launch unknown to the server (was it restarted mid-script?)")
+            checks.add(
+                "V4",
+                "home/launch divergence disclosed",
+                None,
+                "session launch unknown to the server (was it restarted mid-script?)",
+            )
         else:
             slp = hp.get("session_launch_point") or {}
-            slp_ok = (
-                "latitude_deg" in slp
-                and _distance_m((slp["latitude_deg"], slp["longitude_deg"]), origin) <= 30.0
+            slp_ok = "latitude_deg" in slp and _distance_m((slp["latitude_deg"], slp["longitude_deg"]), origin) <= 30.0
+            checks.add(
+                "V4",
+                "home/launch divergence disclosed",
+                flag is False and bool(hp.get("warning")) and slp_ok,
+                f"home_matches_session_launch={flag}, warning={'yes' if hp.get('warning') else 'NO'}, "
+                f"session_launch_point {'≈origin' if slp_ok else 'WRONG: ' + str(slp)[:40]}",
             )
-            checks.add("V4", "home/launch divergence disclosed",
-                       flag is False and bool(hp.get("warning")) and slp_ok,
-                       f"home_matches_session_launch={flag}, warning={'yes' if hp.get('warning') else 'NO'}, "
-                       f"session_launch_point {'≈origin' if slp_ok else 'WRONG: ' + str(slp)[:40]}")
 
         # ---------------- Phase E: explicit return to the origin coordinate ----------------
         print("\nPhase E — return on the explicit origin coordinate", flush=True)
-        go = c.call("go_to_location", latitude_deg=origin[0], longitude_deg=origin[1],
-                    absolute_altitude_m=origin_amsl + CRUISE_REL_M, timeout=90)
+        go = c.call(
+            "go_to_location",
+            latitude_deg=origin[0],
+            longitude_deg=origin[1],
+            absolute_altitude_m=origin_amsl + CRUISE_REL_M,
+            timeout=90,
+        )
         if go.get("status") != "success":
             checks.add("--", "return go_to_location accepted", False, str(go.get("error") or go.get("rule")))
             return 1
         final, results = monitor_leg(c, checks, "return", auto_land=True, until="complete")
         first, last = closing_distances(results, "distance_to_target_m")
-        checks.add("V3", "return: distance-to-target visibly closed", first is not None and last is not None and last < first,
-                   f"{first} m → {last} m" if first is not None else "no distances seen")
+        checks.add(
+            "V3",
+            "return: distance-to-target visibly closed",
+            first is not None and last is not None and last < first,
+            f"{first} m → {last} m" if first is not None else "no distances seen",
+        )
         wait_disarm(c)
         here = _position(c)
         err = _distance_m((here[0], here[1]), origin) if here else float("inf")
@@ -267,13 +319,21 @@ def main() -> int:
                 checks.add("--", "RTL-leg arm+takeoff", False, why)
                 return 1
             east = _offset(origin[0], origin[1], 0.0, RTL_LEG_M)
-            c.call("go_to_location", latitude_deg=east[0], longitude_deg=east[1],
-                   absolute_altitude_m=origin_amsl + CRUISE_REL_M, timeout=90)
+            c.call(
+                "go_to_location",
+                latitude_deg=east[0],
+                longitude_deg=east[1],
+                absolute_altitude_m=origin_amsl + CRUISE_REL_M,
+                timeout=90,
+            )
             monitor_leg(c, checks, "RTL-leg outbound", auto_land=False, until="arrived")
             rtl = c.call("return_to_launch", timeout=90)
-            checks.add("V5", "airborne RTL is accepted and names its destination",
-                       rtl.get("status") == "success" and rtl.get("destination") is not None,
-                       f"status={rtl.get('status')} dest={'named' if rtl.get('destination') else 'MISSING'}")
+            checks.add(
+                "V5",
+                "airborne RTL is accepted and names its destination",
+                rtl.get("status") == "success" and rtl.get("destination") is not None,
+                f"status={rtl.get('status')} dest={'named' if rtl.get('destination') else 'MISSING'}",
+            )
             final, results = monitor_leg(c, checks, "RTL return", auto_land=True, until="complete")
             wait_disarm(c)
             here = _position(c)
@@ -287,10 +347,14 @@ def main() -> int:
             # went where the tool said it was going.
             closed = first is not None and last is not None and last < first
             single_poll_done = len(results) <= 1 and err <= ARRIVAL_M
-            checks.add("V5", "RTL return observable (distances closed, or completed within one blocking poll)",
-                       closed or single_poll_done,
-                       f"{first} m → {last} m" if closed else
-                       (f"single poll, landed {err:.1f} m from launch" if single_poll_done else "no distances seen"))
+            checks.add(
+                "V5",
+                "RTL return observable (distances closed, or completed within one blocking poll)",
+                closed or single_poll_done,
+                f"{first} m → {last} m"
+                if closed
+                else (f"single poll, landed {err:.1f} m from launch" if single_poll_done else "no distances seen"),
+            )
             checks.add("V5", "RTL completed at the launch point, disarmed", err <= ARRIVAL_M, f"home error {err:.1f} m")
 
     finally:

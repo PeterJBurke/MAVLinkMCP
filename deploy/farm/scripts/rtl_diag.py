@@ -28,4 +28,6 @@ for i in range(6):
     a = c.call("get_armed")
     ia = c.call("get_in_air")
     fm = c.call("get_flight_mode")
-    print(f"t+{(i+1)*10}s: mode={fm.get('flight_mode')} armed={a.get('armed')} in_air={ia.get('in_air')} pos={p.get('position')}")
+    print(
+        f"t+{(i + 1) * 10}s: mode={fm.get('flight_mode')} armed={a.get('armed')} in_air={ia.get('in_air')} pos={p.get('position')}"
+    )

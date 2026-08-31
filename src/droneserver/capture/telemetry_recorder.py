@@ -222,6 +222,7 @@ def is_shared_bind(system_address: str) -> bool:
     host, _, _port = rest.rpartition(":")
     return host.strip() in _ANY_HOSTS
 
+
 #: Grace given to the gRPC channel to finish in-flight calls on close.
 CHANNEL_CLOSE_GRACE_S = 2.0
 

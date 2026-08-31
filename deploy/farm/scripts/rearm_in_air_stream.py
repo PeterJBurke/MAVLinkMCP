@@ -20,6 +20,7 @@ Exit 0: set_telemetry_rate(in_air) reported success.
 Exit 1: the call failed or errored - caller should fall back to a full
         restart-based recovery cycle.
 """
+
 import sys
 import time
 

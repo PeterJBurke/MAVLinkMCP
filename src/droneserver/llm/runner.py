@@ -845,9 +845,7 @@ async def run_llm_suite(config: SuiteConfig, log=print) -> list[TrialResult]:
     #: What ended the run, if anything other than running out of missions.
     crash: BaseException | None = None
 
-    harness = LiveMCPSession(
-        config.url, config.api_key, HARNESS_CLIENT_NAME, "2", extra_headers=HARNESS_ANCHOR_HEADERS
-    )
+    harness = LiveMCPSession(config.url, config.api_key, HARNESS_CLIENT_NAME, "2", extra_headers=HARNESS_ANCHOR_HEADERS)
     await harness.__aenter__()
     try:
         log(f"[{_utc()}] connecting to {config.url} ...")

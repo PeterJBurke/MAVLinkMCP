@@ -11,6 +11,7 @@ Usage: safety_precheck.py URL API_KEY
 Exit 0: safe (disarmed, on ground) - proceed.
 Exit 1: could not confirm safe within the timeout - caller should NOT fly.
 """
+
 import sys
 import time
 

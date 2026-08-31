@@ -237,11 +237,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--upstream", required=True, help="host:port of the autopilot/MAVProxy TCP endpoint")
     parser.add_argument(
-        "--mirror", action="append", default=None,
+        "--mirror",
+        action="append",
+        default=None,
         help="UDP host:port to copy both directions to. REPEATABLE: give each consumer of "
-              "the wire its own port - one for the MAVLink tap, one for the MavSDK telemetry "
-              "recorder - so no consumer has to bind a shared any-source port (default: "
-              "127.0.0.1:14650)",
+        "the wire its own port - one for the MAVLink tap, one for the MavSDK telemetry "
+        "recorder - so no consumer has to bind a shared any-source port (default: "
+        "127.0.0.1:14650)",
     )
     args = parser.parse_args(argv)
 

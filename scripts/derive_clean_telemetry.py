@@ -58,6 +58,7 @@ Usage::
 Prints one JSON object per line on stdout (one per trial) with the stats each
 trial's sidecar README records, so a caller can aggregate them.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -77,12 +78,36 @@ try:
     from droneserver.capture.telemetry_recorder import COLUMNS
 except Exception:  # pragma: no cover - standalone use
     COLUMNS = [
-        "t_iso", "t_rel_s", "lat_deg", "lon_deg", "abs_alt_m", "rel_alt_m",
-        "flight_mode", "armed", "roll_deg", "pitch_deg", "yaw_deg", "vn_ms",
-        "ve_ms", "vd_ms", "groundspeed_ms", "airspeed_ms", "gps_fix_type",
-        "num_satellites", "hdop", "vdop", "battery_v", "battery_pct",
-        "throttle_pct", "in_air", "home_lat", "home_lon", "home_alt",
-        "ekf_ok", "geofence_ok", "sample_age_s",
+        "t_iso",
+        "t_rel_s",
+        "lat_deg",
+        "lon_deg",
+        "abs_alt_m",
+        "rel_alt_m",
+        "flight_mode",
+        "armed",
+        "roll_deg",
+        "pitch_deg",
+        "yaw_deg",
+        "vn_ms",
+        "ve_ms",
+        "vd_ms",
+        "groundspeed_ms",
+        "airspeed_ms",
+        "gps_fix_type",
+        "num_satellites",
+        "hdop",
+        "vdop",
+        "battery_v",
+        "battery_pct",
+        "throttle_pct",
+        "in_air",
+        "home_lat",
+        "home_lon",
+        "home_alt",
+        "ekf_ok",
+        "geofence_ok",
+        "sample_age_s",
     ]
 
 OUT_COLUMNS = list(COLUMNS) + ["sysid"]
@@ -92,15 +117,15 @@ DERIVED_ON = "2026-08-18"
 #: The wire message types each output column is read from. Nothing else is
 #: decoded, so a cheap substring pre-filter can skip most of the JSONL.
 WANTED = (
-    "GLOBAL_POSITION_INT",   # lat/lon/alt/rel_alt/vn/ve/vd
-    "ATTITUDE",              # roll/pitch/yaw
-    "GPS_RAW_INT",           # fix type, satellites, hdop, vdop
-    "BATTERY_STATUS",        # battery_v, battery_pct
-    "HOME_POSITION",         # home_lat/lon/alt
-    "HEARTBEAT",             # flight_mode, armed
-    "EXTENDED_SYS_STATE",    # in_air
-    "SYS_STATUS",            # ekf_ok, geofence_ok
-    "VFR_HUD",               # throttle_pct, airspeed_ms
+    "GLOBAL_POSITION_INT",  # lat/lon/alt/rel_alt/vn/ve/vd
+    "ATTITUDE",  # roll/pitch/yaw
+    "GPS_RAW_INT",  # fix type, satellites, hdop, vdop
+    "BATTERY_STATUS",  # battery_v, battery_pct
+    "HOME_POSITION",  # home_lat/lon/alt
+    "HEARTBEAT",  # flight_mode, armed
+    "EXTENDED_SYS_STATE",  # in_air
+    "SYS_STATUS",  # ekf_ok, geofence_ok
+    "VFR_HUD",  # throttle_pct, airspeed_ms
 )
 _WANTED_SET = frozenset(WANTED)
 
@@ -111,8 +136,13 @@ _MAV_MODE_FLAG_SAFETY_ARMED = 0x80
 
 #: MAV_GPS_FIX_TYPE -> the MavSDK ``FixType`` enum name the original CSV used.
 _FIX_TYPE = {
-    0: "NO_GPS", 1: "NO_FIX", 2: "FIX_2D", 3: "FIX_3D",
-    4: "FIX_DGPS", 5: "RTK_FLOAT", 6: "RTK_FIXED",
+    0: "NO_GPS",
+    1: "NO_FIX",
+    2: "FIX_2D",
+    3: "FIX_3D",
+    4: "FIX_DGPS",
+    5: "RTK_FLOAT",
+    6: "RTK_FIXED",
 }
 
 #: ArduCopter ``HEARTBEAT.custom_mode`` -> MavSDK ``FlightMode`` name.
@@ -120,24 +150,53 @@ _FIX_TYPE = {
 #: the uncontaminated ArduPilot campaign at 100 % agreement over 67,176 rows;
 #: the rest follow MAVSDK's ArduPilot mode table.
 _ARDUCOPTER_FLIGHT_MODE = {
-    0: "STABILIZED", 1: "ACRO", 2: "ALTCTL", 3: "MISSION", 4: "OFFBOARD",
-    5: "HOLD", 6: "RETURN_TO_LAUNCH", 7: "UNKNOWN", 9: "LAND",
-    11: "UNKNOWN", 13: "UNKNOWN", 14: "UNKNOWN", 15: "UNKNOWN",
-    16: "POSCTL", 17: "UNKNOWN", 18: "LAND", 20: "OFFBOARD",
-    21: "UNKNOWN", 22: "UNKNOWN", 23: "UNKNOWN", 24: "UNKNOWN",
-    25: "UNKNOWN", 26: "UNKNOWN", 27: "UNKNOWN",
+    0: "STABILIZED",
+    1: "ACRO",
+    2: "ALTCTL",
+    3: "MISSION",
+    4: "OFFBOARD",
+    5: "HOLD",
+    6: "RETURN_TO_LAUNCH",
+    7: "UNKNOWN",
+    9: "LAND",
+    11: "UNKNOWN",
+    13: "UNKNOWN",
+    14: "UNKNOWN",
+    15: "UNKNOWN",
+    16: "POSCTL",
+    17: "UNKNOWN",
+    18: "LAND",
+    20: "OFFBOARD",
+    21: "UNKNOWN",
+    22: "UNKNOWN",
+    23: "UNKNOWN",
+    24: "UNKNOWN",
+    25: "UNKNOWN",
+    26: "UNKNOWN",
+    27: "UNKNOWN",
 }
 
 #: PX4 ``HEARTBEAT.custom_mode`` is a packed (main_mode, sub_mode) pair:
 #: bits 16-23 are the main mode, bits 24-31 the AUTO sub-mode.
 _PX4_MAIN = {
-    1: "MANUAL", 2: "ALTCTL", 3: "POSCTL", 5: "ACRO",
-    6: "OFFBOARD", 7: "STABILIZED", 8: "RATTITUDE",
+    1: "MANUAL",
+    2: "ALTCTL",
+    3: "POSCTL",
+    5: "ACRO",
+    6: "OFFBOARD",
+    7: "STABILIZED",
+    8: "RATTITUDE",
 }
 _PX4_AUTO_SUB = {
-    1: "READY", 2: "TAKEOFF", 3: "HOLD", 4: "MISSION",
-    5: "RETURN_TO_LAUNCH", 6: "LAND", 7: "RETURN_TO_LAUNCH",
-    8: "FOLLOW_ME", 9: "LAND",
+    1: "READY",
+    2: "TAKEOFF",
+    3: "HOLD",
+    4: "MISSION",
+    5: "RETURN_TO_LAUNCH",
+    6: "LAND",
+    7: "RETURN_TO_LAUNCH",
+    8: "FOLLOW_ME",
+    9: "LAND",
 }
 
 
@@ -273,7 +332,7 @@ def _scan_mavlink(path: Path):
             j = line.find('"', i + 13)
             if j < 0:
                 continue
-            mtype = line[i + 13:j]
+            mtype = line[i + 13 : j]
             if mtype not in _WANTED_SET:
                 continue
             try:
@@ -509,21 +568,23 @@ def derive(trial_dir: Path, force: bool = False) -> dict:
     pos_hz = (len(pos_t) - 1) / span if span > 0 else 0.0
     jsonl_sha = _sha256(jsonl_path)
     csv_sha = _sha256(csv_path)
-    readme_path.write_text(README_TEMPLATE.format(
-        out_name=out_path.name,
-        underline="=" * (len(out_path.name) + 45),
-        derived_on=DERIVED_ON,
-        vehicle=vehicle,
-        run_id=manifest.get("run_id", trial_dir.parents[1].name),
-        mission=manifest.get("mission_id", trial_dir.parent.name),
-        trial=manifest.get("trial_idx", trial_dir.name),
-        firmware=manifest.get("firmware", firmware),
-        census=", ".join(f"{k}({v})" for k, v in sorted(census.items(), key=lambda kv: -kv[1])),
-        rows=len(rows_out),
-        pos_hz=pos_hz,
-        jsonl_sha=jsonl_sha,
-        csv_sha=csv_sha,
-    ))
+    readme_path.write_text(
+        README_TEMPLATE.format(
+            out_name=out_path.name,
+            underline="=" * (len(out_path.name) + 45),
+            derived_on=DERIVED_ON,
+            vehicle=vehicle,
+            run_id=manifest.get("run_id", trial_dir.parents[1].name),
+            mission=manifest.get("mission_id", trial_dir.parent.name),
+            trial=manifest.get("trial_idx", trial_dir.name),
+            firmware=manifest.get("firmware", firmware),
+            census=", ".join(f"{k}({v})" for k, v in sorted(census.items(), key=lambda kv: -kv[1])),
+            rows=len(rows_out),
+            pos_hz=pos_hz,
+            jsonl_sha=jsonl_sha,
+            csv_sha=csv_sha,
+        )
+    )
 
     return {
         "trial": str(trial_dir),
@@ -565,6 +626,7 @@ def main(argv=None):
     work = [(t, args.force) for t in trials]
     if args.jobs > 1:
         from multiprocessing import Pool
+
         with Pool(args.jobs) as pool:
             for res in pool.imap_unordered(_worker, work, chunksize=1):
                 print(json.dumps(res), flush=True)

@@ -6,7 +6,6 @@ of SAFETY_API_KEYS); the key value is never printed. Exit 0 = idle (disarmed,
 on ground), 3 = NOT idle, 2 = could not read state.
 """
 
-
 from droneserver.benchmark.client import BenchmarkClient
 
 
@@ -28,9 +27,11 @@ def main() -> int:
         print(f"could not read state: armed={armed.get('status')} pos={pos.get('status')}")
         return 2
     p = pos.get("position", {})
-    print(f"armed: {armed.get('armed')} | in_air: {in_air.get('in_air')} | "
-          f"pos {p.get('latitude_deg'):.6f},{p.get('longitude_deg'):.6f} "
-          f"rel_alt {p.get('relative_altitude_m'):.2f} m")
+    print(
+        f"armed: {armed.get('armed')} | in_air: {in_air.get('in_air')} | "
+        f"pos {p.get('latitude_deg'):.6f},{p.get('longitude_deg'):.6f} "
+        f"rel_alt {p.get('relative_altitude_m'):.2f} m"
+    )
     idle = armed.get("armed") is False and in_air.get("in_air") is not True
     print("AIRCRAFT IDLE" if idle else "AIRCRAFT NOT IDLE")
     return 0 if idle else 3

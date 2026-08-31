@@ -160,12 +160,15 @@ def main() -> int:
         "coordinates, attached alongside the drone server for T6 only"
     )
     parser.add_argument(
-        "--geofence-radius-m", type=float, default=None,
+        "--geofence-radius-m",
+        type=float,
+        default=None,
         help="the radius the SERVER's geofence is configured with for this run, when it "
-             "differs from the 1000 m suite default (Plan 34: T6 wide-fence round). This "
-             "sets the VERDICT context only - the server's own fence is configured in its "
-             "env (SAFETY_GEOFENCE_MAX_RADIUS_M) and must be changed there to match, or "
-             "verdicts and enforcement will disagree.")
+        "differs from the 1000 m suite default (Plan 34: T6 wide-fence round). This "
+        "sets the VERDICT context only - the server's own fence is configured in its "
+        "env (SAFETY_GEOFENCE_MAX_RADIUS_M) and must be changed there to match, or "
+        "verdicts and enforcement will disagree.",
+    )
     maps.add_argument(
         "--maps-url",
         default="",

@@ -148,9 +148,7 @@ def test_emergency_stop_kill_requires_a_confirmation_token(control_tools):
     assert still_disarmed["armed"] is False
 
     # Second call quoting the token executes.
-    result = control_tools.call(
-        "emergency_stop", mode="kill", confirm_token=issued["confirm_token"], timeout=60
-    )
+    result = control_tools.call("emergency_stop", mode="kill", confirm_token=issued["confirm_token"], timeout=60)
     assert result["status"] in ("success", "failed"), result
     if result["status"] == "success":
         assert result["mode"] == "kill"

@@ -14,6 +14,7 @@ Usage: link_liveness_check.py URL API_KEY [TIMEOUT_S]
 Exit 0: link live (answered within budget).
 Exit 1: link dead/slow (timeout or error) - caller should recover then retry.
 """
+
 import sys
 import time
 

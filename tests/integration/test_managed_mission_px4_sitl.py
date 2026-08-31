@@ -76,9 +76,7 @@ async def px4_drone():
         # MAVProxy's tcpin on llmuavpx4 serves ONE client. A leftover
         # mavsdk_server from a previous test holding the socket makes connect()
         # block forever rather than fail, so bound it and say why.
-        await asyncio.wait_for(
-            drone.connect(system_address=f"tcp://{PX4_SITL_ADDRESS}:{PX4_SITL_PORT}"), timeout=60
-        )
+        await asyncio.wait_for(drone.connect(system_address=f"tcp://{PX4_SITL_ADDRESS}:{PX4_SITL_PORT}"), timeout=60)
         await asyncio.wait_for(_await_connected(drone), timeout=60)
         await asyncio.wait_for(_await_healthy(drone), timeout=180)
         if await _first(drone.telemetry.armed()):
@@ -139,11 +137,15 @@ async def _waypoints(drone):
     lat, lon = position.latitude_deg, position.longitude_deg
     dlat = LEG_M / 111_320.0
     dlon = LEG_M / (111_320.0 * max(0.2, abs(math.cos(math.radians(lat)))))
-    return lat, lon, [
-        {"latitude_deg": lat + dlat, "longitude_deg": lon, "altitude_m": TAKEOFF_ALT_M},
-        {"latitude_deg": lat + dlat, "longitude_deg": lon + dlon, "altitude_m": TAKEOFF_ALT_M},
-        {"latitude_deg": lat, "longitude_deg": lon, "altitude_m": TAKEOFF_ALT_M},
-    ]
+    return (
+        lat,
+        lon,
+        [
+            {"latitude_deg": lat + dlat, "longitude_deg": lon, "altitude_m": TAKEOFF_ALT_M},
+            {"latitude_deg": lat + dlat, "longitude_deg": lon + dlon, "altitude_m": TAKEOFF_ALT_M},
+            {"latitude_deg": lat, "longitude_deg": lon, "altitude_m": TAKEOFF_ALT_M},
+        ],
+    )
 
 
 async def _fly(runner, drone, waypoints, timeout_s=FLIGHT_TIMEOUT_S):
