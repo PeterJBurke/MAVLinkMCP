@@ -1,583 +1,171 @@
-# Connecting ChatGPT to MAVLink MCP Server
+# Driving DroneServer from an interactive chat client
 
-Complete guide to control your drone using natural language through ChatGPT's web interface.
-
----
-
-## Prerequisites
-
-✅ **You must have:**
-1. ChatGPT Plus or Pro subscription
-2. Developer Mode enabled in ChatGPT (you mentioned this is done)
-3. This MAVLink MCP repository set up on a server
-4. Your drone configured in `.env` file
+This is one of the two supported ways to operate the server. A human reads every
+reply and decides what to ask for next; the model calls the MCP tools. The other
+way — the scripted harness that produced the paper's numbers, with no human in the
+per-turn loop — is [`docs/reproduce.md`](docs/reproduce.md).
 
 ---
 
-## Architecture Overview
+## What connects, and what does not
 
-```
-┌──────────────┐         ┌──────────────────┐         ┌──────────┐
-│   ChatGPT    │         │  MAVLink MCP     │         │  Drone   │
-│ (Web Browser)│◄───────►│  HTTP Server     │◄───────►│          │
-│              │  SSE    │  (Port 8080)     │ MAVLink │ TCP/UDP  │
-└──────────────┘         └──────────────────┘         └──────────┘
-```
+The server speaks MCP over HTTP/SSE and is reachable **only on the tailnet** (or
+on loopback, when the client runs on the same host). The host has zero publicly
+reachable ports. That constraint decides which clients work:
 
-**Flow:**
-1. You type natural language command in ChatGPT
-2. ChatGPT connects to your MCP server via HTTP/SSE
-3. MCP server translates to MAVLink commands
-4. Commands sent to drone via TCP/UDP
-5. Drone responds with telemetry
-6. ChatGPT displays results in natural language
+| Client | Works? | Why |
+|---|---|---|
+| Claude Desktop, or any MCP client running on a machine on the tailnet | **yes** | The client process itself resolves and reaches the tailnet address. |
+| LM Studio on a tailnet machine | **yes** | See [LMSTUDIO_SETUP.md](LMSTUDIO_SETUP.md). |
+| Any client you run yourself inside the tailnet | **yes** | Same reason. |
+| A hosted web connector that fetches your server from the vendor's cloud (ChatGPT's Developer Mode connector, and equivalents) | **no** | It requires a publicly reachable HTTPS endpoint. This deployment does not have one and will not stand one up. |
+
+### Historical note
+
+Earlier versions of this repository documented exactly that hosted-connector
+path, reached through a public `ngrok` tunnel, and that is how the v1 paper's
+interactive figures were produced. **Those instructions have been removed.** A
+public tunnel puts an inbound, internet-reachable endpoint in front of an
+aircraft; the v2 deployment has zero public ports and uses no tunnel anywhere.
+See [SECURITY.md](SECURITY.md).
+
+If you want to fly using a commercial hosted model, use its **API** rather than
+its web-chat connector — an outbound call from a client inside the tailnet, which
+is what `scripts/run_llm_missions.py` does. That is the same reason this project
+uses per-token API access rather than a chat subscription.
 
 ---
 
-## Step 1: Configure Your Server
+## Step 1 — configure the server
 
-### A. Update `.env` File
-
-Add HTTP server configuration to your `.env`:
+In `.env`:
 
 ```bash
-nano .env
+# where the aircraft is
+MAVLINK_ADDRESS=<your-drone-or-sitl-host>
+MAVLINK_PORT=14540
+MAVLINK_PROTOCOL=tcp          # tcp, udp, or serial
+
+# where the MCP server listens
+MCP_HOST=127.0.0.1            # or this host's tailnet address
+MCP_PORT=8080
 ```
 
-Add these lines (keep existing drone config):
+Bind `MCP_HOST` to loopback if the chat client runs on the same machine, or to
+this host's **tailnet** address if it does not. Never bind it to a publicly
+routable interface.
 
-```bash
-# Existing drone configuration
-MAVLINK_ADDRESS=203.0.113.10
-MAVLINK_PORT=5678
-MAVLINK_PROTOCOL=tcp
+Set `SAFETY_API_KEYS` so clients must authenticate, and give the chat client a
+`control`-scoped key. The format is documented in
+[`docs/safety_review.md`](docs/safety_review.md) §6.
 
-# NEW: HTTP Server Configuration for ChatGPT
-MCP_HOST=0.0.0.0        # Listen on all interfaces
-MCP_PORT=8080           # HTTP port for MCP server
-```
-
-**Security Note:** If your server has a firewall, you'll need to open port 8080.
-
----
-
-## Step 2: Start the HTTP MCP Server
-
-On your Ubuntu server:
+## Step 2 — start the server
 
 ```bash
 cd ~/droneserver
-
-# Make the script executable
-chmod +x start_http_server.sh
-
-# Start the HTTP server
 ./start_http_server.sh
 ```
 
-**Expected Output:**
+Expected output ends with the server reporting the drone connection, GPS lock,
+and that it is exposing its tools.
+
+For a persistent deployment run it under systemd instead — see
+[SERVICE_SETUP.md](SERVICE_SETUP.md).
+
+## Step 3 — point the client at it
+
+The MCP endpoint is:
+
 ```
-===========================================================
-MAVLink MCP Server - HTTP/SSE Mode
-===========================================================
-Starting HTTP server on http://0.0.0.0:8080
-This server can be connected to from:
-  - ChatGPT Developer Mode
-  - Claude Desktop
-  - Any MCP-compatible web client
-===========================================================
-INFO - MAVLink MCP Server Starting
-INFO - Configuration loaded from .env file:
-INFO -   MAVLINK_ADDRESS: 203.0.113.10
-INFO -   MAVLINK_PORT: 5678
-INFO -   MAVLINK_PROTOCOL: tcp
-INFO - Connected to drone at 203.0.113.10:5678!
-INFO - GPS lock acquired!
-INFO - MCP Server is READY and exposing drone control tools
+http://<droneserver-tailnet-host>:8080/sse
 ```
 
-**Keep this terminal running!** The server must stay active for ChatGPT to connect.
+or `http://127.0.0.1:8080/sse` from the same host. Add it as an HTTP/SSE MCP
+server in your client's configuration, with the API key presented as
+`DRONESERVER_API_KEY`. LM Studio's exact `mcp.json` shape is in
+[LMSTUDIO_SETUP.md](LMSTUDIO_SETUP.md); Claude Desktop takes an equivalent entry
+in its own config file.
 
-### 🚀 Alternative: Run as systemd Service (Production)
+## Step 4 — verify before flying anything
 
-For production deployments, you can install the MCP server and ngrok as systemd services that auto-start on boot and restart on failure:
+Ask for telemetry first — `get_position`, `get_battery`, `get_health` — and check
+that the values match what the simulator or aircraft is actually doing. If a
+read-only call fails, the flying calls will too, and you will find out at a worse
+moment.
 
-```bash
-sudo ./install_services.sh
-sudo systemctl enable droneserver ngrok
-sudo systemctl start droneserver ngrok
-```
-
-This is recommended for persistent deployments. See **[SERVICE_SETUP.md](SERVICE_SETUP.md)** for complete instructions.
-
-If using services, skip to **Step 4** after installation.
+Then confirm the guard is live by asking for something it must refuse: a waypoint
+outside the geofence, or `kill_motors` without a confirmation token. The first
+should come back as a structured rejection naming the rule; the second should
+come back as a confirmation token plus a plain statement of the consequence, and
+the motors should not have stopped.
 
 ---
 
-## Step 3: Set Up HTTPS with ngrok (Required for ChatGPT)
+## Flying a mission conversationally
 
-⚠️ **IMPORTANT:** ChatGPT requires **HTTPS** for security. You cannot use plain `http://` URLs.
-
-ChatGPT will reject URLs like `http://YOUR_IP:8080/mcp/sse` with an "unsafe URL" error.
-
-**Solution:** Use **ngrok** to create a secure HTTPS tunnel to your server.
-
-### A. Install ngrok
-
-**On your Ubuntu server:**
-
-```bash
-# Download and install ngrok
-curl -s https://ngrok-agent.s3.amazonaws.com/ngrok.asc \
-  | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null \
-  && echo "deb https://ngrok-agent.s3.amazonaws.com buster main" \
-  | sudo tee /etc/apt/sources.list.d/ngrok.list \
-  && sudo apt update \
-  && sudo apt install ngrok
-```
-
-### B. Get Your ngrok Auth Token
-
-1. **Sign up for ngrok** (free): [https://ngrok.com/signup](https://ngrok.com/signup)
-2. **Log in** and go to: [https://dashboard.ngrok.com/get-started/your-authtoken](https://dashboard.ngrok.com/get-started/your-authtoken)
-3. **Copy your auth token** (looks like: `2abc123def456ghi789jkl`)
-
-### C. Configure ngrok
-
-```bash
-# Add your auth token (replace with your actual token)
-ngrok config add-authtoken YOUR_NGROK_TOKEN
-```
-
-### D. Start ngrok Tunnel
-
-**Open a NEW terminal/SSH session** (keep your MCP server running in the first one):
-
-```bash
-# Create HTTPS tunnel to your MCP server
-ngrok http 8080
-```
-
-**You'll see output like:**
-```
-ngrok
-
-Session Status                online
-Account                       your-email@example.com (Plan: Free)
-Version                       3.x.x
-Region                        United States (us)
-Web Interface                 http://127.0.0.1:4040
-Forwarding                    https://abc123xyz.ngrok-free.app -> http://localhost:8080
-
-Connections                   ttl     opn     rt1     rt5     p50     p90
-                              0       0       0.00    0.00    0.00    0.00
-```
-
-### E. Get Your HTTPS URL
-
-Look for the **Forwarding** line with `https://`:
+A worked example. Give the model the mission in one instruction and let it choose
+the tools:
 
 ```
-Forwarding                    https://abc123xyz.ngrok-free.app -> http://localhost:8080
+Arm the drone, take off to 50 metres, fly to 33.6458, -117.8426, and land.
+
+After each monitor_flight, print the DISPLAY_TO_USER value.
+Keep calling monitor_flight until mission_complete is true.
 ```
 
-**Copy the HTTPS URL:** `https://abc123xyz.ngrok-free.app`
-
-**Your complete ChatGPT MCP URL is:**
-```
-https://abc123xyz.ngrok-free.app/sse
-```
-
-⚠️ **Note:** Use `/sse` endpoint, NOT `/mcp/sse` (the FastMCP server defaults to `/sse` for SSE transport)
-
-⚠️ **Keep both terminals running:**
-- Terminal 1: MCP server (`./start_http_server.sh`)
-- Terminal 2: ngrok tunnel (`ngrok http 8080`)
-
----
-
-### ngrok Free Tier Notes
-
-✅ **Included:**
-- HTTPS support
-- Up to 1 free domain
-- Basic tunneling features
-
-⚠️ **Limitations:**
-- URL changes each time you restart ngrok
-- 40 connections/minute rate limit
-- Session timeout after ~8 hours
-
-**For production:** Consider ngrok paid plans ($8/month) for:
-- Custom domain (e.g., `drone.yourdomain.com`)
-- Reserved URLs that don't change
-- No rate limits
-- No session timeouts
-
----
-
-## Step 4: Configure ChatGPT Developer Mode
-
-### A. Open ChatGPT Agent Builder
-
-⚠️ **IMPORTANT:** You need to access the **Agent Builder** interface, not regular ChatGPT settings.
-
-**Direct Link (Recommended):**
-```
-https://platform.openai.com/chat/edit?models=gpt-4.1
-```
-
-**Alternative Path:**
-1. Go to [https://platform.openai.com/](https://platform.openai.com/)
-2. Navigate to **Agent Builder** or **Chat** section
-3. Select **gpt-4.1** model
-4. Look for **Tools** or **Custom Tools** configuration
-
-💡 **Note:** The Agent Builder interface allows you to add custom MCP tools to your ChatGPT sessions. This is different from the general ChatGPT settings.
-
-### B. Add MCP Connector
-
-In the Agent Builder interface:
-
-1. Click **"Add Tool"** or **"Add Connector"** button
-2. Select **"Custom Tool"** or **"MCP Server"** option
-3. Fill in the details:
-
-**Connector Configuration:**
-```
-Name: droneserver
-Description: MAVLink drone control via MCP protocol
-Server URL: https://YOUR_NGROK_URL.ngrok-free.app/sse
-Type: MCP Server (SSE)
-```
-
-**Example (use YOUR actual ngrok URL):**
-```
-Name: droneserver
-Description: AI-powered drone flight control
-Server URL: https://abc123xyz.ngrok-free.app/sse
-```
-
-⚠️ **CRITICAL NOTES:**
-- Replace `abc123xyz.ngrok-free.app` with your actual ngrok URL from Step 3!
-- Use `/sse` endpoint, NOT `/mcp/sse` (the server defaults to `/sse`)
-- Must use HTTPS (ngrok provides this automatically)
-- Name should be lowercase, no spaces (e.g., `droneserver`)
-
-3. Click **Save** or **Add Tool**
-
-### C. Verify Connection
-
-ChatGPT should show:
-- ✅ **Connected** status next to the connector
-- List of available tools/functions
-- Green indicator showing active connection
-
-If you see **"Connection Error"**, check:
-- MCP server is running (`./start_http_server.sh`)
-- ngrok tunnel is running (`ngrok http 8080`)
-- URL is correct HTTPS format: `https://xxx.ngrok-free.app/sse`
-- URL includes `/sse` at the end (NOT `/mcp/sse`)
-- You're using the HTTPS URL from ngrok, not http://
-- You're using the Agent Builder interface at `https://platform.openai.com/chat/edit?models=gpt-4.1`
-
----
-
-## Step 5: Control Your Drone with Natural Language!
-
-### Starting a New Chat
-
-1. Start a **new conversation** in ChatGPT
-2. ChatGPT should automatically detect the MCP connector
-3. You'll see a message like: "MAVLink Drone Controller tools are available"
-
-### Example Commands
-
-#### **Pre-Flight Checks**
-
-**You:** "Check if the drone is connected and show me its current position"
-
-**ChatGPT:** "The drone is connected at 203.0.113.10:5678. Current position: Latitude 33.6459°, Longitude -117.8428°, Altitude 0.0m"
-
----
-
-#### **Arming and Takeoff**
-
-**You:** "Arm the drone and take off to 10 meters"
-
-**ChatGPT:** "I'll arm the drone and initiate takeoff to 10 meters... Done! The drone is now armed and taking off. Current altitude: 9.8m"
-
----
-
-#### **Position Queries**
-
-**You:** "What's the drone's current altitude and battery level?"
-
-**ChatGPT:** "Current altitude: 10.2m above home position. Battery: 85%"
-
----
-
-#### **Movement**
-
-**You:** "Move the drone 5 meters forward"
-
-**ChatGPT:** "Moving drone 5 meters forward... Command sent. The drone is now moving to the new position."
-
----
-
-#### **Landing**
-
-**You:** "Land the drone safely"
-
-**ChatGPT:** "Initiating landing sequence... The drone is descending. Current altitude: 8.5m... 5.2m... 2.1m... 0.1m. Landed successfully!"
-
----
-
-#### **Flight Mode**
-
-**You:** "What flight mode is the drone in?"
-
-**ChatGPT:** "The drone is currently in GUIDED mode (ArduPilot's external control mode), which allows programmatic control."
-
----
-
-## Step 6: Advanced Usage
-
-### Multi-Step Operations
-
-**You:** "I want to fly a simple pattern: take off to 15 meters, hover for 5 seconds, then land"
-
-**ChatGPT:** "I'll execute this flight pattern for you:
-1. Taking off to 15 meters... Reached 15m
-2. Hovering for 5 seconds... Done
-3. Landing... Altitude: 10m... 5m... 1m... 0m. Landed safely!"
-
-### Safety Queries
-
-**You:** "Is it safe to fly right now? Check all pre-flight systems"
-
-**ChatGPT:** "Let me check the drone's status:
-- ✅ Connection: Active
-- ✅ GPS Lock: Acquired (12 satellites)
-- ✅ Battery: 92%
-- ✅ Flight Mode: Ready
-- ✅ Position: Valid home position set
-All systems nominal - safe to fly!"
-
-### Mission Planning
-
-**You:** "Create a mission to fly to coordinates 33.646°N, 117.843°W at 20 meters altitude, then return home"
-
-**ChatGPT:** "I'll create that waypoint mission... Mission uploaded with 2 waypoints. Starting mission now... Waypoint 1 reached... Waypoint 2 reached... Returning to launch..."
+What the server does with that:
+
+1. `arm_drone()` — motors armed.
+2. `takeoff(50)` — **does not return** until the aircraft reaches 50 m, so the
+   model cannot navigate at low altitude.
+3. `go_to_location(...)` — returns immediately, registering the destination.
+4. `monitor_flight()` — each call blocks for 30 s, checking arrival every second,
+   then returns a progress line. Within 20 m of the destination it initiates the
+   landing itself, waits for confirmed touchdown (ON_GROUND, not in_air,
+   altitude < 2 m, held 3 s), and only then returns `mission_complete: true`.
+
+The 30-second block is deliberate and the model cannot shorten it: a three-minute
+flight then costs about six tool calls instead of forty, which keeps a chat client
+under its tool-call ceiling.
+
+`land()` called early is refused while the aircraft is far from its registered
+destination — the landing gate — rather than putting the aircraft on the ground
+somewhere arbitrary.
+
+For long missions, prefer the managed-mission tools (`start_managed_mission`,
+`get_mission_status`, `control_managed_mission`): mission state lives on the
+server, so the mission survives the chat client disconnecting. See
+[`docs/long_mission_demo.md`](docs/long_mission_demo.md).
 
 ---
 
 ## Troubleshooting
 
-### Issue 1: "Cannot connect to MCP server" or "Unsafe URL"
+**Client cannot reach the server.** Check the tailnet first — `tailscale status`
+on both ends, then `ping` the server's tailnet name. Then check the server is
+listening on the address you think it is: `ss -tlnp | grep 8080`. A server bound
+to `127.0.0.1` is invisible to every other machine, including tailnet peers; that
+is the usual cause.
 
-**Solutions:**
+**Connects, but every call is refused.** Look at the rule id in the refusal. An
+`authz.insufficient_scope` means the key is telemetry-scoped. A `geofence.*`
+means the fence is configured for somewhere other than where the aircraft is —
+recentre it on the site's real coordinates before flying.
 
-1. **Verify HTTPS URL with correct path:**
-   - ❌ Wrong: `http://64.225.115.101:8080/sse` (HTTP not allowed)
-   - ❌ Wrong: `https://abc123xyz.ngrok-free.app/mcp/sse` (wrong path)
-   - ✅ Correct: `https://abc123xyz.ngrok-free.app/sse`
-   
-   ChatGPT requires HTTPS! You must use ngrok, and the correct endpoint is `/sse`.
+**`kill_motors` or another critical tool "does nothing".** That is the
+confirmation handshake working: re-issue the call quoting the exact token from
+the first response, within its TTL. Tokens are single-use and bound to both the
+tool and the arguments.
 
-2. **Check MCP server is running:**
-   ```bash
-   # On your server
-   ps aux | grep droneserver_http
-   ```
-
-3. **Check ngrok tunnel is running:**
-   ```bash
-   # On your server
-   ps aux | grep ngrok
-   
-   # Or view ngrok status
-   curl http://localhost:4040/api/tunnels
-   ```
-
-4. **Restart ngrok if needed:**
-   ```bash
-   # Kill existing ngrok
-   pkill ngrok
-   
-   # Start new tunnel
-   ngrok http 8080
-   
-   # Copy the NEW https:// URL
-   ```
+**Nothing appears in the log.** Every call, allowed or refused, is written to the
+append-only audit log; if it is empty, the client is not reaching the server at
+all. See [`docs/safety_review.md`](docs/safety_review.md) §7.
 
 ---
 
-### Issue 2: "Server URL not responding"
+## Before you fly a real aircraft
 
-**Solutions:**
-
-1. **Use ngrok HTTPS URL, not direct IP:**
-   - ❌ Wrong: `http://64.225.115.101:8080/sse`
-   - ❌ Wrong: `https://64.225.115.101:8080/sse`
-   - ✅ Correct: `https://abc123xyz.ngrok-free.app/sse`
-
-2. **Ensure correct path:**
-   - ❌ Wrong: `https://abc123xyz.ngrok-free.app`
-   - ❌ Wrong: `https://abc123xyz.ngrok-free.app/mcp/sse` (old path)
-   - ✅ Correct: `https://abc123xyz.ngrok-free.app/sse`
-
-3. **Get fresh ngrok URL:**
-   ```bash
-   # ngrok URLs change on restart
-   # View your current URL:
-   curl http://localhost:4040/api/tunnels | grep public_url
-   ```
-
----
-
-### Issue 3: "Tools not appearing in ChatGPT"
-
-**Solutions:**
-
-1. **Start a new conversation** - Tools only appear in new chats
-2. **Reconnect the connector** in Developer Mode settings
-3. **Check both servers are running:**
-   ```bash
-   # Check MCP server
-   ps aux | grep droneserver_http
-   
-   # Check ngrok
-   ps aux | grep ngrok
-   ```
-4. **Verify MCP server shows tools** in startup logs
-5. **Check ngrok web interface** for requests:
-   - Open browser to: `http://YOUR_SERVER_IP:4040`
-   - See if ChatGPT is making requests
-
----
-
-### Issue 4: "Drone commands not executing"
-
-**Solutions:**
-
-1. **Check drone connection** in server logs
-2. **Verify .env configuration:**
-   ```bash
-   cat .env
-   ```
-3. **Test with interactive client first:**
-   ```bash
-   uv run examples/interactive_client.py
-   ```
-4. **Check GPS lock** - many commands require GPS
-
----
-
-## Security Considerations
-
-⚠️ **IMPORTANT SECURITY NOTES:**
-
-1. **Network Exposure:**
-   - Your MCP server is accessible via ngrok's public HTTPS URL
-   - Anyone with the ngrok URL can control your drone
-   - ngrok provides some security, but the URL should be kept private
-
-2. **Authentication:**
-   - Current setup has NO authentication
-   - ngrok URLs are long and random, providing some obscurity
-   - Don't share your ngrok URL publicly
-
-3. **ngrok Security Features:**
-   - **Free tier:** Basic password protection available
-   - **Paid tier:** IP restrictions, OAuth, webhook verification
-   
-   **Add password protection (free):**
-   ```bash
-   ngrok http 8080 --basic-auth "username:password"
-   ```
-   
-   Then configure auth in ChatGPT connector settings.
-
-4. **Best Practices:**
-   - ✅ Use ngrok's random URLs (hard to guess)
-   - ✅ Rotate ngrok URLs regularly (restart ngrok)
-   - ✅ Monitor ngrok web interface (http://localhost:4040) for suspicious activity
-   - ✅ Keep your ngrok auth token private
-   - ❌ Don't post your ngrok URL on social media
-   - ❌ Don't commit ngrok URLs to git
-
----
-
-## Example Full Flight Session
-
-Here's a complete conversation example:
-
-**You:** "Hi! I'd like to fly my drone. Can you check if it's ready?"
-
-**ChatGPT:** "I'll check the drone's status for you... The drone is connected at 203.0.113.10:5678. All systems are operational:
-- GPS: Locked with 14 satellites
-- Battery: 98%
-- Position: Home position set at 33.6459°N, 117.8428°W
-- Flight mode: Ready
-Ready for flight!"
-
-**You:** "Great! Arm it and take off to 12 meters"
-
-**ChatGPT:** "Arming the drone... Armed successfully! Initiating takeoff to 12 meters... The drone is ascending... Current altitude: 5m... 10m... 12m. Hovering at 12 meters."
-
-**You:** "What can I see from here? Show me the current position"
-
-**ChatGPT:** "Current position: Latitude 33.6459°N, Longitude 117.8428°W, Altitude 12.0m above home. You're hovering 12 meters directly above the takeoff point."
-
-**You:** "Perfect. Now bring it back and land"
-
-**ChatGPT:** "Initiating landing sequence... Descending... 10m... 7m... 5m... 2m... 0.5m... Touchdown! Drone has landed safely."
-
-**You:** "Thanks! That was perfect"
-
-**ChatGPT:** "You're welcome! The drone is safely on the ground. Would you like to disarm it?"
-
-**You:** "Yes please"
-
-**ChatGPT:** "Disarming the drone... Done! The drone is now disarmed and safe."
-
----
-
-## Next Steps
-
-### Want More Control?
-
-1. **Add custom waypoints** - "Fly to multiple coordinates in sequence"
-2. **Create patterns** - "Fly in a square pattern at 15 meters"
-3. **Automated missions** - "Survey this area in a grid pattern"
-4. **Emergency commands** - "Return to home immediately"
-
-### Want Better Security?
-
-1. Set up HTTPS with SSL certificate
-2. Add authentication middleware
-3. Use SSH tunneling for secure connection
-4. Implement rate limiting
-
-### Want More Features?
-
-See [STATUS.md](STATUS.md) for current capabilities and development roadmap!
-
----
-
-## Support
-
-- 🐛 [Report Issues](https://github.com/PeterJBurke/droneserver/issues)
-- 💬 [Discussions](https://github.com/PeterJBurke/droneserver/discussions)
-- 📖 [Main README](README.md)
-- 📊 [Status & Roadmap](STATUS.md)
-- 🔧 [Service Setup](SERVICE_SETUP.md)
-- 🔄 [Update Guide](LIVE_SERVER_UPDATE.md)
-
----
-
-**Happy Flying with ChatGPT! 🚁🤖**
-
-Remember: Always maintain visual line of sight and follow all aviation safety regulations!
-
+Keep visual line of sight and a live manual RC override. Verify GPS lock and
+battery before arming. Configure the geofence for the site you are actually at,
+not the one in the example. The safety layer refuses commands; it does not make
+an aircraft safe.

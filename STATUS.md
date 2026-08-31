@@ -1,5 +1,12 @@
 # MAVLink MCP - Project Status & Roadmap
 
+> **Historical document — v1 only.** This page records the state of the project
+> through v1.4.0 (December 2025) and is kept for provenance. It does not describe
+> the current release: v2 has 98 tools, a server-side safety layer, and a
+> tailnet-only deployment with zero public ports. For the current state see
+> [README.md](README.md) and [CHANGELOG.md](CHANGELOG.md); for the deployment
+> posture see [SECURITY.md](SECURITY.md).
+
 ## 🔴 CRITICAL SAFETY UPDATE (v1.2.3)
 
 **⛔ `pause_mission()` HAS BEEN DEPRECATED DUE TO CRASH RISK ⛔**
@@ -93,7 +100,7 @@ The MAVLink MCP Server is **production-ready** with complete autonomous flight f
 **Last Updated:** December 11, 2025  
 **Version:** 1.4.0 (Complete Flight Lifecycle Management)  
 **Total Tools:** 41 MCP tools (1 deprecated for safety)  
-**Tested With:** ArduPilot SITL, ChatGPT Developer Mode
+**Tested With:** ArduPilot SITL, MCP chat clients over HTTP/SSE
 
 ### What's New in v1.4.0
 
@@ -175,8 +182,7 @@ The MAVLink MCP Server is **production-ready** with complete autonomous flight f
 - ✅ **Background Connection** - Async, non-blocking
 
 ### Integration Options
-- ✅ **ChatGPT Web Interface** - HTTP/SSE transport
-- ✅ **ngrok HTTPS Support** - Secure web tunneling
+- ✅ **HTTP/SSE transport** - any MCP-capable client
 - ✅ **systemd Services** - Production deployment with auto-restart
 - ✅ **Interactive CLI** - Direct command-line control
 - ✅ **MCP Protocol** - Standard AI agent integration
@@ -187,7 +193,7 @@ The MAVLink MCP Server is **production-ready** with complete autonomous flight f
 
 ### v1.1.0 Test (November 12, 2025)
 **Platform:** ArduPilot SITL Copter  
-**Interface:** ChatGPT Developer Mode via ngrok HTTPS
+**Interface:** MCP chat client over HTTP/SSE
 
 **Results:**
 - ✅ All 25 tools accessible in ChatGPT

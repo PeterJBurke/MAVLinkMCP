@@ -66,20 +66,12 @@ pkill -f "droneserver_http.py"
 sudo ./install_services.sh
 
 # Enable and start
-sudo systemctl enable droneserver ngrok
-sudo systemctl start droneserver ngrok
+sudo systemctl enable droneserver
+sudo systemctl start droneserver
 
 # Check status
-sudo systemctl status droneserver ngrok
+sudo systemctl status droneserver
 ```
-
-### Get Your New ngrok URL
-
-```bash
-curl -s http://localhost:4040/api/tunnels | grep -o 'https://[^"]*ngrok[^"]*'
-```
-
-Update this URL in ChatGPT Developer Mode.
 
 ---
 
@@ -181,21 +173,6 @@ cd ~/droneserver
 chmod +x start_http_server.sh
 ```
 
-### ngrok URL Changed
-
-After system restart, ngrok generates a new URL.
-
-**Get new URL:**
-```bash
-curl -s http://localhost:4040/api/tunnels | grep -o 'https://[^"]*ngrok[^"]*'
-```
-
-**Update in ChatGPT:**
-1. Go to ChatGPT Developer Mode
-2. Edit your MAVLink connector
-3. Update the Server URL with new ngrok URL
-4. Save changes
-
 ---
 
 ## 📊 Health Check After Update
@@ -204,7 +181,7 @@ Run these commands to verify everything is working:
 
 ```bash
 # 1. Check service status
-sudo systemctl status droneserver ngrok
+sudo systemctl status droneserver
 
 # 2. Verify server is listening
 sudo netstat -tulpn | grep 8080
@@ -212,15 +189,12 @@ sudo netstat -tulpn | grep 8080
 # 3. Check drone connection
 sudo journalctl -u droneserver -n 50 | grep -E "Connected to drone|GPS LOCK|READY"
 
-# 4. Get ngrok URL
-curl -s http://localhost:4040/api/tunnels | grep -o 'https://[^"]*ngrok[^"]*'
-
-# 5. Test ngrok endpoint
-curl https://YOUR_NGROK_URL.ngrok-free.app/sse
+# 4. Test reachability over the tailnet
+curl http://<droneserver-tailnet-host>:8080/sse
 # Should return: "Method Not Allowed" (this is expected for SSE endpoint)
 ```
 
-If all checks pass, test in ChatGPT!
+If all checks pass, test with your MCP client!
 
 ---
 
@@ -231,16 +205,15 @@ If all checks pass, test in ChatGPT!
 - [ ] Update dependencies: `uv sync`
 - [ ] Restart server/service
 - [ ] Verify drone connection in logs
-- [ ] Get updated ngrok URL (if using ngrok service)
-- [ ] Update URL in ChatGPT (if ngrok URL changed)
-- [ ] Test with simple command in ChatGPT
+- [ ] Test reachability over the tailnet
+- [ ] Test with simple command in your MCP client
 
 ---
 
 ## 📚 Related Documentation
 
 - [SERVICE_SETUP.md](SERVICE_SETUP.md) - systemd service deployment
-- [CHATGPT_SETUP.md](CHATGPT_SETUP.md) - ChatGPT integration guide
+- [CHATGPT_SETUP.md](CHATGPT_SETUP.md) - Driving the server from an interactive MCP chat client
 - [STATUS.md](STATUS.md) - Current features & roadmap
 - [README.md](README.md) - Main documentation
 

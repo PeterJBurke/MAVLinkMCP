@@ -1,49 +1,42 @@
 # Service Installation Guide
 
-This guide will help you set up the MAVLink MCP Server and ngrok as systemd services that run automatically on boot and restart on failure.
+This guide will help you set up the MAVLink MCP Server as a systemd service that runs automatically on boot and restarts on failure.
 
 ## 🎯 Overview
 
-Running as systemd services provides:
+Running as a systemd service provides:
 - ✅ **Automatic startup** on system boot
 - ✅ **Auto-restart** on crashes or failures
 - ✅ **Centralized logging** with `journalctl`
 - ✅ **Easy management** with `systemctl` commands
 - ✅ **Production-ready** deployment
 
+## 🔒 Reaching the Server
+
+This server is not exposed to the public internet. It binds to the host's
+Tailscale (tailnet) address, or to `127.0.0.1` when the client runs on the
+same machine. The host itself should have zero public ports: ufw
+default-deny, plus `DOCKER-USER` firewall rules if you're running anything
+in Docker (published container ports otherwise bypass ufw). Clients — LM
+Studio, other MCP clients, your own tooling — reach the server over the
+tailnet, not over the public internet.
+
 ---
 
 ## 📋 Prerequisites
 
-### 1. Install ngrok
-
-```bash
-# Add ngrok repository
-curl -s https://ngrok-agent.s3.amazonaws.com/ngrok.asc | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null
-echo "deb https://ngrok-agent.s3.amazonaws.com buster main" | sudo tee /etc/apt/sources.list.d/ngrok.list
-
-# Install ngrok
-sudo apt update
-sudo apt install ngrok
-```
-
-### 2. Authenticate ngrok
-
-Get your authtoken from: https://dashboard.ngrok.com/get-started/your-authtoken
-
-```bash
-ngrok config add-authtoken YOUR_AUTHTOKEN
-```
-
-### 3. Configure Your .env File
+### Configure Your .env File
 
 Make sure your `.env` file is properly configured:
 
 ```bash
 cd ~/droneserver
 cp .env.example .env
-nano .env  # Edit with your drone connection details
+nano .env  # Edit with your drone connection details and MCP_HOST
 ```
+
+Set `MCP_HOST` to the host's Tailscale address (or leave it at the
+loopback default if clients run on the same machine).
 
 ---
 
@@ -57,61 +50,51 @@ sudo ./install_services.sh
 ```
 
 The script will:
-1. ✅ Check for ngrok installation
-2. ✅ Check for ngrok authentication
-3. ✅ Copy service files to `/etc/systemd/system/`
-4. ✅ Set correct permissions
-5. ✅ Reload systemd daemon
+1. ✅ Copy the service file to `/etc/systemd/system/`
+2. ✅ Set correct permissions
+3. ✅ Reload systemd daemon
 
 ---
 
 ## 🎮 Service Management
 
-### Enable Services (Start on Boot)
+### Enable Service (Start on Boot)
 
 ```bash
 sudo systemctl enable droneserver
-sudo systemctl enable ngrok
 ```
 
-### Start Services
+### Start Service
 
 ```bash
 sudo systemctl start droneserver
-sudo systemctl start ngrok
 ```
 
-### Stop Services
+### Stop Service
 
 ```bash
 sudo systemctl stop droneserver
-sudo systemctl stop ngrok
 ```
 
-### Restart Services
+### Restart Service
 
 ```bash
 sudo systemctl restart droneserver
-sudo systemctl restart ngrok
 ```
 
 ### Check Status
 
 ```bash
-# Check both services
 sudo systemctl status droneserver
-sudo systemctl status ngrok
 
 # Quick status check
 sudo systemctl is-active droneserver
-sudo systemctl is-active ngrok
 ```
 
-### Disable Services (Prevent Auto-Start)
+### Disable Service (Prevent Auto-Start)
 
 ```bash
 sudo systemctl disable droneserver
-sudo systemctl disable ngrok
 ```
 
 ---
@@ -121,14 +104,7 @@ sudo systemctl disable ngrok
 ### Real-Time Logs (Follow Mode)
 
 ```bash
-# MCP Server logs
 sudo journalctl -u droneserver -f
-
-# ngrok logs
-sudo journalctl -u ngrok -f
-
-# Both services together
-sudo journalctl -u droneserver -u ngrok -f
 ```
 
 ### Recent Logs
@@ -153,26 +129,6 @@ sudo journalctl -u droneserver -p err
 # Search for specific text
 sudo journalctl -u droneserver | grep "GPS LOCK"
 ```
-
----
-
-## 🔗 Getting Your ngrok URL
-
-### Option 1: From ngrok API
-
-```bash
-curl -s http://localhost:4040/api/tunnels | grep -o 'https://[^"]*ngrok[^"]*'
-```
-
-### Option 2: From ngrok Logs
-
-```bash
-sudo journalctl -u ngrok -n 50 | grep "Forwarding"
-```
-
-### Option 3: Open ngrok Web Interface
-
-Open in browser: http://localhost:4040
 
 ---
 
@@ -208,14 +164,18 @@ sudo pkill -f droneserver_http
 sudo systemctl restart droneserver
 ```
 
-### ngrok Authentication Failed
+### Can't Reach the Server Over the Tailnet
 
 ```bash
-# Re-authenticate
-ngrok config add-authtoken YOUR_AUTHTOKEN
+# Confirm Tailscale is up and note the host's tailnet address
+tailscale status
 
-# Restart ngrok service
-sudo systemctl restart ngrok
+# Confirm MCP_HOST in .env matches the tailnet address (or 127.0.0.1
+# for same-machine clients)
+cat ~/droneserver/.env | grep MCP_HOST
+
+# Confirm the port isn't blocked by ufw
+sudo ufw status
 ```
 
 ### Drone Connection Issues
@@ -248,23 +208,21 @@ git pull origin main
 sudo systemctl restart droneserver
 ```
 
-No need to reinstall the service unless the service files themselves changed.
+No need to reinstall the service unless the service file itself changed.
 
 ---
 
 ## 🛠️ Advanced Configuration
 
-### Customize Service Files
+### Customize Service File
 
-Service files are located at:
+The service file is located at:
 - `/etc/systemd/system/droneserver.service`
-- `/etc/systemd/system/ngrok.service`
 
 After editing:
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl restart droneserver
-sudo systemctl restart ngrok
 ```
 
 ### Change MCP Server Port
@@ -275,17 +233,14 @@ nano ~/droneserver/.env
 # Change MCP_PORT=8080 to your desired port
 ```
 
-Then update ngrok service:
+Then restart the service:
 ```bash
-sudo nano /etc/systemd/system/ngrok.service
-# Change: ExecStart=/usr/local/bin/ngrok http YOUR_NEW_PORT
-sudo systemctl daemon-reload
-sudo systemctl restart ngrok
+sudo systemctl restart droneserver
 ```
 
 ### Run as Non-Root User
 
-Edit both service files and change:
+Edit the service file and change:
 ```ini
 User=root
 ```
@@ -297,25 +252,24 @@ User=your_username
 Then:
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl restart droneserver ngrok
+sudo systemctl restart droneserver
 ```
 
 ---
 
-## 📦 Uninstalling Services
+## 📦 Uninstalling the Service
 
-### Stop and Disable Services
+### Stop and Disable the Service
 
 ```bash
-sudo systemctl stop droneserver ngrok
-sudo systemctl disable droneserver ngrok
+sudo systemctl stop droneserver
+sudo systemctl disable droneserver
 ```
 
-### Remove Service Files
+### Remove the Service File
 
 ```bash
 sudo rm /etc/systemd/system/droneserver.service
-sudo rm /etc/systemd/system/ngrok.service
 sudo systemctl daemon-reload
 ```
 
@@ -325,12 +279,11 @@ sudo systemctl daemon-reload
 
 After installation, verify everything works:
 
-- [ ] Services are enabled: `sudo systemctl is-enabled droneserver ngrok`
-- [ ] Services are running: `sudo systemctl is-active droneserver ngrok`
+- [ ] Service is enabled: `sudo systemctl is-enabled droneserver`
+- [ ] Service is running: `sudo systemctl is-active droneserver`
 - [ ] MCP server logs show "Drone is READY": `sudo journalctl -u droneserver -n 50`
-- [ ] ngrok shows "Forwarding" URL: `sudo journalctl -u ngrok -n 20`
-- [ ] Can get ngrok URL: `curl http://localhost:4040/api/tunnels`
-- [ ] ChatGPT can connect to ngrok URL
+- [ ] Server is reachable over the tailnet: `curl http://<droneserver-tailnet-host>:8080/sse`
+- [ ] Host has zero public ports: check `ufw status` (and `DOCKER-USER` rules if using Docker)
 
 ---
 
@@ -341,24 +294,21 @@ After installation, verify everything works:
 sudo ./install_services.sh
 
 # Enable and start
-sudo systemctl enable droneserver ngrok
-sudo systemctl start droneserver ngrok
+sudo systemctl enable droneserver
+sudo systemctl start droneserver
 
 # Check status
-sudo systemctl status droneserver ngrok
+sudo systemctl status droneserver
 
 # View logs
 sudo journalctl -u droneserver -f
-
-# Get ngrok URL
-curl -s http://localhost:4040/api/tunnels | grep -o 'https://[^"]*ngrok[^"]*'
 
 # Restart after code update
 git pull origin main
 sudo systemctl restart droneserver
 
-# Stop services
-sudo systemctl stop droneserver ngrok
+# Stop service
+sudo systemctl stop droneserver
 ```
 
 ---
@@ -366,10 +316,8 @@ sudo systemctl stop droneserver ngrok
 ## 📚 Additional Resources
 
 - [systemd Service Documentation](https://www.freedesktop.org/software/systemd/man/systemd.service.html)
-- [ngrok Documentation](https://ngrok.com/docs)
 - [journalctl Manual](https://www.freedesktop.org/software/systemd/man/journalctl.html)
 
 ---
 
-**Need help?** Check the [main README](README.md) or [ChatGPT Setup Guide](CHATGPT_SETUP.md).
-
+**Need help?** Check the [main README](README.md) or [interactive chat-client guide](CHATGPT_SETUP.md).

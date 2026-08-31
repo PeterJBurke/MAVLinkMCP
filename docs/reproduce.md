@@ -15,7 +15,7 @@ scripted, reproducible one.
 
 | Piece | What it is | Where |
 |---|---|---|
-| This repository | the MCP server, the safety layer, and the benchmark harness | `github.com/PeterJBurke/droneserver`, branch `v2-upgrade` |
+| This repository | the MCP server, the safety layer, and the benchmark harness | `github.com/PeterJBurke/droneserver`, tag `v2.0.1` |
 | A SITL simulator | a virtual ArduPilot (or PX4) aircraft to fly against | two options below — pick one |
 | Provider API key(s) | credentials for whichever LLM(s) you want to fly | one env var per provider, see below |
 | `uv` | Python package/venv manager this project uses | `astral-sh/uv` |
@@ -28,7 +28,7 @@ this project's own infrastructure is required.
 ```bash
 git clone https://github.com/PeterJBurke/droneserver.git
 cd droneserver
-git checkout v2-upgrade
+git checkout v2.0.1        # the tagged release the paper reports
 uv sync
 ```
 
@@ -239,11 +239,16 @@ The scripts on this page are one of two supported ways to drive the
 server, and the paper documents both because reviewers specifically asked
 for the scripted one:
 
-- **Interactive web-chat.** Connect an MCP-capable chat client (Claude
-  Desktop, or ChatGPT's Developer Mode connector) to the running server and
-  fly it conversationally. This is the mode shown in the v1 paper's
-  figures and in `CHATGPT_SETUP.md` / `LMSTUDIO_SETUP.md` in this repo. A
-  human reads every reply and decides what to ask for next.
+- **Interactive chat client.** Connect an MCP-capable chat client running on
+  a machine that can reach the server — Claude Desktop, LM Studio, or your
+  own — and fly it conversationally. This is the mode shown in the v1
+  paper's figures, and it is documented in `CHATGPT_SETUP.md` /
+  `LMSTUDIO_SETUP.md` in this repo. A human reads every reply and decides
+  what to ask for next. Note that a *hosted* web connector that fetches your
+  server from the vendor's cloud (ChatGPT's Developer Mode connector, and
+  equivalents) is out of scope here: it needs a publicly reachable inbound
+  endpoint, and this deployment has zero public ports and uses no tunnel.
+  The v1 paper's figures predate that constraint.
 - **Scripted Python API — this page.** `run_llm_missions.py` calls a
   chosen provider's model API programmatically, turn by turn, through the
   same MCP server, the same 98 tools, and the same server-side safety

@@ -1,247 +1,168 @@
-# MAVLink MCP Server
+# DroneServer
 
-A Python-based Model Context Protocol (MCP) server for AI-powered drone control. Connect LLMs to MAVLink-enabled drones (PX4, ArduPilot) for natural language flight control.
+An [MCP](https://modelcontextprotocol.io/) server that lets any MCP-capable
+large language model fly a MAVLink aircraft — ArduPilot or PX4, simulated or
+real — and a server-side safety layer that assumes the model is an untrusted
+commander.
 
-## 🔴 CRITICAL SAFETY NOTICE (v1.2.3)
+The model calls named tools (`takeoff`, `go_to_location`, `kill_motors`); the
+server turns each one into MAVLink and returns telemetry. Nothing reaches the
+aircraft without passing the safety layer first, and the model cannot switch
+that layer off.
 
-**⛔ `pause_mission()` HAS BEEN DEPRECATED ⛔**
-
-During flight testing, this tool caused a drone crash (25m → ground impact). Use `hold_mission_position()` instead.  
-**See:** [LOITER_MODE_CRASH_REPORT.md](LOITER_MODE_CRASH_REPORT.md)
-
-## Features
-
-- 🤖 **AI-Powered Control**: Use natural language to command drones via GPT-4, Claude, or other LLMs
-- 🚁 **MAVLink Compatible**: Works with PX4, ArduPilot, and other MAVLink drones
-- 🔧 **MCP Protocol**: Standard Model Context Protocol for tool integration
-- 📡 **Network/Serial Support**: Connect via UDP, TCP, or serial ports
-- 💬 **ChatGPT Integration**: Direct control from ChatGPT web interface (see below)
-- 📝 **Flight Logging**: Automatic logging of all tool calls and MAVLink commands (see [FLIGHT_LOGS.md](FLIGHT_LOGS.md))
+This repository is the software artifact for the paper described under
+[Citing this work](#citing-this-work). It also carries the benchmark harness
+that produced the paper's numbers, so the results can be reproduced rather than
+taken on trust.
 
 ---
 
-## 🛡️ Active Flight Management System (v1.4.0)
+## The safety layer
 
-**This MCP server doesn't just send MAVLink commands** — it actively manages the entire flight lifecycle to ensure safe, complete missions.
+The interface is designed on the premise that the commanding model may be
+wrong, may have been talked into something by its own context, or may simply
+hallucinate a justification. Everything below is enforced on the server, in
+front of the tool body, and is on by default.
 
-### The Problem with Simple Command Pass-Through
+| Mechanism | What it does |
+|---|---|
+| **Criticality tiers** | Every tool is `read_only`, `normal`, `critical`, or `emergency`. The tier decides what is required before the tool runs. A tool with no tier entry is treated as `critical`, so a newly added tool cannot slip in unclassified. |
+| **Confirmation handshake** | A `critical` tool (`kill_motors`, `vehicle_power`, `autopilot_shell`, …) does not execute on the first call. It returns a one-time token plus a plain statement of the consequence; only a second call quoting that exact token executes. Tokens are single-use, tool-bound, argument-bound, and expire. |
+| **Independent geofence** | A polygon, altitude ceiling, and home-radius enforced by the server itself, not delegated to the autopilot's fence. Destinations are resolved from the aircraft's live position, and continuous-motion commands are projected forward to where they would end up before being allowed. |
+| **Parameter bounds and state preconditions** | Altitude, speed, distance-from-home, coordinate sanity, mission size; plus rules about the vehicle's state ("you cannot navigate before taking off"). |
+| **Authentication and scopes** | API keys carry a scope: `telemetry` (read only), `control` (fly it), `admin`. A telemetry-scoped client is refused before a confirmation token is ever issued. |
+| **Rate limiting** | Per-client, with a separate and smaller budget for `critical` calls, so a looping model cannot flood the aircraft. |
+| **Append-only audit log** | One line per tool call: who, what, allowed or refused, which rule fired, and how long it took. Never edited, only appended. Each record also carries the guard flags in force, so a guardrails-off run is self-documenting. |
+| **Fail closed** | If a check itself raises, the command is refused (`guard.internal_error`), not passed through. Bad safety configuration stops the server from starting rather than being discovered mid-flight. |
 
-When an LLM controls a drone with simple command pass-through, common failures occur:
+Full detail, including the tier table and every rule name, is in
+[`docs/safety_review.md`](docs/safety_review.md). The emergency-stop path is in
+[`docs/estop.md`](docs/estop.md).
 
-| AI Mistake | What Happens | Result |
-|------------|--------------|--------|
-| LLM sends `land()` before arrival | Drone lands kilometers from destination | ❌ Mission failed |
-| LLM sends `go_to_location()` before takeoff completes | Drone flies horizontally at low altitude | ❌ Crash risk |
-| LLM forgets to monitor flight | User has no idea what's happening | ❌ Poor UX |
-| LLM stops monitoring mid-flight | Drone left hovering, battery drains | ❌ Drone lost |
-| LLM checks arrival once, gives up | Mission abandoned at 50% | ❌ Incomplete |
+Adversarial behaviour — prompt injection in tool arguments, forged and replayed
+confirmation tokens, scope escalation, out-of-fence waypoints — is exercised
+against a live SITL aircraft through the real MCP path;
+[`docs/adversarial_results.md`](docs/adversarial_results.md) is the generated
+case-by-case table.
 
-### How MAVLink MCP Solves This
+## Deployment posture
 
-The server implements **Active Flight Management** with these safety systems:
+The server is intended to run reachable only over a private WireGuard/Tailscale
+tailnet, on a host with **zero publicly reachable ports**: firewall
+default-deny, and, where containers are involved, `DOCKER-USER` rules, because
+published container ports bypass `ufw`.
 
-#### 1. Takeoff Altitude Wait
-```
-LLM: takeoff(50)
-MCP: [Waits until drone reaches 50m]
-MCP: "Takeoff complete - drone at 50m AGL, safe to navigate"
-```
-The `takeoff()` function doesn't return until the target altitude is reached, preventing premature navigation commands.
+**No public tunnel — ngrok or otherwise — is part of this deployment.** The v1
+documentation that instructed the reader to stand one up has been removed; see
+[`SECURITY.md`](SECURITY.md) for the posture in brief and for how to report a
+vulnerability.
 
-#### 2. Landing Gate
-```
-LLM: land()
-MCP: "BLOCKED - Drone is 1.2km from destination! Use monitor_flight() to track progress."
-```
-The `land()` function checks if the drone is at its registered destination. If not, landing is blocked to prevent accidental landings in wrong locations.
+An MCP client reaches the server at its tailnet address (or on loopback when
+the client runs on the same host), presenting a scoped API key.
 
-#### 3. Auto-Land with Confirmed Touchdown
-```
-LLM: monitor_flight()  [when drone is within 20m of destination]
-MCP: [Automatically initiates landing]
-MCP: [Waits for drone to physically touch ground - checks every 2 seconds]
-MCP: [Confirms stable on ground for 3 seconds]
-MCP: "✅ MISSION COMPLETE | Landed safely | Flight time: 198s"
-     mission_complete: true
-```
-When the drone arrives at destination, `monitor_flight()` automatically:
-1. Calls `land()`
-2. Monitors descent (checking landed_state, in_air, and altitude)
-3. Waits for confirmed touchdown (ON_GROUND + not in_air + altitude < 2m)
-4. Confirms stability for 3 seconds
-5. Returns `mission_complete: true`
-
-**The LLM only stops when the drone is physically on the ground.**
-
-#### 4. 30-Second Progress Updates
-```
-#1: 🚁 FLYING | Dist: 1096m | Alt: 36.9m | Speed: 9.9m/s | ETA: 1m 51s | 27%
-#2: 🚁 FLYING | Dist: 626m | Alt: 22.9m | Speed: 9.9m/s | ETA: 1m 3s | 59%
-#3: 🚁 FLYING | Dist: 57m | Alt: 6.0m | Speed: 9.9m/s | ETA: 5s | 96%
-#4: ✅ MISSION COMPLETE | Landed safely | Flight time: 198s
-```
-Each `monitor_flight()` call waits 30 seconds (checking for arrival every second internally), then returns a progress update. This means:
-- A 3-minute flight needs only ~6 tool calls
-- ChatGPT doesn't hit its tool call limits
-- User sees meaningful progress updates
-
----
-
-## 🌐 Control Your Drone with ChatGPT
-
-### Recommended Prompt (Copy This!)
-
-```
-Arm the drone, takeoff to 50 meters, fly to Aldrich park at 33.645834416678824, -117.84260096803916, and land.
-
-After each monitor_flight, you MUST print the DISPLAY_TO_USER value.
-You MUST call monitor_flight at least 20 times or until mission_complete is true, whichever comes first.
-```
-
-### What Happens
-
-1. **Arm**: LLM calls `arm_drone()` → Motors armed
-2. **Takeoff**: LLM calls `takeoff(50)` → MCP waits until 50m reached → Returns success
-3. **Navigate**: LLM calls `go_to_location(...)` → Returns immediately, registers destination
-4. **Monitor Loop**: LLM calls `monitor_flight()` repeatedly:
-   - Each call waits 30 seconds, checking for arrival every second
-   - Returns progress update with `DISPLAY_TO_USER`
-   - When within 20m of destination: auto-lands and waits for touchdown
-   - Returns `mission_complete: true` only when drone is on ground
-
-### Example Flight Output
-
-```
-User: Arm the drone, takeoff to 50 meters, fly to Aldrich park, and land.
-      After each monitor_flight, you MUST print the DISPLAY_TO_USER value.
-      You MUST call monitor_flight at least 20 times or until mission_complete is true.
-
-ChatGPT: [Calls arm_drone, takeoff, go_to_location, then monitor_flight in a loop]
-
-#1: 🚁 FLYING | Dist: 1096m | Alt: 36.9m | Speed: 9.9m/s | ETA: 1m 51s | 27%
-Continuing to monitor flight...
-
-#2: 🚁 FLYING | Dist: 626m | Alt: 22.9m | Speed: 9.9m/s | ETA: 1m 3s | 59%
-Continuing to monitor flight...
-
-#3: 🚁 FLYING | Dist: 57m | Alt: 6.0m | Speed: 9.9m/s | ETA: 5s | 96%
-Continuing to monitor flight...
-
-#4: ✅ MISSION COMPLETE | Landed safely | Flight time: 198s
-
-The mission has completed in 4 monitor_flight calls. The drone has landed safely.
-```
-
-### Setup Steps
-
-1. Enable **Developer Mode** in ChatGPT settings (ChatGPT Plus/Pro required)
-2. Start the HTTP MCP server: `./start_http_server.sh`
-3. Add the MCP connector in ChatGPT with your server URL
-4. Start flying with natural language!
-
-📖 **[Complete ChatGPT Setup Guide →](CHATGPT_SETUP.md)**
-
----
-
-## 🚀 Quick Start
-
-### Prerequisites
-
-- **Python 3.12+** (comes with Ubuntu 24.04)
-- **uv** package manager ([install here](https://github.com/astral-sh/uv))
-- **MAVLink-compatible drone or simulator**
-
-### Installation
+## Quickstart
 
 ```bash
 git clone https://github.com/PeterJBurke/droneserver.git
 cd droneserver
 uv sync
-cp .env.example .env
-# Edit .env with your drone's IP/port
-```
-
-### Run the Server
-
-```bash
+cp .env.example .env      # point MAVLINK_* at your aircraft or simulator
 uv run python -m droneserver.server --transport stdio
 ```
 
----
+Python 3.11 or newer is required. `uv` is [astral-sh/uv](https://github.com/astral-sh/uv).
 
-## 📋 Available Tools (41 Total)
+**To reproduce the paper's results — SITL setup, credentials, the mission suite,
+the LLM-in-the-loop harness, and the capture bundles — start at
+[`docs/reproduce.md`](docs/reproduce.md).** That page is the entry point for a
+reviewer or replicator; it covers both supported ways of driving the server
+(an interactive MCP chat client, and the scripted harness that produced every
+number in the paper).
 
-| Category | Count | Key Tools |
-|----------|-------|-----------|
-| **Flight Control** | 5 | `arm_drone`, `disarm_drone`, `takeoff`, `land`, `hold_position` |
-| **Emergency & Safety** | 3 | `return_to_launch`, `kill_motors`, `get_battery` |
-| **Navigation** | 8 | `get_position`, `go_to_location`, `monitor_flight`, `set_yaw`, `reposition` |
-| **Mission Management** | 10 | `initiate_mission`, `upload_mission`, `pause_mission`, `hold_mission_position`, `resume_mission` |
-| **Telemetry** | 12 | `get_health`, `get_health_all_ok`, `get_landed_state`, `get_heading`, `get_rc_status`, `get_odometry` |
-| **Parameter Management** | 3 | `get_parameter`, `set_parameter`, `list_parameters` |
+## What the interface covers
 
-**See [STATUS.md](STATUS.md) for complete tool list and descriptions.**
+- **98 registered MCP tools.** The full per-tool table, with what evidence
+  backs each one, is [`docs/tool_test_coverage.md`](docs/tool_test_coverage.md)
+  (generated by `scripts/tool_test_coverage.py`); the grouping rationale is
+  [`docs/tool_groups.md`](docs/tool_groups.md).
+- **MavSDK client-side coverage: 223 implemented and 15 documented-N/A of 238
+  methods**, across 33 plugins — 0 missing. Drone-side `*_server` plugin
+  methods (92) are out of scope for a ground-side interface. Generated matrix:
+  [`docs/coverage_summary.md`](docs/coverage_summary.md),
+  [`docs/coverage_matrix.csv`](docs/coverage_matrix.csv).
+- **Server-side mission state**, so a long mission survives the client
+  disconnecting — see [`docs/long_mission_demo.md`](docs/long_mission_demo.md).
 
----
+## Tests
 
-## 📊 Recent Updates
+Current suite state on this branch:
 
-- ✅ **Dec 11, 2025**: v1.4.0 - **Complete Flight Lifecycle Management**
-  - Auto-land waits for confirmed touchdown before returning `mission_complete`
-  - 30-second progress updates (reduced from 5s to minimize tool calls)
-  - Robust landing detection (ON_GROUND + not in_air + altitude < 2m + 3s stability check)
-  - Fixed LogColors.CMD bug
-- ✅ **Dec 10, 2025**: v1.3.1 - Added `monitor_flight` + Landing Gate safety
-- ✅ **Dec 10, 2025**: v1.3.0 - Added 5 enhanced telemetry tools
-- 🔴 **Nov 17, 2025**: v1.2.3 - CRITICAL: Deprecated `pause_mission()` due to crash risk
+| Layer | Count | How to run |
+|---|--:|---|
+| Unit (no aircraft) | 937 | `uv run pytest` |
+| SITL integration (docker ArduPilot) | 116 | `uv run pytest -m "sitl and not longmission" tests/integration` |
+| Adversarial / prompt-injection cases | 29 of 29 as specified | `uv run pytest -m sitl tests/integration/test_adversarial_sitl.py` |
 
----
+Four of the unit modules are whole-registry invariants: they assert that the
+tier table, the safety coverage, and the tool registry agree with each other
+exactly, so adding a tool without classifying it fails the suite.
 
-## 🔧 Configuration
+CI (`.github/workflows/ci.yml`) runs ruff, ruff format, mypy, and the unit
+suite on every push. The SITL suite runs nightly
+(`.github/workflows/sitl-nightly.yml`) against a pinned ArduCopter 4.5.7 docker
+image, because GitHub runners cannot reach the project's tailnet.
 
-Create a `.env` file:
+The reported unit-only line coverage is low by construction and deliberately
+un-gated: most of the codebase is drone-tool bodies that can only execute
+against a simulator, so a threshold on a figure that does not measure what it
+appears to would be worse than none.
 
-```bash
-MAVLINK_ADDRESS=<your-drone-ip>
-MAVLINK_PORT=14540
-MAVLINK_PROTOCOL=tcp  # tcp, udp, or serial
+## Documentation
+
+| | |
+|---|---|
+| [`docs/reproduce.md`](docs/reproduce.md) | End-to-end reproduction — start here |
+| [`docs/safety_review.md`](docs/safety_review.md) | The safety layer, written for a non-implementer |
+| [`docs/llm_in_the_loop.md`](docs/llm_in_the_loop.md) | What happens inside one scored trial |
+| [`docs/capture_topology.md`](docs/capture_topology.md) | The capture pipeline and the failure modes it was built to catch |
+| [`docs/tool_test_coverage.md`](docs/tool_test_coverage.md) | Per-tool test and flight evidence |
+| [`docs/coverage_summary.md`](docs/coverage_summary.md) | MavSDK method coverage |
+| [`docs/adversarial_results.md`](docs/adversarial_results.md) | Adversarial case results |
+| [`docs/estop.md`](docs/estop.md) | Emergency stop |
+| [`SECURITY.md`](SECURITY.md) | Deployment posture; reporting a vulnerability |
+| [`SERVICE_SETUP.md`](SERVICE_SETUP.md) | systemd deployment |
+| [`CHANGELOG.md`](CHANGELOG.md) | Release history |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | Issues, PRs, required checks |
+
+## Operating safely
+
+This software has been tested in simulation. Flying a real aircraft with a
+language model in the loop is the operator's decision and the operator's
+responsibility: keep visual line of sight, keep a manual RC override live,
+verify GPS lock and battery before arming, fly clear of people, and configure
+the geofence for the site you are actually at. The safety layer refuses
+commands; it does not make an aircraft safe.
+
+## Citing this work
+
+The preprint describing this system is arXiv:2601.15486 (v2; under review).
+This paragraph will be replaced with the full journal citation on acceptance.
+
+```bibtex
+@misc{droneserver2026,
+  title  = {A Safe and Secure, LLM-Agnostic, MAVLink-Based Drone Command and
+            Control Interface and Agentic Harness Using the Model Context Protocol},
+  note   = {arXiv:2601.15486, v2; under review},
+  year   = {2026}
+}
 ```
-
----
-
-## 📖 Documentation
-
-- **[ChatGPT Setup Guide](CHATGPT_SETUP.md)** - Control drone with ChatGPT
-- **[Service Setup Guide](SERVICE_SETUP.md)** - Production deployment with systemd
-- **[Project Status & Roadmap](STATUS.md)** - Current features and future plans
-- **[Testing Guide](TESTING.md)** - Manual testing procedures
-
----
-
-## ⚠️ Safety Guidelines
-
-1. **Always maintain visual line of sight** with your drone
-2. **Check battery level** before flight
-3. **Verify GPS lock** before arming
-4. **Have manual RC override ready** at all times
-5. **Test in open area** away from people and obstacles
-
----
-
-## 📞 Support
-
-- 🐛 [Report Issues](https://github.com/PeterJBurke/droneserver/issues)
-- 💬 [Discussions](https://github.com/PeterJBurke/droneserver/discussions)
-- 📊 [Status & Roadmap](STATUS.md)
-
----
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) file for details.
+MIT — see [LICENSE](LICENSE).
 
 ## Acknowledgments
 
 - Original project by [Ion Gabriel](https://github.com/ion-g-ion/MAVLinkMCP)
 - Built with [MAVSDK](https://mavsdk.mavlink.io/)
-- Uses [Model Context Protocol](https://modelcontextprotocol.io/)
+- Uses the [Model Context Protocol](https://modelcontextprotocol.io/)

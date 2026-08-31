@@ -1,8 +1,11 @@
 # MAVLink MCP Testing Guide
 
-> **⚠️ NOTE: Automated tests are not implemented yet.**  
-> This document contains **manual testing procedures** using ChatGPT prompts.  
-> These are testing guides for users to verify functionality, not automated test code.
+> **This document is the *manual* test procedure** — prompts a human types into an
+> MCP chat client to check the system by hand. It is not the automated suite.
+>
+> The automated suites are 937 unit tests (`uv run pytest`), 116 SITL integration
+> tests (`uv run pytest -m "sitl and not longmission" tests/integration`), and the
+> adversarial suite (`docs/adversarial_results.md`). See [README.md](README.md).
 
 ---
 
@@ -11,7 +14,7 @@
 Before testing, ensure:
 1. ✅ MAVLink MCP server is running (`./start_http_server.sh`)
 2. ✅ Drone/SITL is connected and GPS lock acquired
-3. ✅ ChatGPT is connected to your MCP server via ngrok HTTPS
+3. ✅ Your MCP chat client is connected to the server over the tailnet (or loopback)
 4. ✅ You're in an open, safe area for testing
 
 ---

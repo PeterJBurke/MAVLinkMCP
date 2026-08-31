@@ -1,5 +1,5 @@
 [Unit]
-Description=MAVLink MCP Server - HTTP/SSE Mode for ChatGPT
+Description=DroneServer MCP server (HTTP/SSE, tailnet-only)
 After=network.target
 Wants=network-online.target
 

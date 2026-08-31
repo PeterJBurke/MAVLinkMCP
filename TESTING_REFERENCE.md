@@ -469,7 +469,7 @@ Expected execution times:
 ### Documentation
 - [README.md](README.md) - Main documentation and feature overview
 - [STATUS.md](STATUS.md) - Complete tool list and version history
-- [CHATGPT_SETUP.md](CHATGPT_SETUP.md) - ChatGPT integration setup
+- [CHATGPT_SETUP.md](CHATGPT_SETUP.md) - Driving the server from an interactive MCP chat client
 - [FLIGHT_LOGS.md](FLIGHT_LOGS.md) - Flight logging system documentation
 - [MISSION_PAUSE_FIX.md](MISSION_PAUSE_FIX.md) - Mission control improvements (v1.2.2)
 - [LOITER_MODE_CRASH_REPORT.md](LOITER_MODE_CRASH_REPORT.md) - Critical safety analysis (v1.2.3)

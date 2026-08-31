@@ -9,20 +9,25 @@ Complete guide to control your drone using natural language through LM Studio.
 ✅ **You must have:**
 1. LM Studio installed ([Download here](https://lmstudio.ai/))
 2. A local LLM model downloaded in LM Studio (Qwen, Llama 3.1+, or Mistral recommended for tool calling)
-3. The MAVLink MCP server running and exposed via ngrok
-4. The ngrok URL from your `.env` file (see `NGROK_URL` variable)
+3. The MAVLink MCP server running and reachable over the tailnet (or on the same machine as LM Studio)
 
 ---
 
 ## Server URL
 
-Your MCP server SSE endpoint (from `.env`):
+Your MCP server SSE endpoint:
 
 ```
-https://YOUR_NGROK_URL.ngrok-free.app/sse
+http://<droneserver-tailnet-host>:8080/sse
 ```
 
-⚠️ **Note:** Get the actual URL from your `.env` file (`NGROK_URL` variable). Do not share this URL publicly.
+If LM Studio runs on the same machine as the MCP server, use:
+
+```
+http://127.0.0.1:8080/sse
+```
+
+⚠️ **Note:** This server is not exposed to the public internet. LM Studio must be able to reach the host over Tailscale (or on loopback if it's the same machine).
 
 ---
 
@@ -57,7 +62,7 @@ Replace the contents with:
 {
   "mcpServers": {
     "droneserver": {
-      "url": "https://YOUR_NGROK_URL.ngrok-free.app/sse"
+      "url": "http://<droneserver-tailnet-host>:8080/sse"
     }
   }
 }
@@ -75,7 +80,7 @@ Add the `droneserver` entry inside the `mcpServers` object:
       "args": ["..."]
     },
     "droneserver": {
-      "url": "https://YOUR_NGROK_URL.ngrok-free.app/sse"
+      "url": "http://<droneserver-tailnet-host>:8080/sse"
     }
   }
 }
@@ -88,9 +93,9 @@ Add the `droneserver` entry inside the `mcpServers` object:
 - **`,`** = Separates items (NO comma after the last item!)
 - **`mcpServers`** = Container for all your MCP server configurations
 - **`droneserver`** = Name/identifier for this server (you can change this)
-- **`url`** = The SSE endpoint URL of your remote MCP server
+- **`url`** = The SSE endpoint URL of your MCP server
 
-⚠️ **Replace `YOUR_NGROK_URL`** with the actual subdomain from your `.env` file.
+⚠️ **Replace `<droneserver-tailnet-host>`** with the actual Tailscale address (or hostname) of the machine running the MCP server, or use `127.0.0.1` if it's the same machine as LM Studio.
 
 ---
 
@@ -153,7 +158,7 @@ Here's a complete example with the drone server:
 {
   "mcpServers": {
     "droneserver": {
-      "url": "https://YOUR_NGROK_URL.ngrok-free.app/sse"
+      "url": "http://<droneserver-tailnet-host>:8080/sse"
     }
   }
 }
@@ -174,8 +179,8 @@ Use a JSON validator like [jsonlint.com](https://jsonlint.com) to check your syn
 
 ### Connection Failed
 
-1. **Verify the URL is correct** - Check your `.env` file for the `NGROK_URL` value
-2. **Ensure HTTPS** - The URL must start with `https://`
+1. **Verify the URL is correct** - Check the server's Tailscale address (`tailscale status` on the server host)
+2. **Confirm you're on the tailnet** - LM Studio's machine must be connected to the same Tailscale network
 3. **Check the endpoint** - URL should end with `/sse`
 4. **Verify server is running** - The MCP server must be active on the remote machine
 
@@ -196,7 +201,7 @@ Use a JSON validator like [jsonlint.com](https://jsonlint.com) to check your syn
 
 ## Notes
 
-- The ngrok URL may change if the server restarts. Update your `mcp.json` accordingly.
+- The server's Tailscale address is stable across restarts, but confirm it with `tailscale status` if you move the server to a different host.
 - Models with strong function calling support (Qwen, Mistral, Llama 3.1+) work best.
 - Keep the server toggle **enabled** in Integrations for tools to be available.
 

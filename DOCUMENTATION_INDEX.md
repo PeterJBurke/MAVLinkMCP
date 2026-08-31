@@ -1,276 +1,95 @@
 # Documentation Index
 
-Complete list of all markdown files in the droneserver project with descriptions.
+Every Markdown document in this repository, and what it is for.
 
-**Last Updated:** December 2024
-
----
-
-## Core Documentation
-
-### README.md
-**Main project documentation and getting started guide**
-- Project overview and features
-- Quick start instructions
-- ChatGPT integration guide
-- Setup and configuration
-- Usage examples
-- Troubleshooting basics
-- Links to all other documentation
-
-### STATUS.md
-**Project status and development roadmap**
-- Current version status (v1.2.4)
-- Complete list of 35 available tools
-- Development roadmap (v1.2.0, v1.3.0, v2.0.0, v3.0.0)
-- Version comparison table
-- Success metrics for each version
-- Recent changes and release history
-- Contributing guidelines
+**Start at [README.md](README.md).** To reproduce the paper's results, start at
+[docs/reproduce.md](docs/reproduce.md).
 
 ---
 
-## Setup & Deployment Guides
+## Start here
 
-### CHATGPT_SETUP.md
-**Complete guide for connecting ChatGPT to MAVLink MCP**
-- Prerequisites and requirements
-- Step-by-step ChatGPT Developer Mode setup
-- ngrok configuration for HTTPS tunneling
-- MCP connector configuration in ChatGPT
-- Testing and verification steps
-- Troubleshooting common issues
-- Example conversations and prompts
+| File | What it is |
+|---|---|
+| [README.md](README.md) | What DroneServer is, the safety layer, the deployment posture, quickstart |
+| [docs/reproduce.md](docs/reproduce.md) | End-to-end reproduction: SITL, credentials, the mission suite, the LLM harness, the capture bundles |
+| [SECURITY.md](SECURITY.md) | Deployment posture in brief; how to report a vulnerability |
+| [CHANGELOG.md](CHANGELOG.md) | Release history |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Issues, PRs, the checks a change must pass |
 
-### SERVICE_SETUP.md
-**Production deployment with systemd services**
-- Installing MAVLink MCP as systemd service
-- Installing ngrok as systemd service
-- Auto-start on boot configuration
-- Auto-restart on failure setup
-- Centralized logging with journalctl
-- Service management commands
-- Production deployment best practices
+## Safety
 
-### LIVE_SERVER_UPDATE.md
-**Guide for updating running production server**
-- Safe update procedures
-- Stopping/restarting services
-- Pulling latest code from GitHub
-- Dependency updates
-- Verifying updates
-- Rollback procedures
-- Zero-downtime update strategies
+| File | What it is |
+|---|---|
+| [docs/safety_review.md](docs/safety_review.md) | The safety layer in full, written for someone who has not read the code: tiers, confirmation tokens, geofence, bounds, preconditions, auth, audit log, config surface |
+| [src/droneserver/safety/README.md](src/droneserver/safety/README.md) | Implementer's notes alongside the safety package |
+| [docs/adversarial_results.md](docs/adversarial_results.md) | Generated — the 29 adversarial/prompt-injection cases and what the guard did with each |
+| [docs/estop.md](docs/estop.md) | The emergency-stop path |
+| [LOITER_MODE_CRASH_REPORT.md](LOITER_MODE_CRASH_REPORT.md) | v1 incident report: `pause_mission()` entered LOITER and the aircraft descended to impact |
+| [MISSION_PAUSE_FIX.md](MISSION_PAUSE_FIX.md) | The fix that followed: `hold_mission_position()` |
 
-### RESTART_INSTRUCTIONS.md
-**Quick reference for restarting services and viewing logs**
-- Restart commands for MCP server
-- Viewing live logs with journalctl
-- Log filtering and searching
-- Service status checks
-- Troubleshooting service issues
+## Evaluation and evidence
 
----
+| File | What it is |
+|---|---|
+| [docs/llm_in_the_loop.md](docs/llm_in_the_loop.md) | What happens inside one scored trial, and why verdicts come from telemetry and the audit log rather than the model's own claim |
+| [docs/capture_topology.md](docs/capture_topology.md) | The four-layer capture pipeline and the failure modes it was built to catch |
+| [docs/long_mission_demo.md](docs/long_mission_demo.md) | The long mission surviving a client disconnection — server-side mission state |
+| [docs/staging_validation.md](docs/staging_validation.md) | The two-machine server/simulator topology the campaigns ran on |
+| [docs/tool_description_experiment.md](docs/tool_description_experiment.md) | Effect of tool-description wording on model behaviour |
+| [docs/google_maps_mcp.md](docs/google_maps_mcp.md) | The second MCP server used by mission T6 |
 
-## Reference Documentation
+## Coverage and tool reference
 
-### MAVSDK_METHODS.md
-**Complete MAVSDK Python API reference**
-- All ~155 MAVSDK methods organized by plugin
-- Implementation status for each method
-- MCP tool mappings
-- Coverage statistics (~23% implemented)
-- Priority recommendations for future implementation
+| File | What it is |
+|---|---|
+| [docs/tool_test_coverage.md](docs/tool_test_coverage.md) | Generated — per-tool test and flight evidence across the unit, SITL and scored-campaign layers |
+| [docs/coverage_summary.md](docs/coverage_summary.md) | Generated — MavSDK method coverage (223 implemented + 15 documented-N/A of 238 client-side) |
+| [docs/tool_groups.md](docs/tool_groups.md) | Why the tools are grouped the way they are |
+| [MCP_TOOLS_MAVSDK.md](MCP_TOOLS_MAVSDK.md) | v1-era mapping of MCP tools to MAVSDK methods — superseded by the generated coverage docs |
+| [MAVSDK_METHODS.md](MAVSDK_METHODS.md) | v1-era MAVSDK API reference — superseded by `docs/coverage_matrix.csv` |
+| [MAVLINK_COMMANDS.md](MAVLINK_COMMANDS.md) | MAVLink `MAV_CMD` reference |
 
-### MAVLINK_COMMANDS.md
-**Complete MAVLink commands (MAV_CMD) reference**
-- All ~120 MAVLink commands organized by category
-- Implementation status for each command
-- Direct vs indirect usage mapping
-- MCP tool mappings
-- Coverage statistics (~9% implemented)
-- Priority recommendations
+## Deployment and operations
 
-### MCP_TOOLS_MAVSDK.md
-**MCP tools vs MAVSDK methods mapping**
-- All 35 MCP tools listed
-- Which tools are direct MAVSDK equivalents (23 tools)
-- Which tools are custom implementations (13 tools)
-- Which tools are partial equivalents (6 tools)
-- Detailed explanations of custom logic
-- Usage recommendations
+| File | What it is |
+|---|---|
+| [SERVICE_SETUP.md](SERVICE_SETUP.md) | Running the server under systemd |
+| [LIVE_SERVER_UPDATE.md](LIVE_SERVER_UPDATE.md) | Updating a running deployment |
+| [RESTART_INSTRUCTIONS.md](RESTART_INSTRUCTIONS.md) | Restarting, and reading the logs |
+| [CHATGPT_SETUP.md](CHATGPT_SETUP.md) | Driving the server from an interactive MCP chat client, and why hosted web connectors are out of scope |
+| [LMSTUDIO_SETUP.md](LMSTUDIO_SETUP.md) | LM Studio's `mcp.json` for this server |
+| [deploy/farm/README.md](deploy/farm/README.md) | The 10-lane SITL farm used for the campaigns |
 
----
+## Testing
 
-## Testing Documentation
+| File | What it is |
+|---|---|
+| [tests/integration/README.md](tests/integration/README.md) | The SITL fixture chain and how to run the integration suite |
+| [TESTING.md](TESTING.md) | v1-era manual test procedures driven by chat prompts |
+| [TESTING_REFERENCE.md](TESTING_REFERENCE.md) | Troubleshooting reference, GPS maths, firmware compatibility matrix |
 
-### TESTING.md
-**Manual testing procedures using ChatGPT prompts**
-- Note: Automated tests not implemented yet
-- Quick test (5 minutes)
-- Comprehensive test (15-20 minutes)
-- Granular test (30-45 minutes)
-- Individual feature tests
-- Upload/download mission diagnostic
-- Safety notes and prerequisites
+## Flight behaviour and logs
 
-### TESTING_REFERENCE.md
-**Troubleshooting and testing reference guide**
-- Common issues and solutions
-- GPS coordinate calculations
-- Firmware compatibility matrix
-- Safety notes and best practices
-- Test result templates
-- Performance benchmarks
-- Advanced troubleshooting
+| File | What it is |
+|---|---|
+| [FLIGHT_MODES.md](FLIGHT_MODES.md) | ArduPilot flight modes and which tools trigger which transitions |
+| [FLIGHT_LOGS.md](FLIGHT_LOGS.md) | The flight logging system |
+| [LOG_COLORS.md](LOG_COLORS.md) | The colour scheme in the server's console output |
 
----
+## History
 
-## Technical Documentation
-
-### FLIGHT_MODES.md
-**Flight mode behavior and MCP tool interactions**
-- ArduPilot flight modes explained
-- GUIDED mode (primary mode used)
-- AUTO mode (mission execution)
-- LOITER mode (problematic behavior)
-- How MCP tools trigger mode changes
-- Mode transition diagrams
-- Best practices for mode management
-
-### FLIGHT_LOGS.md
-**Flight logging system documentation**
-- Automatic flight log creation
-- Log file location and naming
-- Log entry formats
-- MCP tool call logging
-- MAVLink command logging
-- Log analysis examples
-- Using logs for debugging and auditing
-
-### LOG_COLORS.md
-**Color-coded logging system reference**
-- ANSI color scheme for different log types
-- MCP tool calls (green)
-- MAVLink commands (cyan)
-- Errors (red)
-- Warnings (yellow)
-- How to view colors in journalctl
-- Log filtering examples
-
----
-
-## Safety & Incident Reports
-
-### LOITER_MODE_CRASH_REPORT.md
-**Critical safety issue report - pause_mission crash**
-- Executive summary of crash incident
-- Detailed timeline of crash (25m → ground impact)
-- Root cause analysis (LOITER mode altitude behavior)
-- Why pause_mission is unsafe
-- Safe alternative (hold_mission_position)
-- Lessons learned
-- Impact and fix status
-
-### MISSION_PAUSE_FIX.md
-**Mission pause/resume fixes and improvements**
-- Issues addressed in v1.2.2
-- LOITER mode problem explanation
-- hold_mission_position solution
-- Enhanced resume_mission diagnostics
-- Migration guide from pause_mission
-- Best practices for mission control
-
----
+| File | What it is |
+|---|---|
+| [STATUS.md](STATUS.md) | The v1 status and roadmap document, kept as a historical record. Superseded by README.md and CHANGELOG.md |
 
 ## Examples
 
-### examples/README.md
-**Example agent documentation**
-- MCP and MAVSDK overview
-- Prerequisites for running examples
-- API key configuration
-- Example agent usage
-- FastAgent integration examples
-- Code examples and snippets
+| File | What it is |
+|---|---|
+| [examples/README.md](examples/README.md) | The example agent |
 
 ---
 
-## Summary by Category
-
-### Setup & Getting Started (5 files)
-- README.md - Main documentation
-- CHATGPT_SETUP.md - ChatGPT integration
-- SERVICE_SETUP.md - Production deployment
-- LIVE_SERVER_UPDATE.md - Update procedures
-- RESTART_INSTRUCTIONS.md - Quick restart guide
-
-### Reference Documentation (3 files)
-- MAVSDK_METHODS.md - MAVSDK API reference
-- MAVLINK_COMMANDS.md - MAVLink commands reference
-- MCP_TOOLS_MAVSDK.md - Tool mapping reference
-
-### Status & Roadmap (1 file)
-- STATUS.md - Project status and roadmap
-
-### Testing (2 files)
-- TESTING.md - Manual testing procedures
-- TESTING_REFERENCE.md - Troubleshooting guide
-
-### Technical Details (3 files)
-- FLIGHT_MODES.md - Flight mode behavior
-- FLIGHT_LOGS.md - Logging system
-- LOG_COLORS.md - Color-coded logs
-
-### Safety Reports (2 files)
-- LOITER_MODE_CRASH_REPORT.md - Crash incident report
-- MISSION_PAUSE_FIX.md - Mission control fixes
-
-### Examples (1 file)
-- examples/README.md - Example agent documentation
-
-**Total: 17 markdown files**
-
----
-
-## Quick Navigation
-
-**New to the project?** Start with:
-1. README.md - Overview and quick start
-2. CHATGPT_SETUP.md - If using ChatGPT
-3. SERVICE_SETUP.md - For production deployment
-
-**Want to understand the codebase?** Read:
-1. STATUS.md - Current features and roadmap
-2. MCP_TOOLS_MAVSDK.md - What tools exist
-3. MAVSDK_METHODS.md - What's available in MAVSDK
-
-**Need to test?** See:
-1. TESTING.md - Manual testing procedures
-2. TESTING_REFERENCE.md - Troubleshooting
-
-**Safety concerns?** Check:
-1. LOITER_MODE_CRASH_REPORT.md - Critical safety issue
-2. MISSION_PAUSE_FIX.md - Safe mission control
-
-**Production deployment?** Read:
-1. SERVICE_SETUP.md - Service installation
-2. LIVE_SERVER_UPDATE.md - Update procedures
-3. LOG_COLORS.md - Log viewing
-
----
-
-## Documentation Maintenance
-
-**Last Major Update:** December 2024
-- Added MAVSDK_METHODS.md
-- Added MAVLINK_COMMANDS.md
-- Added MCP_TOOLS_MAVSDK.md
-- Consolidated testing documentation into TESTING.md
-- Updated STATUS.md with v1.3.0 roadmap
-
-**Documentation Standards:**
-- All guides include prerequisites
-- Code examples are tested
-- Safety warnings are prominent
-- Links between related docs are maintained
+Documents marked **Generated** are produced by a script and should not be
+hand-edited — see [CONTRIBUTING.md](CONTRIBUTING.md).
