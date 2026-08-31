@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.12"]  # expand matrix (3.10-3.13) later in Phase 6
+        python-version: ["3.12"]  # expand matrix (3.11-3.13) later in Phase 6
     steps:
       - uses: actions/checkout@v4
 

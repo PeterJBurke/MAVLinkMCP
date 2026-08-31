@@ -8,7 +8,12 @@ authors = [
 ]
 readme = "README.md"
 license = {text = "MIT"}
-requires-python = ">=3.10"
+# 3.11, not 3.10: the transport-cancellation discrimination in
+# droneserver.llm.mcp_session (FIX 16) is built on asyncio.Task.cancelling()/
+# uncancel(), which do not exist before 3.11, and the ~23 `except TimeoutError`
+# telemetry handlers rely on asyncio.TimeoutError having been unified with the
+# builtin - also 3.11. The old ">=3.10" was never true. See FIX 17.
+requires-python = ">=3.11"
 keywords = ["mavlink", "mcp", "drone", "uav", "llm", "mavsdk", "model-context-protocol"]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -17,7 +22,6 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -76,7 +80,7 @@ packages = ["src/droneserver"]
 
 [tool.ruff]
 line-length = 120
-target-version = "py310"
+target-version = "py311"
 src = ["src", "tests", "scripts"]
 
 [tool.ruff.lint]
@@ -96,7 +100,10 @@ select = [
 # Permissive baseline; per-module strictness will be ratcheted up module by
 # module as the v2 refactor proceeds (Plan 01 Phase 6).
 files = ["src/droneserver"]
-python_version = "3.10"
+# Matches requires-python. This is not a loosening to silence errors: at 3.10
+# mypy correctly reported four real ones (Task.cancelling on a 3.10 stdlib),
+# and the fix was to stop claiming a floor the code does not support.
+python_version = "3.11"
 ignore_missing_imports = true
 check_untyped_defs = false
 warn_unused_configs = true
