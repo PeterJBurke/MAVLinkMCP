@@ -6,7 +6,6 @@ of SAFETY_API_KEYS); the key value is never printed. Exit 0 = idle (disarmed,
 on ground), 3 = NOT idle, 2 = could not read state.
 """
 
-import sys
 
 from droneserver.benchmark.client import BenchmarkClient
 

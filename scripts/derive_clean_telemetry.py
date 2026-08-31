@@ -68,7 +68,7 @@ import math
 import os
 import sys
 from bisect import bisect_right
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 # The column order is the recorder's, imported when droneserver is importable

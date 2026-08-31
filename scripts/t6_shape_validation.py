@@ -244,7 +244,7 @@ def main() -> int:
                        f"session_launch_point {'≈origin' if slp_ok else 'WRONG: ' + str(slp)[:40]}")
 
         # ---------------- Phase E: explicit return to the origin coordinate ----------------
-        print(f"\nPhase E — return on the explicit origin coordinate", flush=True)
+        print("\nPhase E — return on the explicit origin coordinate", flush=True)
         go = c.call("go_to_location", latitude_deg=origin[0], longitude_deg=origin[1],
                     absolute_altitude_m=origin_amsl + CRUISE_REL_M, timeout=90)
         if go.get("status") != "success":

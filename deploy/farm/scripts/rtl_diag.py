@@ -1,4 +1,6 @@
-import sys, time, os
+import sys
+import time
+
 sys.path.insert(0, "/root/droneserver/src")
 from droneserver.benchmark.client import BenchmarkClient
 

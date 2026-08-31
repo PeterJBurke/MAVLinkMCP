@@ -85,10 +85,10 @@ from droneserver.capture import (
     annotate_manifest,
     derive_events,
     gather_versions,
+    is_shared_bind,
     remote_clock_offset_s,
     retain_dataflash,
     retain_remote_dataflash,
-    is_shared_bind,
     verify_bundle,
     write_manifest,
 )

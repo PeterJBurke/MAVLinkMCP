@@ -17,7 +17,6 @@ from droneserver.safety.config import reset_safety_settings
 from droneserver.safety.middleware import can_be_critical
 from droneserver.safety.tiers import ESCALATIONS, Tier, effective_tier
 
-
 # --------------------------------------------------------------- tier table
 
 
