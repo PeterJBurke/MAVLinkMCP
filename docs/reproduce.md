@@ -209,6 +209,30 @@ figure is regenerated from exactly this bundle. As stated above: pass/fail
 verdicts in every one of these outputs come from the telemetry and audit
 record, not from the model's own narration.
 
+## Which tools are actually covered, and by what evidence
+
+`scripts/generate_coverage_matrix.py` answers what the interface can
+command (`docs/coverage_matrix.csv`, `docs/coverage_summary.md`).
+`scripts/tool_test_coverage.py` answers the different question of what was
+actually exercised: for each registered MCP tool it reports whether the
+unit suite drives or names it, whether the SITL integration suite calls it
+against a real autopilot, and how many times a model chose it in the two
+scored N=5 campaigns. It takes no arguments, reads only the repository, and
+writes `docs/tool_test_coverage.{csv,md,json}`; `--tex <path>` additionally
+emits the numeric macros the paper's Appendix D prints, so no count in that
+appendix is typed by hand.
+
+```bash
+.venv/bin/python scripts/tool_test_coverage.py
+.venv/bin/python scripts/tool_test_coverage.py \
+    --tex /root/LLMUAV/Manuscript/v2/tool_test_coverage.tex
+```
+
+It also re-counts every scored trial's transcript against the run-level
+`tool_calls.csv` and reports any disagreement, and it fails outright if the
+canonical campaign directory list drifts from the paper repository's own
+(`Research/rev4/corpus.py`).
+
 ## Two ways to operate the system
 
 The scripts on this page are one of two supported ways to drive the
