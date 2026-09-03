@@ -27,3 +27,5 @@ winch,lock,payload_mechanism,dispatched via a method dict keyed by action name
 winch,load_line,payload_mechanism,dispatched via a method dict keyed by action name
 winch,load_payload,payload_mechanism,dispatched via a method dict keyed by action name
 winch,abandon_line,payload_mechanism,dispatched via a method dict keyed by action name
+telemetry,in_air,get_in_air,dispatched dynamically via getattr(drone.telemetry, topic) in telemetry/ground_stream.py since FIX 15
+telemetry,landed_state,get_landed_state,dispatched dynamically via getattr(drone.telemetry, topic) in telemetry/ground_stream.py since FIX 15
