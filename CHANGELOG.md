@@ -33,6 +33,21 @@ tag on the v2 line to be published as a GitHub Release.
   that rendering byte-for-byte against the first operator message of every
   recorded trial transcript. Both emit a LaTeX longtable plus a macro block,
   so no row in the manuscript's case or prompt tables is typed by hand.
+- **The v1-era pages no longer contradict the v2 code.** Six documents still
+  told the reader that `pause_mission()` was deprecated, disabled and unsafe.
+  It has not been since the v2 rewrite: the tool takes a `mode` argument
+  defaulting to `"guided_hold"`, which holds position in GUIDED — altitude-safe,
+  no RC needed — and reaches the firmware LOITER path that caused the v1.2.2
+  crash only via an explicit `mode="native_hold"`, which returns the descent
+  warning with its result. `TESTING_REFERENCE.md`, `FLIGHT_MODES.md` and
+  `TESTING.md` are corrected in place; `LOITER_MODE_CRASH_REPORT.md` and
+  `STATUS.md` keep their v1 accounts, now marked as history. `MCP_TOOLS_MAVSDK.md`
+  (41 tools) and `MAVSDK_METHODS.md` (~35 of ~155 methods) carry banners pointing
+  at the generated `docs/coverage_summary.md` instead. Also fixed: four
+  non-existent tool names in `LMSTUDIO_SETUP.md`, the wrong ANSI codes in
+  `LOG_COLORS.md`, a dead `TESTING_FIXES.md` link, and a dead `droneserver.py`
+  reference in `FLIGHT_LOGS.md`. No broken relative link remains in any
+  top-level document.
 - **Release hygiene.** Package version bumped to 2.0.2 in `pyproject.toml` and
   `droneserver.__version__`, which had both been left at 2.0.1.
   `CONTRIBUTING.md` no longer directs pull requests at a `v-next` development

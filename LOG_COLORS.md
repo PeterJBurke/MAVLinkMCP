@@ -142,11 +142,14 @@ sudo journalctl -u droneserver -f --output=cat | grep -E "🔧|📡|❌"
 ```python
 class LogColors:
     RESET = "\033[0m"
-    RED = "\033[91m"  # Errors
-    GREEN = "\033[92m"  # Tool calls
-    YELLOW = "\033[93m"  # Warnings
-    CYAN = "\033[96m"  # MAVLink commands
+    # Dark colors (3x codes) - easier to read than bright (9x codes)
+    RED = "\033[31m"  # Errors
+    GREEN = "\033[32m"  # Tool calls
+    YELLOW = "\033[33m"  # Warnings
+    CYAN = "\033[36m"  # MAVLink commands
 ```
+
+Defined in `src/droneserver/telemetry/flight_log.py`.
 
 **Applied to:**
 - `log_tool_call()` - All MCP tool invocations

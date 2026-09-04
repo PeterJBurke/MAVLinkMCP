@@ -2,9 +2,17 @@
 
 Complete reference of all MAVSDK Python methods and their implementation status in MAVLink MCP.
 
-**Last Updated:** December 2024  
-**MAVSDK Version:** 2.x  
-**MAVLink MCP Version:** 1.2.4
+> **v1-era snapshot — superseded.** The implementation status on this page is v1's
+> (~35 of ~155 methods). v2 implements **223 of 238** client-side MavSDK methods
+> across 33 plugins, with the remaining 15 documented not-applicable and 0 missing,
+> against `mavsdk==3.0.1`. The authoritative, generated versions are
+> [`docs/coverage_summary.md`](docs/coverage_summary.md) and
+> [`docs/coverage_matrix.csv`](docs/coverage_matrix.csv), produced by
+> `scripts/generate_coverage_matrix.py`. Do not cite the table below.
+
+**Last Updated:** December 2024 (v1)  
+**MAVSDK Version:** 2.x (v1; v2 targets mavsdk 3.0.1)  
+**MAVLink MCP Version:** 1.2.4 (v1 line)
 
 ---
 

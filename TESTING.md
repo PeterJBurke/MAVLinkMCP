@@ -202,7 +202,7 @@ PHASE 4 - DETAILED INSPECTION:
 PHASE 5 - MISSION EXECUTION:
 22. Now start the 4-waypoint mission we uploaded earlier
 23. Monitor the mission and tell me when we reach waypoint 2
-24. At waypoint 2, use hold_mission_position to pause safely (do NOT use pause_mission - it's deprecated)
+24. At waypoint 2, use hold_mission_position to pause safely (pause_mission with its default mode="guided_hold" does the same thing safely; only pause_mission(mode="native_hold") enters LOITER)
 25. Check if the mission is finished (it shouldn't be since we paused it)
 26. Resume the mission and let it continue
 27. Keep checking until the mission is finished
@@ -627,7 +627,7 @@ TEST 29: is_mission_finished (during execution)
 
 TEST 30: hold_mission_position (verify safe pause - v1.2.2)
 - PREREQUISITE: Mission running
-- ACTION: Run hold_mission_position (NOT pause_mission - deprecated!)
+- ACTION: Run hold_mission_position (or pause_mission with its default mode="guided_hold" - both hold in GUIDED; do NOT pass mode="native_hold" without an RC at mid-throttle)
 - WAIT: 5 seconds
 - ACTION: Run get_position - SAVE as POS_PAUSED
 - ACTION: Run get_flight_mode

@@ -5,6 +5,14 @@
 **Severity:** CRITICAL - Causes crashes  
 **Status:** **FIXED** in v1.2.3
 
+> **Historical incident report.** The remedy described below — deprecating and
+> disabling `pause_mission()` — was the v1.2.3 fix and is no longer how the
+> current release behaves. In v2, `pause_mission()` is a working tool again: it
+> defaults to `mode="guided_hold"`, holding position in GUIDED with no RC needed,
+> and reaches LOITER only via an explicit `mode="native_hold"`. The analysis of
+> *why* LOITER descends without RC throttle input is unchanged and still worth
+> reading.
+
 ---
 
 ## Executive Summary

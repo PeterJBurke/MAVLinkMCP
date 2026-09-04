@@ -48,7 +48,7 @@ Every Markdown document in this repository, and what it is for.
 | [docs/tool_groups.md](docs/tool_groups.md) | Why the tools are grouped the way they are |
 | [MCP_TOOLS_MAVSDK.md](MCP_TOOLS_MAVSDK.md) | v1-era mapping of MCP tools to MAVSDK methods — superseded by the generated coverage docs |
 | [MAVSDK_METHODS.md](MAVSDK_METHODS.md) | v1-era MAVSDK API reference — superseded by `docs/coverage_matrix.csv` |
-| [MAVLINK_COMMANDS.md](MAVLINK_COMMANDS.md) | MAVLink `MAV_CMD` reference |
+| [MAVLINK_COMMANDS.md](MAVLINK_COMMANDS.md) | MAVLink `MAV_CMD` protocol reference — still accurate on the protocol; its implementation-status columns are v1-era |
 
 ## Deployment and operations
 
@@ -67,7 +67,7 @@ Every Markdown document in this repository, and what it is for.
 |---|---|
 | [tests/integration/README.md](tests/integration/README.md) | The SITL fixture chain and how to run the integration suite |
 | [TESTING.md](TESTING.md) | v1-era manual test procedures driven by chat prompts |
-| [TESTING_REFERENCE.md](TESTING_REFERENCE.md) | Troubleshooting reference, GPS maths, firmware compatibility matrix |
+| [TESTING_REFERENCE.md](TESTING_REFERENCE.md) | Troubleshooting reference, GPS maths, firmware compatibility matrix — v1-era, with its `pause_mission` guidance corrected for v2; current procedure is `docs/reproduce.md` |
 
 ## Flight behaviour and logs
 

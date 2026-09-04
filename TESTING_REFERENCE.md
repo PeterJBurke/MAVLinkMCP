@@ -2,6 +2,16 @@
 
 Troubleshooting, firmware compatibility, safety notes, and templates.
 
+> **v1-era document, corrected for v2 where it was actively wrong.** Version
+> markers below (v1.2.x) refer to the v1 line. The one claim that mattered — that
+> `pause_mission()` is deprecated, disabled, and unsafe — is **no longer true** and
+> has been corrected in place: v2 reimplemented the tool with a safe GUIDED-hold
+> default. See the "Mission Pause" entries below, and
+> `src/droneserver/tools/mission.py` for the implementation. For current test
+> procedure and counts start at [`docs/reproduce.md`](docs/reproduce.md); the
+> per-tool evidence table is
+> [`docs/tool_test_coverage.md`](docs/tool_test_coverage.md).
+
 ---
 
 ## 🔧 Common Issues & Solutions
@@ -157,17 +167,22 @@ uploaded_mission = [waypoint1, waypoint2, waypoint3]
 
 ### Mission Pauses and Altitude Drops - CRITICAL SAFETY ISSUE
 
-**Problem:** Using `pause_mission()` causes drone to descend and crash
+**Problem (v1):** Using `pause_mission()` causes drone to descend and crash
 
-**Root Cause:** `pause_mission()` enters LOITER mode, which requires RC throttle input (50% for altitude hold). Without RC input, altitude is NOT maintained and drone descends.
+**Root Cause:** in v1, `pause_mission()` entered LOITER mode, which requires RC throttle input (50% for altitude hold). Without RC input, altitude is NOT maintained and drone descends.
 
-**🔴 CRITICAL: `pause_mission()` IS DEPRECATED AS OF v1.2.3**
+**Status in v2: fixed, and the tool is no longer deprecated.** `pause_mission()`
+takes a `mode` argument that defaults to `"guided_hold"`: it reads the current
+position and holds it in GUIDED — altitude-safe, no RC required, the same
+behaviour as `hold_mission_position()`. The LOITER path still exists but is
+opt-in as `pause_mission(mode="native_hold")`, and it returns the descent warning
+with its result. Use `native_hold` only with an RC transmitter present, or on PX4.
 
 **Solutions:**
-1. **✅ USE `hold_mission_position()` INSTEAD** - Safe alternative that uses GUIDED mode
-2. **Never use `pause_mission()`** - It will return an error directing you to the safe alternative
-3. **See crash report:** [LOITER_MODE_CRASH_REPORT.md](LOITER_MODE_CRASH_REPORT.md)
-4. **See migration guide:** [MISSION_PAUSE_FIX.md](MISSION_PAUSE_FIX.md)
+1. **✅ `pause_mission()` with its default is safe** — as is `hold_mission_position()`.
+2. **Do not pass `mode="native_hold"` without an RC at mid-throttle.**
+3. **See crash report (v1 incident):** [LOITER_MODE_CRASH_REPORT.md](LOITER_MODE_CRASH_REPORT.md)
+4. **See migration guide (v1 history):** [MISSION_PAUSE_FIX.md](MISSION_PAUSE_FIX.md)
 
 **Why `hold_mission_position()` is Safe:**
 - Uses GUIDED mode (NOT LOITER)
@@ -281,23 +296,23 @@ Different autopilots support different features. Here's what's required:
 - Leave drone unattended during autonomous flight
 - Ignore safety warnings from the system
 - Disarm while in the air (altitude > 0.5m)
-- **Use `pause_mission()` - IT'S DEPRECATED AND UNSAFE**
+- **Use `pause_mission(mode="native_hold")` without an RC transmitter at mid-throttle**
 - Fly without RC transmitter ready for manual override
 
 ### 🔴 CRITICAL SAFETY - Mission Pausing
 
 **DO:**
-- ✅ Use `hold_mission_position()` - Safe GUIDED mode hold
+- ✅ Use `pause_mission()` with its default `mode="guided_hold"`, or `hold_mission_position()` — both are a safe GUIDED-mode hold
 - ✅ Verify altitude maintained during pause
 - ✅ Check flight mode after pause (should be GUIDED)
 - ✅ Use `resume_mission()` with enhanced verification
 
 **DON'T:**
-- ⛔ Use `pause_mission()` - Enters unsafe LOITER mode
+- ⛔ Pass `mode="native_hold"` to `pause_mission()` without an RC transmitter at mid-throttle — that is the LOITER path
 - ⛔ Assume LOITER holds altitude without RC input
 - ⛔ Ignore altitude drift during mission pauses
 
-**Why:** LOITER mode in ArduPilot requires active RC throttle input (50% = altitude hold). Without RC input, the drone will descend and crash. See [LOITER_MODE_CRASH_REPORT.md](LOITER_MODE_CRASH_REPORT.md) for detailed analysis.
+**Why:** LOITER mode in ArduPilot requires active RC throttle input (50% = altitude hold). Without RC input, the drone will descend and crash — this is what happened in v1, when LOITER was the only pause path. See [LOITER_MODE_CRASH_REPORT.md](LOITER_MODE_CRASH_REPORT.md) for detailed analysis.
 
 ---
 
@@ -476,7 +491,8 @@ Expected execution times:
 
 ### Testing Guides
 - [TESTING.md](TESTING.md) - Main testing guide (consolidated manual testing procedures)
-- [TESTING_FIXES.md](TESTING_FIXES.md) - Detailed fixes from real-world testing
+- [docs/reproduce.md](docs/reproduce.md) - Current end-to-end reproduction: SITL setup, the mission suite, the LLM-in-the-loop harness
+- [docs/tool_test_coverage.md](docs/tool_test_coverage.md) - Per-tool test and flight evidence (generated)
 
 ### Examples
 - [examples/](examples/) - Example Python scripts
@@ -620,14 +636,18 @@ Based on comprehensive real-world testing, v1.2.1 includes:
    - Reports progress_percentage
    - Displays current flight_mode
 
-**v1.2.3 Critical Safety Fix:**
-1. **🔴 pause_mission DEPRECATED**
-   - Immediately returns error with detailed explanation
-   - Directs users to hold_mission_position
-   - Explains LOITER mode risks
-   - References crash report for technical details
+**v1.2.3 Critical Safety Fix (v1 history — superseded in v2):**
+1. **pause_mission was deprecated in v1.2.3**
+   - Immediately returned an error with a detailed explanation
+   - Directed users to hold_mission_position
+   - Explained LOITER mode risks
+   - Referenced the crash report for technical details
 
-See [MISSION_PAUSE_FIX.md](MISSION_PAUSE_FIX.md) for migration guide and [LOITER_MODE_CRASH_REPORT.md](LOITER_MODE_CRASH_REPORT.md) for crash analysis.
+**In v2 this stub is gone.** `pause_mission()` is a working tool again, defaulting
+to `mode="guided_hold"` (GUIDED position hold, altitude-safe, no RC needed), with
+the firmware LOITER path available only as an explicit `mode="native_hold"`.
+
+See [MISSION_PAUSE_FIX.md](MISSION_PAUSE_FIX.md) for the v1 migration guide and [LOITER_MODE_CRASH_REPORT.md](LOITER_MODE_CRASH_REPORT.md) for crash analysis.
 
 ---
 

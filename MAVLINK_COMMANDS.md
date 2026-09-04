@@ -2,9 +2,15 @@
 
 Complete reference of all MAVLink commands (MAV_CMD) and their implementation status in MAVLink MCP.
 
-**Last Updated:** December 2024  
+> **v1-era reference.** The MAV_CMD protocol material below is still accurate —
+> it describes MAVLink itself, not this server — but the implementation-status
+> columns and tool names reflect v1. For what v2 actually implements see the
+> generated [`docs/coverage_summary.md`](docs/coverage_summary.md) and
+> [`docs/tool_test_coverage.md`](docs/tool_test_coverage.md).
+
+**Last Updated:** December 2024 (v1)  
 **MAVLink Protocol Version:** 2.x  
-**MAVLink MCP Version:** 1.2.4
+**MAVLink MCP Version:** 1.2.4 (v1 line)
 
 ---
 

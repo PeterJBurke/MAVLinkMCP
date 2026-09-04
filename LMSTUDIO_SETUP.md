@@ -111,14 +111,16 @@ Add the `droneserver` entry inside the `mcpServers` object:
 
 Once enabled, LM Studio should connect and discover the available tools:
 
-- `get_telemetry` - Get current drone position and status
-- `arm` - Arm the drone motors
-- `disarm` - Disarm the drone motors
+- `get_position` - Get the current GPS position
+- `get_battery` - Get battery state of charge and voltage
+- `arm_drone` - Arm the drone motors
+- `disarm_drone` - Disarm the drone motors
 - `takeoff` - Take off to specified altitude
 - `land` - Land the drone
-- `goto_position` - Fly to GPS coordinates
+- `go_to_location` - Fly to GPS coordinates
 - `set_flight_mode` - Change flight mode
-- And more...
+- And 90 more — 98 tools are registered in all. The full list, with what
+  evidence backs each one, is [`docs/tool_test_coverage.md`](docs/tool_test_coverage.md).
 
 You should see these tools listed when you click the Integrations icon.
 

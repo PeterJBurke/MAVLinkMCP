@@ -2,9 +2,18 @@
 
 Complete reference showing which MCP tools are direct equivalents to MAVSDK methods and which are custom implementations.
 
-**Last Updated:** December 2024  
-**MAVLink MCP Version:** 1.3.1  
-**Total Tools:** 41
+> **v1-era snapshot — superseded.** The counts on this page describe v1. v2
+> registers **98** MCP tools and implements **223 of 238** client-side MavSDK
+> methods (the other 15 documented not-applicable with reasons; 0 missing). Use
+> the generated documents instead — they are produced from the code, not typed:
+> [`docs/coverage_summary.md`](docs/coverage_summary.md) and
+> [`docs/coverage_matrix.csv`](docs/coverage_matrix.csv) for method coverage,
+> [`docs/tool_test_coverage.md`](docs/tool_test_coverage.md) for the per-tool
+> table. This file is kept for its v1-to-MAVSDK mapping notes only.
+
+**Last Updated:** December 2024 (v1)  
+**MAVLink MCP Version:** 1.3.1 (v1 line)  
+**Total Tools:** 41 (v1; v2 registers 98)
 
 ---
 

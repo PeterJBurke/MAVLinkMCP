@@ -1,5 +1,18 @@
 # Flight Logs
 
+> **Name collision, worth knowing before you read on.** This page is about the
+> server's own per-session text log (`flight_logs/flight_*.log`), written locally
+> as tool calls happen. v2 also registers an MCP tool literally named
+> `flight_logs()` — a different thing entirely: it downloads the *autopilot's*
+> dataflash logs over the MAVLink link into `FLIGHT_LOG_DIR/downloads/`. Pulling
+> dataflash logs over the link during a live flight session is discouraged; copy
+> them off the aircraft afterwards. Nothing on this page describes that tool.
+>
+> For the tamper-evident record of what the LLM asked for and what the safety
+> layer allowed or refused, see the append-only audit log described in
+> [`docs/safety_review.md`](docs/safety_review.md) — that, not this text log, is
+> the evidence the paper's results are computed from.
+
 ## Overview
 
 The MAVLink MCP Server automatically creates detailed flight log files for every session. These logs record all MCP tool calls and the actual MAVLink commands sent to the drone, making it easy to:
@@ -224,7 +237,7 @@ grep -E "goto_location|set_yaw|reposition" flight_logs/flight_*.log | wc -l
 - Look for error messages in the console/journalctl logs
 
 ### Missing log entries
-- Ensure you're using the updated version of `droneserver.py`
+- Ensure the logger is the one in `src/droneserver/telemetry/flight_log.py` (the single-file `droneserver.py` of v1 no longer exists)
 - Check if any errors occurred during command execution
 - Verify the tool calls were successful (not rejected)
 
@@ -323,10 +336,10 @@ Potential improvements for flight logging:
 For issues with flight logging:
 1. Check the main README.md for general troubleshooting
 2. Review the server logs (journalctl -u droneserver -f)
-3. Ensure you're on the latest version (v1.2.0+)
+3. Ensure you're on a current release (v2.0.2 or later)
 4. Report issues on GitHub with sample log entries
 
 ---
 
-**Note**: Flight logging was introduced in version 1.2.0. Ensure you're running the latest version to access this feature.
+**Note**: Flight logging was introduced in v1.2.0 and is present in every v2 release.
 

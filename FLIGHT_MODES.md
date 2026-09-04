@@ -1,5 +1,15 @@
 # Flight Modes in MAVLink MCP
 
+> **v2 correction — `pause_mission` no longer defaults to LOITER.** This page was
+> written for v1, where `pause_mission` handed the aircraft to the firmware's
+> Hold/Loiter and could descend without RC throttle input. In v2 the tool takes a
+> `mode` argument that defaults to `"guided_hold"`: it reads the current position
+> and holds it in **GUIDED**, altitude-safe and with no RC needed. LOITER is
+> reached only if the caller explicitly passes `mode="native_hold"`, and that path
+> returns the descent warning with it. The tables and diagrams below have been
+> updated for this; anything else on this page describing v1 mode behaviour should
+> be checked against `src/droneserver/tools/mission.py` before it is relied on.
+
 ## Understanding ArduPilot Flight Modes
 
 MAVLink MCP tools interact with ArduPilot, which automatically switches flight modes based on commands. Understanding these modes is crucial for controlling your drone effectively.
@@ -76,12 +86,19 @@ After Fix:
   Stays in GUIDED, maintains 50m altitude ✅
 ```
 
-**Log showing LOITER warning (for pause_mission):**
+**Log for the default `pause_mission()` (v2, `mode="guided_hold"`):**
 ```
-🔧 MCP TOOL: pause_mission()
+🔧 MCP TOOL: pause_mission(mode=guided_hold)
+📡 MAVLink → drone.action.goto_location(lat=..., lon=..., alt=...)
+✓ Mission paused - holding position in GUIDED mode
+```
+
+**Log for the opt-in `pause_mission(mode="native_hold")`:**
+```
+🔧 MCP TOOL: pause_mission(mode=native_hold)
 📡 MAVLink → drone.mission.pause_mission()
-⚠️  Pausing mission - drone may switch to LOITER mode
-✓ Flight mode may have changed to LOITER (hold position)
+⚠️  On ArduPilot, LOITER altitude tracks RC throttle - without an RC at
+    mid-throttle the drone can descend. Prefer mode=guided_hold without RC.
 ```
 
 ---
@@ -134,7 +151,8 @@ Tools that change flight modes now log warnings:
 |------|------------|---------|
 | `initiate_mission` | GUIDED → AUTO | ⚠️ Mission starting - drone will switch to AUTO flight mode |
 | `resume_mission` | Any → AUTO | ⚠️ Resuming mission - drone will switch to AUTO flight mode |
-| `pause_mission` | AUTO → LOITER | ⚠️ Pausing mission - drone may switch to LOITER mode |
+| `pause_mission` (default, `mode="guided_hold"`) | AUTO → **GUIDED** ✅ | Holds the current position; altitude-safe, no RC needed |
+| `pause_mission(mode="native_hold")` | AUTO → LOITER | ⚠️ Opt-in only. LOITER altitude tracks RC throttle on ArduPilot; without an RC at mid-throttle the drone can descend |
 | `hold_position` | **Stays GUIDED** ✅ | Uses goto_location to prevent mode change |
 
 ---
@@ -208,10 +226,11 @@ GUIDED (flying)
    └─ return_to_launch → RTL
 
 AUTO (mission running)
-   ├─ pause_mission → LOITER
+   ├─ pause_mission (default guided_hold) → GUIDED ✅
+   ├─ pause_mission(mode="native_hold")   → LOITER (opt-in)
    └─ mission complete → AUTO or GUIDED
 
-LOITER (paused mission)
+GUIDED / LOITER (paused mission)
    └─ resume_mission → AUTO
 
 LAND (landing)
@@ -231,6 +250,5 @@ RTL (returning home)
 
 ---
 
-**Last Updated:** November 17, 2025  
-**Version:** 1.2.1+ (with hold_position GUIDED mode fix)
+**Last Updated:** 2026-09-04 (v2.0.2 — `pause_mission` guided-hold default)
 
