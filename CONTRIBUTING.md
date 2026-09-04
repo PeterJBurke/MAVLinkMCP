@@ -16,9 +16,12 @@ in question.
 
 ## Pull requests
 
-- Branch from, and target, the current `v-next` development branch — not `main`.
-  `main` carries tagged releases. If you are unsure which branch that is, ask in
-  the issue first.
+- Branch from `main` and open the PR against `main`. `main` is the release
+  branch: every tag is cut from it, and it is the branch CI gates. There is no
+  separate long-lived development branch at present — the v2 integration branch
+  (`v2-upgrade`) has been merged and is kept only for history. If a development
+  branch is opened for a future major version it will be named in this file
+  first; until then, do not target one.
 - Keep the change focused. One defect or one capability per PR.
 - Explain *why* in the commit message, not just what. The repository's history is
   used as a record of engineering decisions and reads as prose.

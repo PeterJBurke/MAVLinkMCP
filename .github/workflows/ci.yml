@@ -32,7 +32,8 @@ jobs:
         run: uv run mypy
 
       - name: Unit tests (no SITL)
-        # NOTE: this figure is unit-only and is low by construction (~29%).
+        # NOTE: this figure is unit-only and is low by construction (60.3% on
+        # the v2.0.2 commit; it was ~29% when this note was first written).
         # Most of the codebase is drone-tool bodies that can only run against a
         # simulator, so the meaningful coverage number is produced by the
         # nightly SITL workflow. No gate is set on this number deliberately -

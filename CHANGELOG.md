@@ -4,6 +4,46 @@ Notable changes per tagged release. Dates are the tag's commit date.
 
 ---
 
+## v2.0.2 — 2026-09-04
+
+Tooling and generated-data corrections on top of v2.0.1. No API change: no tool
+was added, removed, or altered, and no safety rule changed. This is the first
+tag on the v2 line to be published as a GitHub Release.
+
+- **Coverage matrix corrected back to the true 223/238.** The AST matcher in
+  `scripts/generate_coverage_matrix.py` cannot see `telemetry.in_air` and
+  `telemetry.landed_state`, because since FIX 15 they are dispatched
+  dynamically — `getattr(drone.telemetry, topic)` in
+  `telemetry/ground_stream.py` — rather than called by name. Both are now
+  curated entries in `docs/coverage_overrides.csv` with that reason recorded,
+  and the checked-in matrix has been regenerated, which also clears nine rows
+  of drift that had accumulated in `docs/coverage_matrix.csv` since 071aa37.
+  The published figure — 223 implemented, 15 documented-N/A, 238 of 238
+  client-side MavSDK methods addressed, 0 missing — is once again what the
+  generator produces.
+- **Two generators so the paper cannot drift from this repo.**
+  `scripts/adversarial_case_table.py` reads case id, category, attack and
+  expectation out of the AST of `tests/integration/test_adversarial_sitl.py`
+  (expanding parametrized injection cases the way pytest does), joins them
+  against the observed status and rule id in `docs/adversarial_results.md` —
+  the artifact the suite writes while running against live SITL — and exits
+  non-zero if the two disagree about which cases exist or about the headline
+  count. `scripts/mission_prompt_table.py` renders the ten mission prompts
+  through the harness's own `mission_prompts()` call, and `--verify` checks
+  that rendering byte-for-byte against the first operator message of every
+  recorded trial transcript. Both emit a LaTeX longtable plus a macro block,
+  so no row in the manuscript's case or prompt tables is typed by hand.
+- **Release hygiene.** Package version bumped to 2.0.2 in `pyproject.toml` and
+  `droneserver.__version__`, which had both been left at 2.0.1.
+  `CONTRIBUTING.md` no longer directs pull requests at a `v-next` development
+  branch, which does not exist — `main` is the branch to target. The stale
+  unit-coverage figure in the CI workflow comment was corrected.
+
+CI is green on this commit: ruff check, ruff format, mypy, and 937 unit tests
+passing (run 33752950492), and the SITL integration suite passing on the same
+commit — 107 passed, 8 skipped, 1 deselected of the 116 collected
+(run 33752950437).
+
 ## v2.0.1 — 2026-08-31
 
 The release the paper cites. Same system as v2.0.0; this tag exists because
